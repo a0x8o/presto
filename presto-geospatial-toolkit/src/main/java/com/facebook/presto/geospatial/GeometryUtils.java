@@ -16,7 +16,6 @@ package com.facebook.presto.geospatial;
 import com.esri.core.geometry.Envelope;
 import com.esri.core.geometry.Geometry;
 import com.esri.core.geometry.GeometryCursor;
-import com.esri.core.geometry.GeometryMemorySizeUtilsPackageWorkaround;
 import com.esri.core.geometry.ogc.OGCConcreteGeometryCollection;
 import com.esri.core.geometry.ogc.OGCGeometry;
 import com.google.common.base.Verify;
@@ -108,7 +107,7 @@ public final class GeometryUtils
         return n < -1.0E38D ? (0.0D / 0.0) : n;
     }
 
-    private static boolean isEsriNaN(double d)
+    public static boolean isEsriNaN(double d)
     {
         return Double.isNaN(d) || Double.isNaN(translateFromAVNaN(d));
     }
@@ -218,10 +217,5 @@ public final class GeometryUtils
             sliceOutput.appendBytes(shape);
         }
         return sliceOutput.slice();
-    }
-
-    public static long getEstimatedMemorySizeInBytes(OGCGeometry geometry)
-    {
-        return GeometryMemorySizeUtilsPackageWorkaround.getEstimatedMemorySizeInBytes(geometry);
     }
 }

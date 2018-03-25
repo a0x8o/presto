@@ -191,6 +191,65 @@ public class TestGeoFunctions
     }
 
     @Test
+    public void testSimplifyGeometry()
+    {
+        // Eliminate unnecessary points on the same line.
+        assertFunction("ST_AsText(simplify_geometry(ST_GeometryFromText('POLYGON ((1 0, 2 1, 3 1, 3 1, 4 1, 1 0))'), 1.5))", VARCHAR, "POLYGON ((1 0, 4 1, 2 1, 1 0))");
+
+        // Use distanceTolerance to control fidelity.
+        assertFunction("ST_AsText(simplify_geometry(ST_GeometryFromText('POLYGON ((1 0, 1 1, 2 1, 2 3, 3 3, 3 1, 4 1, 4 0, 1 0))'), 1.0))", VARCHAR, "POLYGON ((1 0, 4 0, 3 3, 2 3, 1 0))");
+        assertFunction("ST_AsText(simplify_geometry(ST_GeometryFromText('POLYGON ((1 0, 1 1, 2 1, 2 3, 3 3, 3 1, 4 1, 4 0, 1 0))'), 0.5))", VARCHAR, "POLYGON ((1 0, 4 0, 4 1, 3 1, 3 3, 2 3, 2 1, 1 1, 1 0))");
+
+        // Negative distance tolerance is invalid.
+        assertInvalidFunction("ST_AsText(simplify_geometry(ST_GeometryFromText('" + "POLYGON ((1 0, 1 1, 2 1, 2 3, 3 3, 3 1, 4 1, 4 0, 1 0))" + "'), -0.5))", "distanceTolerance is negative");
+    }
+
+    @Test
+    public void testSTIsValid()
+    {
+        // empty geometries are valid
+        assertValidGeometry("POINT EMPTY");
+        assertValidGeometry("MULTIPOINT EMPTY");
+        assertValidGeometry("LINESTRING EMPTY");
+        assertValidGeometry("MULTILINESTRING EMPTY");
+        assertValidGeometry("POLYGON EMPTY");
+        assertValidGeometry("MULTIPOLYGON EMPTY");
+        assertValidGeometry("GEOMETRYCOLLECTION EMPTY");
+
+        // valid geometries
+        assertValidGeometry("POINT (1 2)");
+        assertValidGeometry("MULTIPOINT (1 2, 3 4)");
+        assertValidGeometry("LINESTRING (0 0, 1 2, 3 4)");
+        assertValidGeometry("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))");
+        assertValidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))");
+        assertValidGeometry("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))");
+        assertValidGeometry("GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))");
+
+        // invalid geometries
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (2 2, 2 3, 3 3, 3 2, 2 2))", "Hole lies outside shell at or near point (2.0, 2.0, NaN)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0))", "Self-intersection at or near point (1.0, 1.0, NaN)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (0 1, 1 1, 0.5 0.5, 0 1))", "Self-intersection at or near point (0.0, 1.0, NaN)");
+        assertInvalidGeometry("MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((0.5 0.5, 0.5 2, 2 2, 2 0.5, 0.5 0.5)))", "Self-intersection at or near point (0.5, 1.0, NaN)");
+        assertInvalidGeometry("GEOMETRYCOLLECTION (POINT (1 2), POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0)))", "Self-intersection at or near point (1.0, 1.0, NaN)");
+
+        // corner cases
+        assertFunction("ST_IsValid(ST_GeometryFromText(null))", BOOLEAN, null);
+        assertFunction("geometry_invalid_reason(ST_GeometryFromText(null))", VARCHAR, null);
+    }
+
+    private void assertValidGeometry(String wkt)
+    {
+        assertFunction("ST_IsValid(ST_GeometryFromText('" + wkt + "'))", BOOLEAN, true);
+        assertFunction("geometry_invalid_reason(ST_GeometryFromText('" + wkt + "'))", VARCHAR, null);
+    }
+
+    private void assertInvalidGeometry(String wkt, String reason)
+    {
+        assertFunction("ST_IsValid(ST_GeometryFromText('" + wkt + "'))", BOOLEAN, false);
+        assertFunction("geometry_invalid_reason(ST_GeometryFromText('" + wkt + "'))", VARCHAR, reason);
+    }
+
+    @Test
     public void testSTLength()
     {
         assertFunction("ST_Length(ST_GeometryFromText('LINESTRING EMPTY'))", DOUBLE, 0.0);
@@ -452,6 +511,9 @@ public class TestGeoFunctions
         assertFunction("ST_Intersects(ST_GeometryFromText('MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))'), ST_GeometryFromText('MULTILINESTRING ((3 4, 6 4), (5 0, 5 4))'))", BOOLEAN, true);
         assertFunction("ST_Intersects(ST_GeometryFromText('POLYGON ((1 1, 1 3, 3 3, 3 1))'), ST_GeometryFromText('POLYGON ((4 4, 4 5, 5 5, 5 4))'))", BOOLEAN, false);
         assertFunction("ST_Intersects(ST_GeometryFromText('MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((0 0, 0 2, 2 2, 2 0)))'), ST_GeometryFromText('POLYGON ((0 1, 3 1, 3 3, 0 3))'))", BOOLEAN, true);
+        assertFunction("ST_Intersects(ST_GeometryFromText('POLYGON ((16.5 54, 16.5 54.1, 16.51 54.1, 16.8 54))'), ST_GeometryFromText('LINESTRING (16.6 53, 16.6 56)'))", BOOLEAN, true);
+        assertFunction("ST_Intersects(ST_GeometryFromText('POLYGON ((16.5 54, 16.5 54.1, 16.51 54.1, 16.8 54))'), ST_GeometryFromText('LINESTRING (16.6667 54.05, 16.8667 54.05)'))", BOOLEAN, false);
+        assertFunction("ST_Intersects(ST_GeometryFromText('POLYGON ((16.5 54, 16.5 54.1, 16.51 54.1, 16.8 54))'), ST_GeometryFromText('LINESTRING (16.6667 54.25, 16.8667 54.25)'))", BOOLEAN, false);
     }
 
     @Test
@@ -507,5 +569,28 @@ public class TestGeoFunctions
         assertInvalidFunction("ST_LineFromText('LINESTRING (0 0, 1)')", INVALID_FUNCTION_ARGUMENT, "Invalid WKT: LINESTRING (0 0, 1)");
         assertInvalidFunction("ST_GeometryFromText('POLYGON(0 0)')", INVALID_FUNCTION_ARGUMENT, "Invalid WKT: POLYGON(0 0)");
         assertInvalidFunction("ST_Polygon('POLYGON(-1 1, 1 -1)')", INVALID_FUNCTION_ARGUMENT, "Invalid WKT: POLYGON(-1 1, 1 -1)");
+    }
+
+    @Test
+    public void testGreatCircleDistance()
+    {
+        assertFunction("great_circle_distance(36.12, -86.67, 33.94, -118.40)", DOUBLE, 2886.448973436703);
+        assertFunction("great_circle_distance(33.94, -118.40, 36.12, -86.67)", DOUBLE, 2886.448973436703);
+        assertFunction("great_circle_distance(42.3601, -71.0589, 42.4430, -71.2290)", DOUBLE, 16.73469743457461);
+        assertFunction("great_circle_distance(36.12, -86.67, 36.12, -86.67)", DOUBLE, 0.0);
+
+        assertInvalidFunction("great_circle_distance(100, 20, 30, 40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(10, 20, 300, 40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(10, 200, 30, 40)", "Longitude must be between -180 and 180");
+        assertInvalidFunction("great_circle_distance(10, 20, 30, 400)", "Longitude must be between -180 and 180");
+
+        assertInvalidFunction("great_circle_distance(nan(), -86.67, 33.94, -118.40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(infinity(), -86.67, 33.94, -118.40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(36.12, nan(), 33.94, -118.40)", "Longitude must be between -180 and 180");
+        assertInvalidFunction("great_circle_distance(36.12, infinity(), 33.94, -118.40)", "Longitude must be between -180 and 180");
+        assertInvalidFunction("great_circle_distance(36.12, -86.67, nan(), -118.40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(36.12, -86.67, infinity(), -118.40)", "Latitude must be between -90 and 90");
+        assertInvalidFunction("great_circle_distance(36.12, -86.67, 33.94, nan())", "Longitude must be between -180 and 180");
+        assertInvalidFunction("great_circle_distance(36.12, -86.67, 33.94, infinity())", "Longitude must be between -180 and 180");
     }
 }

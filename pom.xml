@@ -1004,11 +1004,11 @@
             <dependency>
                 <groupId>com.esri.geometry</groupId>
                 <artifactId>esri-geometry-api</artifactId>
-                <version>1.2.1</version>
+                <version>2.1.0</version>
                 <exclusions>
                     <exclusion>
-                        <groupId>org.codehaus.jackson</groupId>
-                        <artifactId>jackson-core-asl</artifactId>
+                        <groupId>com.fasterxml.jackson.core</groupId>
+                        <artifactId>jackson-core</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>
@@ -1199,6 +1199,64 @@
                     <fork>false</fork>
                 </configuration>
             </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration combine.children="append">
+                    <includes>
+                        <include>**/Test*.java</include>
+                        <include>**/Benchmark*.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>**/*jmhTest*.java</exclude>
+                        <exclude>**/*jmhType*.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>tests-with-dependencies</id>
+            <!--
+                Assembles an uber (fat) jar that includes the entire "test" scope classpath for a module.
+
+                For example after running:
+
+                ./mvnw clean install -P tests-with-dependencies -pl presto-geospatial
+
+                The uber jar that contains the entire "test" scope class path of the "presto-geospatial"
+                is created and placed to that modules target directory:
+
+                ./presto-geospatial/target/presto-geospatial-0.197-SNAPSHOT-tests-with-dependencies.jar
+
+                Now using this jar we can easily run any benchmark from that module via command line:
+
+                java \
+                  -cp ./presto-geospatial/target/presto-geospatial-*-tests-with-dependencies.jar \
+                  com.facebook.presto.plugin.geospatial.BenchmarkSTIntersects
+            -->
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <configuration>
+                            <descriptor>${air.main.basedir}/src/assembly/tests-with-dependencies.xml</descriptor>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>make-assembly</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
