@@ -144,6 +144,7 @@ import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.planPrinter.PlanPrinter;
+import com.facebook.presto.sql.planner.sanity.PlanSanityChecker;
 import com.facebook.presto.sql.tree.Commit;
 import com.facebook.presto.sql.tree.CreateTable;
 import com.facebook.presto.sql.tree.CreateView;
@@ -299,7 +300,6 @@ public class LocalQueryRunner
         this.finalizerService = new FinalizerService();
         finalizerService.start();
 
-        QueryManagerConfig queryManagerConfig = new QueryManagerConfig();
         this.sqlParser = new SqlParser();
         this.nodeManager = new InMemoryNodeManager();
         this.typeRegistry = new TypeRegistry();
@@ -310,8 +310,7 @@ public class LocalQueryRunner
                 new LegacyNetworkTopology(),
                 nodeManager,
                 new NodeSchedulerConfig().setIncludeCoordinator(true),
-                new NodeTaskMap(finalizerService),
-                queryManagerConfig);
+                new NodeTaskMap(finalizerService));
         this.pageSinkManager = new PageSinkManager();
         CatalogManager catalogManager = new CatalogManager();
         this.transactionManager = TransactionManager.create(
@@ -321,13 +320,13 @@ public class LocalQueryRunner
                 notificationExecutor);
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler);
 
-        this.splitManager = new SplitManager(queryManagerConfig);
+        this.splitManager = new SplitManager(new QueryManagerConfig());
         this.blockEncodingManager = new BlockEncodingManager(typeRegistry);
         this.metadata = new MetadataManager(
                 featuresConfig,
                 typeRegistry,
                 blockEncodingManager,
-                new SessionPropertyManager(new SystemSessionProperties(queryManagerConfig, new TaskManagerConfig(), new MemoryManagerConfig(), featuresConfig)),
+                new SessionPropertyManager(new SystemSessionProperties(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), featuresConfig)),
                 new SchemaPropertyManager(),
                 new TablePropertyManager(),
                 transactionManager);
@@ -664,7 +663,7 @@ public class LocalQueryRunner
         Plan plan = createPlan(session, sql);
 
         if (printPlan) {
-            System.out.println(PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata, statsCalculator, estimatedExchangesCostCalculator, session));
+            System.out.println(PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata.getFunctionRegistry(), statsCalculator, estimatedExchangesCostCalculator, session));
         }
 
         SubPlan subplan = PlanFragmenter.createSubPlans(session, metadata, nodePartitioningManager, plan, true);
@@ -831,7 +830,7 @@ public class LocalQueryRunner
                 dataDefinitionTask);
         Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(queryExplainer), parameters);
 
-        LogicalPlanner logicalPlanner = new LogicalPlanner(session, optimizers, idAllocator, metadata, sqlParser);
+        LogicalPlanner logicalPlanner = new LogicalPlanner(session, optimizers, new PlanSanityChecker(true), idAllocator, metadata, sqlParser);
 
         Analysis analysis = analyzer.analyze(statement);
         return logicalPlanner.plan(analysis, stage);

@@ -217,9 +217,7 @@ public class AddExchanges
         {
             Set<Symbol> partitioningRequirement = ImmutableSet.copyOf(node.getGroupingKeys());
 
-            boolean preferSingleNode = (node.hasEmptyGroupingSet() && !node.hasNonEmptyGroupingSet()) ||
-                    (node.hasDefaultOutput() && !node.isDecomposable(metadata.getFunctionRegistry()));
-
+            boolean preferSingleNode = node.hasSingleNodeExecutionPreference(metadata.getFunctionRegistry());
             PreferredProperties preferredProperties = preferSingleNode ? PreferredProperties.undistributed() : PreferredProperties.any();
 
             if (!node.getGroupingKeys().isEmpty()) {
@@ -235,14 +233,6 @@ public class AddExchanges
             }
 
             if (preferSingleNode) {
-                // For queries with only empty grouping sets like
-                //
-                // SELECT count(*) FROM lineitem;
-                //
-                // there is no need for distributed aggregation. Single node FINAL aggregation will suffice,
-                // since all input have to be aggregated into one line output.
-                //
-                // If aggregation must produce default output and it is not decomposable, we can not distribute it
                 child = withDerivedProperties(
                         gatheringExchange(idAllocator.getNextId(), REMOTE, child.getNode()),
                         child.getProperties());
@@ -573,11 +563,7 @@ public class AddExchanges
                             .collect(toImmutableSet())));
 
             if (layouts.isEmpty()) {
-                return new PlanWithProperties(
-                        new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of()),
-                        ActualProperties.builder()
-                                .global(singleStreamPartition())
-                                .build());
+                return emptyRelation(node.getOutputSymbols());
             }
 
             // Filter out layouts that cannot supply all the required columns
@@ -585,6 +571,10 @@ public class AddExchanges
                     .filter(layout -> layout.hasAllOutputs(node))
                     .collect(toList());
             checkState(!layouts.isEmpty(), "No usable layouts for %s", node);
+
+            if (layouts.stream().anyMatch(layout -> layout.getLayout().getPredicate().isNone())) {
+                return emptyRelation(node.getOutputSymbols());
+            }
 
             List<PlanWithProperties> possiblePlans = layouts.stream()
                     .map(layout -> {
@@ -615,6 +605,15 @@ public class AddExchanges
                     .collect(toList());
 
             return pickPlan(possiblePlans, preferredProperties);
+        }
+
+        private PlanWithProperties emptyRelation(List<Symbol> outputSymbols)
+        {
+            return new PlanWithProperties(
+                    new ValuesNode(idAllocator.getNextId(), outputSymbols, ImmutableList.of()),
+                    ActualProperties.builder()
+                            .global(singleStreamPartition())
+                            .build());
         }
 
         /**
@@ -1200,12 +1199,16 @@ public class AddExchanges
 
         private ActualProperties deriveProperties(PlanNode result, ActualProperties inputProperties)
         {
-            return PropertyDerivations.deriveProperties(result, inputProperties, metadata, session, types, parser);
+            return deriveProperties(result, ImmutableList.of(inputProperties));
         }
 
         private ActualProperties deriveProperties(PlanNode result, List<ActualProperties> inputProperties)
         {
-            return PropertyDerivations.deriveProperties(result, inputProperties, metadata, session, types, parser);
+            // TODO: move this logic to PlanSanityChecker once PropertyDerivations.deriveProperties fully supports local exchanges
+            ActualProperties outputProperties = PropertyDerivations.deriveProperties(result, inputProperties, metadata, session, types, parser);
+            verify(result instanceof SemiJoinNode || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated) || outputProperties.isNullsAndAnyReplicated(),
+                    "SemiJoinNode is the only node that can strip null replication");
+            return outputProperties;
         }
     }
 

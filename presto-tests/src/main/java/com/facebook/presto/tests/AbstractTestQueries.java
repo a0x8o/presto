@@ -183,6 +183,14 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testAggregationOverUnknown()
+    {
+        assertQuery("SELECT clerk, min(totalprice), max(totalprice), min(nullvalue), max(nullvalue) " +
+                "FROM (SELECT clerk, totalprice, null AS nullvalue FROM orders) " +
+                "GROUP BY clerk");
+    }
+
+    @Test
     public void testLimitIntMax()
     {
         assertQuery("SELECT orderkey FROM orders LIMIT " + Integer.MAX_VALUE);
@@ -633,6 +641,12 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT a[1] FROM (SELECT ARRAY[orderkey + 1] AS a FROM orders ORDER BY orderkey) t", "SELECT orderkey + 1 FROM orders");
         assertQuery("SELECT a[1][1] FROM (SELECT ARRAY[ARRAY[orderkey + 1]] AS a FROM orders ORDER BY orderkey) t", "SELECT orderkey + 1 FROM orders");
         assertQuery("SELECT CARDINALITY(a) FROM (SELECT ARRAY[orderkey, orderkey + 1] AS a FROM orders ORDER BY orderkey) t", "SELECT 2 FROM orders");
+    }
+
+    @Test
+    public void testArrayAgg()
+    {
+        assertQuery("SELECT clerk, cardinality(array_agg(orderkey)) FROM orders GROUP BY clerk", "SELECT clerk, count(*) FROM orders GROUP BY clerk");
     }
 
     @Test
@@ -4717,14 +4731,11 @@ public abstract class AbstractTestQueries
         assertQueryFails("SHOW TABLES LIKE 't$_%' ESCAPE ''", "Escape string must be a single character");
         assertQueryFails("SHOW TABLES LIKE 't$_%' ESCAPE '$$'", "Escape string must be a single character");
 
-        assertUpdate("CREATE TABLE test_escape_1 (a bigint)");
-        assertUpdate("CREATE TABLE test_escape11 (a bigint)");
-
-        assertQuery("SHOW TABLES LIKE 'test_escape_%'", "VALUES 'test_escape_1', 'test_escape11'");
-        assertQuery("SHOW TABLES LIKE 'test_escape\\_%' ESCAPE '\\'", "VALUES 'test_escape_1'");
-
-        assertUpdate("DROP TABLE test_escape_1");
-        assertUpdate("DROP TABLE test_escape11");
+        Set<Object> allTables = computeActual("SHOW TABLES FROM information_schema").getOnlyColumnAsSet();
+        assertEquals(allTables, computeActual("SHOW TABLES FROM information_schema LIKE '%_%'").getOnlyColumnAsSet());
+        Set<Object> result = computeActual("SHOW TABLES FROM information_schema LIKE '%$_%' ESCAPE '$'").getOnlyColumnAsSet();
+        assertNotEquals(allTables, result);
+        assertThat(result).contains("table_privileges").allMatch(schemaName -> ((String) schemaName).contains("_"));
     }
 
     @Test
