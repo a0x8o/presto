@@ -74,6 +74,7 @@ public final class SystemSessionProperties
     public static final String AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT = "aggregation_operator_unspill_memory_limit";
     public static final String OPTIMIZE_DISTINCT_AGGREGATIONS = "optimize_mixed_distinct_aggregations";
     public static final String LEGACY_ORDER_BY = "legacy_order_by";
+    public static final String LEGACY_ROUND_N_BIGINT = "legacy_round_n_bigint";
     public static final String LEGACY_JOIN_USING = "legacy_join_using";
     public static final String ITERATIVE_OPTIMIZER = "iterative_optimizer_enabled";
     public static final String ITERATIVE_OPTIMIZER_TIMEOUT = "iterative_optimizer_timeout";
@@ -318,6 +319,11 @@ public final class SystemSessionProperties
                         featuresConfig.isLegacyOrderBy(),
                         false),
                 booleanSessionProperty(
+                        LEGACY_ROUND_N_BIGINT,
+                        "Allow ROUND(x, d) to accept d being BIGINT",
+                        featuresConfig.isLegacyRoundNBigint(),
+                        true),
+                booleanSessionProperty(
                         LEGACY_JOIN_USING,
                         "Use legacy behavior for JOIN ... USING clause",
                         featuresConfig.isLegacyJoinUsing(),
@@ -517,7 +523,7 @@ public final class SystemSessionProperties
         return session.getSystemProperty(COLOCATED_JOIN, Boolean.class);
     }
 
-    public static boolean isSpatialJoinEanbled(Session session)
+    public static boolean isSpatialJoinEnabled(Session session)
     {
         return session.getSystemProperty(SPATIAL_JOIN, Boolean.class);
     }
@@ -576,6 +582,12 @@ public final class SystemSessionProperties
     public static boolean isLegacyOrderByEnabled(Session session)
     {
         return session.getSystemProperty(LEGACY_ORDER_BY, Boolean.class);
+    }
+
+    @Deprecated
+    public static boolean isLegacyRoundNBigint(Session session)
+    {
+        return session.getSystemProperty(LEGACY_ROUND_N_BIGINT, Boolean.class);
     }
 
     public static boolean isLegacyJoinUsingEnabled(Session session)

@@ -49,6 +49,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -62,6 +64,7 @@ import static io.airlift.units.Duration.nanosSince;
 import static java.lang.String.format;
 import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.Executors.newSingleThreadExecutor;
 
 public class Validator
 {
@@ -413,7 +416,8 @@ public class Validator
             }
 
             try (Statement statement = connection.createStatement()) {
-                TimeLimiter limiter = new SimpleTimeLimiter();
+                ExecutorService executor = newSingleThreadExecutor();
+                TimeLimiter limiter = SimpleTimeLimiter.create(executor);
                 Stopwatch stopwatch = Stopwatch.createStarted();
                 Statement limitedStatement = limiter.newProxy(statement, Statement.class, timeout.toMillis(), TimeUnit.MILLISECONDS);
                 if (explainOnly) {
@@ -430,7 +434,7 @@ public class Validator
                         results = limiter.callWithTimeout(
                                 getResultSetConverter(limitedStatement.getResultSet()),
                                 timeout.toMillis() - stopwatch.elapsed(TimeUnit.MILLISECONDS),
-                                TimeUnit.MILLISECONDS, true);
+                                TimeUnit.MILLISECONDS);
                     }
                     else {
                         results = ImmutableList.of(ImmutableList.of(limitedStatement.getLargeUpdateCount()));
@@ -460,8 +464,21 @@ public class Validator
                     Thread.currentThread().interrupt();
                     throw new RuntimeException(e);
                 }
+                catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof SQLException) {
+                        throw (SQLException) cause;
+                    }
+                    if (cause instanceof VerifierException) {
+                        throw (VerifierException) cause;
+                    }
+                    throw Throwables.propagate(e);
+                }
                 catch (Exception e) {
                     throw Throwables.propagate(e);
+                }
+                finally {
+                    executor.shutdownNow();
                 }
             }
         }
