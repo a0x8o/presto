@@ -395,6 +395,7 @@ public class SqlQueryManager
                     sessionContext.getIdentity().getUser(),
                     Optional.ofNullable(sessionContext.getSource()),
                     sessionContext.getClientTags(),
+                    sessionContext.getResourceEstimates(),
                     queryType));
 
             session = sessionSupplier.createSession(queryId, sessionContext, queryType, selectionContext.getResourceGroupId());
@@ -718,23 +719,6 @@ public class SqlQueryManager
             if (queryExecution.getState().isDone() && !stopped.getAndSet(true) && started.get()) {
                 stats.queryStopped();
             }
-        }
-    }
-
-    /**
-     * Set up a callback to fire when a query is completed. The callback will be called at most once.
-     */
-    static void addCompletionCallback(QueryExecution queryExecution, Runnable callback)
-    {
-        AtomicBoolean taskExecuted = new AtomicBoolean();
-        queryExecution.addStateChangeListener(newValue -> {
-            if (newValue.isDone() && taskExecuted.compareAndSet(false, true)) {
-                callback.run();
-            }
-        });
-        // Need to do this check in case the state changed before we added the previous state change listener
-        if (queryExecution.getState().isDone() && taskExecuted.compareAndSet(false, true)) {
-            callback.run();
         }
     }
 

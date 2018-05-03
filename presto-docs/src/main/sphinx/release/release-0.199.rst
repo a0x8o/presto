@@ -19,8 +19,11 @@ General Changes
   to execute aggregations with less peak memory usage.
 * Change the signature of ``round(x, d)`` and ``truncate(x, d)`` functions so that
   ``d`` is of type ``INTEGER``. Previously, ``d`` could be of type ``BIGINT``.
-  This behavior can be reverted with the ``deprecated.legacy-round-n-bigint`` config option
+  This behavior can be restored with the ``deprecated.legacy-round-n-bigint`` config option
   or the ``legacy_round_n_bigint`` session property.
+* Accessing anonymous row fields via ``.field0``, ``.field1``, etc., is no longer allowed.
+  This behavior can be restored with the ``deprecated.legacy-row-field-ordinal-access``
+  config option or the ``legacy_row_field_ordinal_access`` session property.
 * Optimize the :func:`ST_Intersection` function for rectangles aligned with coordinate axes
   (e.g., polygons produced by the :func:`ST_Envelope` and :func:`bing_tile_polygon` functions).
 * Finish joins early when possible if one side has no rows. This happens for
@@ -32,6 +35,8 @@ General Changes
 * Improve the performance of :func:`ST_Touches`, :func:`ST_Within`, :func:`ST_Overlaps`, :func:`ST_Disjoint`,
   and :func:`ST_Crosses` functions.
 * Improve the serialization performance of geometry values.
+* Improve the performance of functions that return maps.
+* Improve the performance of joins and aggregations that include map columns.
 
 Server RPM Changes
 ------------------
@@ -42,6 +47,11 @@ Security Changes
 ----------------
 
 * Add support for authentication with JWT access token.
+
+JDBC Driver Changes
+-------------------
+
+* Make driver compatible with Java 9+. It previously failed with ``IncompatibleClassChangeError``.
 
 Hive Changes
 ------------
@@ -58,6 +68,7 @@ Hive Changes
 * Partition name listings, both via the ``$partitions`` table and using
   ``SHOW PARTITIONS``, are no longer subject to the limit defined by the
   ``hive.max-partitions-per-scan`` config option.
+* Allow marking partitions as offline via the ``presto_offline`` partition property.
 
 Thrift Connector Changes
 ------------------------
@@ -72,3 +83,5 @@ SPI Changes
 * Allow connectors to provide system tables dynamically.
 * Add ``resourceGroupId`` and ``queryType`` fields to ``SessionConfigurationContext``.
 * Simplify the constructor of ``RowBlock``.
+* ``Block.writePositionTo()`` now closes the current entry.
+* Replace the ``writeObject()`` method in ``BlockBuilder`` with ``appendStructure()``.

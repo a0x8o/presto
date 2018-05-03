@@ -22,6 +22,7 @@ import com.facebook.presto.metadata.TableLayoutResult;
 import com.facebook.presto.metadata.TableMetadata;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.Constraint;
+import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.testing.MaterializedResult;
@@ -48,6 +49,8 @@ import java.util.stream.LongStream;
 
 import static com.facebook.presto.SystemSessionProperties.COLOCATED_JOIN;
 import static com.facebook.presto.SystemSessionProperties.CONCURRENT_LIFESPANS_PER_NODE;
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
+import static com.facebook.presto.SystemSessionProperties.GROUPED_EXECUTION_FOR_AGGREGATION;
 import static com.facebook.presto.hive.HiveColumnHandle.BUCKET_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveColumnHandle.PATH_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveQueryRunner.HIVE_CATALOG;
@@ -71,9 +74,11 @@ import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.testing.assertions.Assert.assertEquals;
 import static com.facebook.presto.tests.QueryAssertions.assertEqualsIgnoreOrder;
 import static com.facebook.presto.transaction.TransactionBuilder.transaction;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
@@ -1145,6 +1150,26 @@ public class TestHiveIntegrationSmokeTest
     }
 
     @Test
+    public void testNullPartitionValues()
+    {
+        assertUpdate("" +
+                "CREATE TABLE test_null_partition (test VARCHAR, part VARCHAR)\n" +
+                "WITH (partitioned_by = ARRAY['part'])");
+
+        assertUpdate("INSERT INTO test_null_partition VALUES ('hello', 'test'), ('world', null)", 2);
+
+        assertQuery(
+                "SELECT * FROM test_null_partition",
+                "VALUES ('hello', 'test'), ('world', null)");
+
+        assertQuery(
+                "SELECT * FROM \"test_null_partition$partitions\"",
+                "VALUES 'test', null");
+
+        assertUpdate("DROP TABLE test_null_partition");
+    }
+
+    @Test
     public void testPartitionPerScanLimit()
     {
         TestingHiveStorageFormat storageFormat = new TestingHiveStorageFormat(getSession(), HiveStorageFormat.DWRF);
@@ -1956,6 +1981,17 @@ public class TestHiveIntegrationSmokeTest
     }
 
     @Test
+    public void testAddColumn()
+    {
+        assertUpdate("CREATE TABLE test_add_column (a bigint COMMENT 'test comment AAA')");
+        assertUpdate("ALTER TABLE test_add_column ADD COLUMN b bigint COMMENT 'test comment BBB'");
+        assertQueryFails("ALTER TABLE test_add_column ADD COLUMN a varchar", ".* Column 'a' already exists");
+        assertQueryFails("ALTER TABLE test_add_column ADD COLUMN c bad_type", ".* Unknown type 'bad_type' for column 'c'");
+        assertQuery("SHOW COLUMNS FROM test_add_column", "VALUES ('a', 'bigint', '', 'test comment AAA'), ('b', 'bigint', '', 'test comment BBB')");
+        assertUpdate("DROP TABLE test_add_column");
+    }
+
+    @Test
     public void testRenameColumn()
     {
         @Language("SQL") String createTable = "" +
@@ -2096,15 +2132,25 @@ public class TestHiveIntegrationSmokeTest
             // NOT grouped execution; default
             Session notColocated = Session.builder(getSession())
                     .setSystemProperty(COLOCATED_JOIN, "false")
+                    .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "false")
                     .build();
             // Co-located JOIN with all groups at once
             Session colocatedAllGroupsAtOnce = Session.builder(getSession())
                     .setSystemProperty(COLOCATED_JOIN, "true")
+                    .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
                     .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "-1")
                     .build();
             // Co-located JOIN, 1 group per worker at a time
             Session colocatedOneGroupAtATime = Session.builder(getSession())
                     .setSystemProperty(COLOCATED_JOIN, "true")
+                    .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
+                    .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "1")
+                    .build();
+            // Broadcast JOIN, 1 group per worker at a time
+            Session broadcastOneGroupAtATime = Session.builder(getSession())
+                    .setSystemProperty(DISTRIBUTED_JOIN, "false")
+                    .setSystemProperty(COLOCATED_JOIN, "true")
+                    .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
                     .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "1")
                     .build();
 
@@ -2205,9 +2251,7 @@ public class TestHiveIntegrationSmokeTest
                             "GROUP BY key";
             @Language("SQL") String expectedThreeGroupByQuery = "SELECT orderkey, comment, CASE mod(orderkey, 2) WHEN 0 THEN comment END, CASE mod(orderkey, 3) WHEN 0 THEN comment END from orders";
 
-            assertQuery(notColocated, groupBySingleBucketedTable, expectedSingleGroupByQuery);
-            assertQuery(notColocated, groupByThreeBucketedTable, expectedThreeGroupByQuery);
-
+            // Eligible GROUP BYs run in the same fragment regardless of colocated_join flag
             assertQuery(colocatedAllGroupsAtOnce, groupBySingleBucketedTable, expectedSingleGroupByQuery);
             assertQuery(colocatedOneGroupAtATime, groupBySingleBucketedTable, expectedSingleGroupByQuery);
             assertQuery(colocatedAllGroupsAtOnce, groupByThreeBucketedTable, expectedThreeGroupByQuery);
@@ -2215,6 +2259,68 @@ public class TestHiveIntegrationSmokeTest
 
             // cannot be executed in a grouped manner but should still produce correct result
             assertQuery(colocatedOneGroupAtATime, groupByThreeMixedTable, expectedThreeGroupByQuery);
+
+            //
+            // GROUP BY and JOIN mixed
+            // ========================
+            @Language("SQL") String joinGroupedWithGrouped =
+                    "SELECT key1, count1, count2\n" +
+                            "FROM (\n" +
+                            "  SELECT keyD key1, count(valueD) count1\n" +
+                            "  FROM test_grouped_joinDual\n" +
+                            "  GROUP BY keyD\n" +
+                            ") JOIN (\n" +
+                            "  SELECT keyD key2, count(valueD) count2\n" +
+                            "  FROM test_grouped_joinDual\n" +
+                            "  GROUP BY keyD\n" +
+                            ")\n" +
+                            "ON key1 = key2";
+            @Language("SQL") String expectedJoinGroupedWithGrouped = "SELECT orderkey, 2, 2 from orders";
+            @Language("SQL") String joinGroupedWithUngrouped =
+                    "SELECT keyD, countD, valueN\n" +
+                            "FROM (\n" +
+                            "  SELECT keyD, count(valueD) countD\n" +
+                            "  FROM test_grouped_joinDual\n" +
+                            "  GROUP BY keyD\n" +
+                            ") JOIN (\n" +
+                            "  SELECT keyN, valueN\n" +
+                            "  FROM test_grouped_joinN\n" +
+                            ")\n" +
+                            "ON keyD = keyN";
+            @Language("SQL") String expectedJoinGroupedWithUngrouped = "SELECT orderkey, 2, comment from orders";
+            @Language("SQL") String joinUngroupedWithGrouped =
+                    "SELECT keyN, valueN, countD\n" +
+                            "FROM (\n" +
+                            "  SELECT keyN, valueN\n" +
+                            "  FROM test_grouped_joinN\n" +
+                            ") JOIN (\n" +
+                            "  SELECT keyD, count(valueD) countD\n" +
+                            "  FROM test_grouped_joinDual\n" +
+                            "  GROUP BY keyD\n" +
+                            ")\n" +
+                            "ON keyN = keyD";
+            @Language("SQL") String expectedJoinUngroupedWithGrouped = "SELECT orderkey, comment, 2 from orders";
+            @Language("SQL") String groupOnJoinResult =
+                    "SELECT keyD, count(valueD), count(valueN)\n" +
+                            "FROM\n" +
+                            "  test_grouped_joinDual\n" +
+                            "JOIN\n" +
+                            "  test_grouped_joinN\n" +
+                            "ON keyD=keyN\n" +
+                            "GROUP BY keyD";
+            @Language("SQL") String expectedGroupOnJoinResult = "SELECT orderkey, 2, 2 from orders";
+
+            // Eligible GROUP BYs run in the same fragment regardless of colocated_join flag
+            assertQuery(colocatedAllGroupsAtOnce, joinGroupedWithGrouped, expectedJoinGroupedWithGrouped);
+            assertQuery(colocatedOneGroupAtATime, joinGroupedWithGrouped, expectedJoinGroupedWithGrouped);
+            assertQuery(colocatedAllGroupsAtOnce, joinGroupedWithUngrouped, expectedJoinGroupedWithUngrouped);
+            assertQuery(colocatedOneGroupAtATime, joinGroupedWithUngrouped, expectedJoinGroupedWithUngrouped);
+            assertQuery(colocatedAllGroupsAtOnce, groupOnJoinResult, expectedGroupOnJoinResult);
+            assertQuery(colocatedOneGroupAtATime, groupOnJoinResult, expectedGroupOnJoinResult);
+            assertQuery(broadcastOneGroupAtATime, groupOnJoinResult, expectedGroupOnJoinResult);
+
+            // cannot be executed in a grouped manner but should still produce correct result
+            assertQuery(colocatedOneGroupAtATime, joinUngroupedWithGrouped, expectedJoinUngroupedWithGrouped);
         }
         finally {
             assertUpdate("DROP TABLE IF EXISTS test_grouped_join1");
@@ -2262,6 +2368,39 @@ public class TestHiveIntegrationSmokeTest
         assertQueryFails(
                 "CREATE TABLE invalid_partition_value (a, b) WITH (partitioned_by = ARRAY['b']) AS SELECT 4, chr(9731)",
                 "\\QHive partition keys can only contain printable ASCII characters (0x20 - 0x7E). Invalid value: E2 98 83\\E");
+    }
+
+    @Test
+    public void testCurrentUserInView()
+    {
+        checkState(getSession().getCatalog().isPresent(), "catalog is not set");
+        checkState(getSession().getSchema().isPresent(), "schema is not set");
+        String testAccountsUnqualifiedName = "test_accounts";
+        String testAccountsViewUnqualifiedName = "test_accounts_view";
+        String testAccountsViewFullyQualifiedName = format("%s.%s.%s", getSession().getCatalog().get(), getSession().getSchema().get(), testAccountsViewUnqualifiedName);
+        assertUpdate(format("CREATE TABLE %s AS SELECT user_name, account_name" +
+                "  FROM (VALUES ('user1', 'account1'), ('user2', 'account2'))" +
+                "  t (user_name, account_name)", testAccountsUnqualifiedName), 2);
+        assertUpdate(format("CREATE VIEW %s AS SELECT account_name FROM test_accounts WHERE user_name = CURRENT_USER", testAccountsViewUnqualifiedName));
+        assertUpdate(format("GRANT SELECT ON %s TO user1", testAccountsViewFullyQualifiedName));
+        assertUpdate(format("GRANT SELECT ON %s TO user2", testAccountsViewFullyQualifiedName));
+
+        Session user1 = testSessionBuilder()
+                .setCatalog(getSession().getCatalog().get())
+                .setSchema(getSession().getSchema().get())
+                .setIdentity(new Identity("user1", getSession().getIdentity().getPrincipal()))
+                .build();
+
+        Session user2 = testSessionBuilder()
+                .setCatalog(getSession().getCatalog().get())
+                .setSchema(getSession().getSchema().get())
+                .setIdentity(new Identity("user2", getSession().getIdentity().getPrincipal()))
+                .build();
+
+        assertQuery(user1, "SELECT account_name FROM test_accounts_view", "VALUES 'account1'");
+        assertQuery(user2, "SELECT account_name FROM test_accounts_view", "VALUES 'account2'");
+        assertUpdate("DROP VIEW test_accounts_view");
+        assertUpdate("DROP TABLE test_accounts");
     }
 
     private Session getParallelWriteSession()

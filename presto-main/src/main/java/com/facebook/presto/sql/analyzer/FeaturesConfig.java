@@ -59,6 +59,7 @@ public class FeaturesConfig
     private boolean distributedIndexJoinsEnabled;
     private boolean distributedJoinsEnabled = true;
     private boolean colocatedJoinsEnabled;
+    private boolean groupedExecutionForAggregationEnabled;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
     private boolean reorderJoins = true;
@@ -71,11 +72,14 @@ public class FeaturesConfig
     private boolean pushTableWriteThroughUnion = true;
     private boolean exchangeCompressionEnabled;
     private boolean legacyArrayAgg;
+    private boolean legacyLogFunction;
     private boolean legacyOrderBy;
+    private boolean groupByUsesEqualTo;
     private boolean legacyTimestamp = true;
     private boolean legacyMapSubscript;
     private boolean legacyRoundNBigint;
     private boolean legacyJoinUsing;
+    private boolean legacyRowFieldOrdinalAccess;
     private boolean optimizeMixedDistinctAggregations;
     private boolean forceSingleNodeOutput = true;
     private boolean pagesIndexEagerCompactionEnabled;
@@ -99,6 +103,7 @@ public class FeaturesConfig
     private double memoryRevokingThreshold = 0.9;
     private boolean parseDecimalLiteralsAsDouble;
     private boolean useMarkDistinct = true;
+    private boolean preferPartialAggregation = true;
 
     private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
 
@@ -182,6 +187,18 @@ public class FeaturesConfig
         return legacyJoinUsing;
     }
 
+    @Config("deprecated.legacy-row-field-ordinal-access")
+    public FeaturesConfig setLegacyRowFieldOrdinalAccess(boolean value)
+    {
+        this.legacyRowFieldOrdinalAccess = value;
+        return this;
+    }
+
+    public boolean isLegacyRowFieldOrdinalAccess()
+    {
+        return legacyRowFieldOrdinalAccess;
+    }
+
     @Config("deprecated.legacy-array-agg")
     public FeaturesConfig setLegacyArrayAgg(boolean legacyArrayAgg)
     {
@@ -194,6 +211,18 @@ public class FeaturesConfig
         return legacyArrayAgg;
     }
 
+    @Config("deprecated.legacy-log-function")
+    public FeaturesConfig setLegacyLogFunction(boolean value)
+    {
+        this.legacyLogFunction = value;
+        return this;
+    }
+
+    public boolean isLegacyLogFunction()
+    {
+        return legacyLogFunction;
+    }
+
     @Config("deprecated.legacy-order-by")
     public FeaturesConfig setLegacyOrderBy(boolean value)
     {
@@ -204,6 +233,18 @@ public class FeaturesConfig
     public boolean isLegacyOrderBy()
     {
         return legacyOrderBy;
+    }
+
+    @Config("deprecated.group-by-uses-equal")
+    public FeaturesConfig setGroupByUsesEqualTo(boolean value)
+    {
+        this.groupByUsesEqualTo = value;
+        return this;
+    }
+
+    public boolean isGroupByUsesEqualTo()
+    {
+        return groupByUsesEqualTo;
     }
 
     @Config("deprecated.legacy-timestamp")
@@ -234,6 +275,19 @@ public class FeaturesConfig
     public FeaturesConfig setDistributedJoinsEnabled(boolean distributedJoinsEnabled)
     {
         this.distributedJoinsEnabled = distributedJoinsEnabled;
+        return this;
+    }
+
+    public boolean isGroupedExecutionForAggregationEnabled()
+    {
+        return groupedExecutionForAggregationEnabled;
+    }
+
+    @Config("grouped-execution-for-aggregation-enabled")
+    @ConfigDescription("Experimental: Use grouped execution for aggregation when possible")
+    public FeaturesConfig setGroupedExecutionForAggregationEnabled(boolean groupedExecutionForAggregationEnabled)
+    {
+        this.groupedExecutionForAggregationEnabled = groupedExecutionForAggregationEnabled;
         return this;
     }
 
@@ -348,6 +402,18 @@ public class FeaturesConfig
     public FeaturesConfig setUseMarkDistinct(boolean value)
     {
         this.useMarkDistinct = value;
+        return this;
+    }
+
+    public boolean isPreferPartialAggregation()
+    {
+        return preferPartialAggregation;
+    }
+
+    @Config("optimizer.prefer-partial-aggregation")
+    public FeaturesConfig setPreferPartialAggregation(boolean value)
+    {
+        this.preferPartialAggregation = value;
         return this;
     }
 

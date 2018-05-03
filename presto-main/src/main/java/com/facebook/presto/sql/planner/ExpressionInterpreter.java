@@ -38,6 +38,7 @@ import com.facebook.presto.sql.analyzer.ExpressionAnalyzer;
 import com.facebook.presto.sql.analyzer.Scope;
 import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.facebook.presto.sql.analyzer.SemanticException;
+import com.facebook.presto.sql.planner.iterative.rule.DesugarCurrentUser;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
 import com.facebook.presto.sql.tree.ArrayConstructor;
@@ -49,6 +50,7 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.ComparisonExpressionType;
+import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DefaultTraversalVisitor;
 import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.ExistsPredicate;
@@ -102,10 +104,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -115,11 +119,10 @@ import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.createConstant
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.EXPRESSION_NOT_CONSTANT;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.gen.VarArgsToMapAdapterGenerator.generateVarArgsToMapAdapter;
-import static com.facebook.presto.sql.planner.LiteralInterpreter.toExpression;
-import static com.facebook.presto.sql.planner.LiteralInterpreter.toExpressions;
 import static com.facebook.presto.sql.planner.iterative.rule.CanonicalizeExpressionRewriter.canonicalizeExpression;
 import static com.facebook.presto.type.LikeFunctions.isLikePattern;
 import static com.facebook.presto.type.LikeFunctions.unescapeLiteralLikePattern;
+import static com.facebook.presto.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.instanceOf;
@@ -132,10 +135,12 @@ public class ExpressionInterpreter
 {
     private final Expression expression;
     private final Metadata metadata;
+    private final LiteralEncoder literalEncoder;
     private final ConnectorSession session;
     private final boolean optimize;
     private final Map<NodeRef<Expression>, Type> expressionTypes;
     private final FunctionInvoker functionInvoker;
+    private final boolean legacyRowFieldOrdinalAccess;
 
     private final Visitor visitor;
 
@@ -145,10 +150,6 @@ public class ExpressionInterpreter
 
     public static ExpressionInterpreter expressionInterpreter(Expression expression, Metadata metadata, Session session, Map<NodeRef<Expression>, Type> expressionTypes)
     {
-        requireNonNull(expression, "expression is null");
-        requireNonNull(metadata, "metadata is null");
-        requireNonNull(session, "session is null");
-
         return new ExpressionInterpreter(expression, metadata, session, expressionTypes, false);
     }
 
@@ -225,13 +226,15 @@ public class ExpressionInterpreter
 
     private ExpressionInterpreter(Expression expression, Metadata metadata, Session session, Map<NodeRef<Expression>, Type> expressionTypes, boolean optimize)
     {
-        this.expression = expression;
-        this.metadata = metadata;
-        this.session = session.toConnectorSession();
+        this.expression = requireNonNull(expression, "expression is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.literalEncoder = new LiteralEncoder(metadata.getBlockEncodingSerde());
+        this.session = requireNonNull(session, "session is null").toConnectorSession();
         this.expressionTypes = ImmutableMap.copyOf(requireNonNull(expressionTypes, "expressionTypes is null"));
         verify((expressionTypes.containsKey(NodeRef.of(expression))));
         this.optimize = optimize;
         this.functionInvoker = new FunctionInvoker(metadata.getFunctionRegistry());
+        this.legacyRowFieldOrdinalAccess = isLegacyRowFieldOrdinalAccessEnabled(session);
 
         this.visitor = new Visitor();
     }
@@ -359,15 +362,24 @@ public class ExpressionInterpreter
             RowType rowType = (RowType) type;
             Block row = (Block) base;
             Type returnType = type(node);
+            String fieldName = node.getField().getValue();
             List<Field> fields = rowType.getFields();
             int index = -1;
             for (int i = 0; i < fields.size(); i++) {
                 Field field = fields.get(i);
-                if (field.getName().isPresent() && field.getName().get().equalsIgnoreCase(node.getField().getValue())) {
+                if (field.getName().isPresent() && field.getName().get().equalsIgnoreCase(fieldName)) {
                     checkArgument(index < 0, "Ambiguous field %s in type %s", field, rowType.getDisplayName());
                     index = i;
                 }
             }
+
+            if (legacyRowFieldOrdinalAccess && index < 0) {
+                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, fields);
+                if (rowIndex.isPresent()) {
+                    index = rowIndex.getAsInt();
+                }
+            }
+
             checkState(index >= 0, "could not find field name: %s", node.getField());
             if (row.isNull(index)) {
                 return null;
@@ -1147,6 +1159,12 @@ public class ExpressionInterpreter
         }
 
         @Override
+        protected Object visitCurrentUser(CurrentUser node, Object context)
+        {
+            return visitFunctionCall(DesugarCurrentUser.getCall(node), context);
+        }
+
+        @Override
         protected Object visitRow(Row node, Object context)
         {
             RowType rowType = (RowType) type(node);
@@ -1237,6 +1255,16 @@ public class ExpressionInterpreter
         {
             Signature operatorSignature = metadata.getFunctionRegistry().resolveOperator(operatorType, argumentTypes);
             return functionInvoker.invoke(operatorSignature, session, argumentValues);
+        }
+
+        private Expression toExpression(Object base, Type type)
+        {
+            return literalEncoder.toExpression(base, type);
+        }
+
+        private List<Expression> toExpressions(List<Object> values, List<Type> types)
+        {
+            return literalEncoder.toExpressions(values, types);
         }
     }
 
