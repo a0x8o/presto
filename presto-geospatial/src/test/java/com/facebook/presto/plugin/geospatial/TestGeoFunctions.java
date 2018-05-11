@@ -26,6 +26,7 @@ import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMEN
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static org.testng.Assert.assertEquals;
@@ -221,11 +222,18 @@ public class TestGeoFunctions
         assertValidGeometry("GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))");
 
         // invalid geometries
-        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (2 2, 2 3, 3 3, 3 2, 2 2))", "Hole lies outside shell at or near point (2.0, 2.0, NaN)");
-        assertInvalidGeometry("POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0))", "Self-intersection at or near point (1.0, 1.0, NaN)");
-        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (0 1, 1 1, 0.5 0.5, 0 1))", "Self-intersection at or near point (0.0, 1.0, NaN)");
-        assertInvalidGeometry("MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((0.5 0.5, 0.5 2, 2 2, 2 0.5, 0.5 0.5)))", "Self-intersection at or near point (0.5, 1.0, NaN)");
-        assertInvalidGeometry("GEOMETRYCOLLECTION (POINT (1 2), POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0)))", "Self-intersection at or near point (1.0, 1.0, NaN)");
+        assertInvalidGeometry("MULTIPOINT ((0 0), (0 1), (1 1), (0 1))", "Repeated points at or near (0.0 1.0) and (0.0 1.0)");
+        assertInvalidGeometry("LINESTRING (0 0, 0 1, 0 1, 1 1, 1 0, 0 0)", "Degenerate segments at or near (0.0 1.0)");
+        assertInvalidGeometry("LINESTRING (0 0, -1 0.5, 0 1, 1 1, 1 0, 0 1, 0 0)", "Self-tangency at or near (0.0 1.0) and (0.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, 1 1, 0 1, 1 0, 0 0))", "Intersecting or overlapping segments at or near (1.0 0.0) and (1.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 0 1, 1 1, 1 0, 0 0), (2 2, 2 3, 3 3, 3 2, 2 2))", "Degenerate segments at or near (0.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (2 2, 2 3, 3 3, 3 2, 2 2))", "RingOrientation");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0))", "Intersecting or overlapping segments at or near (0.0 1.0) and (2.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (0 1, 1 1, 0.5 0.5, 0 1))", "Self-intersection at or near (0.0 1.0) and (1.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0), (0 0, 0.5 0.7, 1 1, 0.5 0.4, 0 0))", "Disconnected interior at or near (0.0 1.0)");
+        assertInvalidGeometry("POLYGON ((0 0, -1 0.5, 0 1, 1 1, 1 0, 0 1, 0 0))", "Self-tangency at or near (0.0 1.0) and (0.0 1.0)");
+        assertInvalidGeometry("MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((0.5 0.5, 0.5 2, 2 2, 2 0.5, 0.5 0.5)))", "Intersecting or overlapping segments at or near (0.0 1.0) and (0.5 0.5)");
+        assertInvalidGeometry("GEOMETRYCOLLECTION (POINT (1 2), POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0)))", "Intersecting or overlapping segments at or near (0.0 1.0) and (2.0 1.0)");
 
         // corner cases
         assertFunction("ST_IsValid(ST_GeometryFromText(null))", BOOLEAN, null);
@@ -257,9 +265,16 @@ public class TestGeoFunctions
     public void testLineLocatePoint()
     {
         assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1)'), ST_Point(0, 0.2))", DOUBLE, 0.2);
-        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1, 2 1)'), ST_Point(0, 0.2))", DOUBLE, 0.2);
-        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1, 2 1)'), ST_Point(0.9, 1))", DOUBLE, 1.9);
-        assertFunction("line_locate_point(ST_GeometryFromText('MULTILINESTRING ((0 0, 0 1), (2 2, 4 2))'), ST_Point(3, 1))", DOUBLE, 2.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1)'), ST_Point(0, 0))", DOUBLE, 0.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1)'), ST_Point(0, -1))", DOUBLE, 0.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1)'), ST_Point(0, 1))", DOUBLE, 1.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1)'), ST_Point(0, 2))", DOUBLE, 1.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1, 2 1)'), ST_Point(0, 0.2))", DOUBLE, 0.06666666666666667);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1, 2 1)'), ST_Point(0.9, 1))", DOUBLE, 0.6333333333333333);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (1 3, 5 4)'), ST_Point(1, 3))", DOUBLE, 0.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (1 3, 5 4)'), ST_Point(2, 3))", DOUBLE, 0.23529411764705882);
+        assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (1 3, 5 4)'), ST_Point(5, 4))", DOUBLE, 1.0);
+        assertFunction("line_locate_point(ST_GeometryFromText('MULTILINESTRING ((0 0, 0 1), (2 2, 4 2))'), ST_Point(3, 1))", DOUBLE, 0.6666666666666666);
 
         assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING EMPTY'), ST_Point(0, 1))", DOUBLE, null);
         assertFunction("line_locate_point(ST_GeometryFromText('LINESTRING (0 0, 0 1, 2 1)'), ST_GeometryFromText('POINT EMPTY'))", DOUBLE, null);
@@ -615,6 +630,80 @@ public class TestGeoFunctions
     }
 
     @Test
+    public void testSTNumGeometries()
+    {
+        assertSTNumGeometries("POINT EMPTY", 0);
+        assertSTNumGeometries("LINESTRING EMPTY", 0);
+        assertSTNumGeometries("POLYGON EMPTY", 0);
+        assertSTNumGeometries("MULTIPOINT EMPTY", 0);
+        assertSTNumGeometries("MULTILINESTRING EMPTY", 0);
+        assertSTNumGeometries("MULTIPOLYGON EMPTY", 0);
+        assertSTNumGeometries("GEOMETRYCOLLECTION EMPTY", 0);
+        assertSTNumGeometries("POINT (1 2)", 1);
+        assertSTNumGeometries("LINESTRING(77.29 29.07,77.42 29.26,77.27 29.31,77.29 29.07)", 1);
+        assertSTNumGeometries("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1);
+        assertSTNumGeometries("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+        assertSTNumGeometries("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2);
+        assertSTNumGeometries("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))", 2);
+        assertSTNumGeometries("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 2);
+    }
+
+    private void assertSTNumGeometries(String wkt, int expected)
+    {
+        assertFunction("ST_NumGeometries(ST_GeometryFromText('" + wkt + "'))", INTEGER, expected);
+    }
+
+    @Test
+    public void testSTGeometryN()
+    {
+        assertSTGeometryN("POINT EMPTY", 1, null);
+        assertSTGeometryN("LINESTRING EMPTY", 1, null);
+        assertSTGeometryN("POLYGON EMPTY", 1, null);
+        assertSTGeometryN("MULTIPOINT EMPTY", 1, null);
+        assertSTGeometryN("MULTILINESTRING EMPTY", 1, null);
+        assertSTGeometryN("MULTIPOLYGON EMPTY", 1, null);
+        assertSTGeometryN("POINT EMPTY", 0, null);
+        assertSTGeometryN("LINESTRING EMPTY", 0, null);
+        assertSTGeometryN("POLYGON EMPTY", 0, null);
+        assertSTGeometryN("MULTIPOINT EMPTY", 0, null);
+        assertSTGeometryN("MULTILINESTRING EMPTY", 0, null);
+        assertSTGeometryN("MULTIPOLYGON EMPTY", 0, null);
+        assertSTGeometryN("POINT (1 2)", 1, "POINT (1 2)");
+        assertSTGeometryN("POINT (1 2)", -1, null);
+        assertSTGeometryN("POINT (1 2)", 2, null);
+        assertSTGeometryN("LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)", 1, "LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)");
+        assertSTGeometryN("LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)", 2, null);
+        assertSTGeometryN("LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)", -1, null);
+        assertSTGeometryN("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", 1, "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
+        assertSTGeometryN("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", 2, null);
+        assertSTGeometryN("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", -1, null);
+        assertSTGeometryN("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 1, "POINT (1 2)");
+        assertSTGeometryN("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 2, "POINT (2 4)");
+        assertSTGeometryN("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 0, null);
+        assertSTGeometryN("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 5, null);
+        assertSTGeometryN("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", -1, null);
+        assertSTGeometryN("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1, "LINESTRING (1 1, 5 1)");
+        assertSTGeometryN("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2, "LINESTRING (2 4, 4 4)");
+        assertSTGeometryN("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 0, null);
+        assertSTGeometryN("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 3, null);
+        assertSTGeometryN("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", -1, null);
+        assertSTGeometryN("MULTIPOLYGON (((1 1, 3 1, 3 3, 1 3, 1 1)), ((2 4, 6 4, 6 6, 2 6, 2 4)))", 1, "POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))");
+        assertSTGeometryN("MULTIPOLYGON (((1 1, 3 1, 3 3, 1 3, 1 1)), ((2 4, 6 4, 6 6, 2 6, 2 4)))", 2, "POLYGON ((2 4, 6 4, 6 6, 2 6, 2 4))");
+        assertSTGeometryN("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))", 0, null);
+        assertSTGeometryN("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))", 3, null);
+        assertSTGeometryN("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))", -1, null);
+        assertSTGeometryN("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 1, "POINT (2 3)");
+        assertSTGeometryN("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 2, "LINESTRING (2 3, 3 4)");
+        assertSTGeometryN("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 3, null);
+        assertSTGeometryN("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 0, null);
+        assertSTGeometryN("GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", -1, null);
+    }
+
+    private void assertSTGeometryN(String wkt, int index, String expected)
+    {
+        assertFunction("ST_ASText(ST_GeometryN(ST_GeometryFromText('" + wkt + "')," + index + "))", VARCHAR, expected);
+    }
+
     public void testSTGeometryType()
     {
         assertFunction("ST_GeometryType(ST_Point(1, 4))", VARCHAR, "ST_Point");
