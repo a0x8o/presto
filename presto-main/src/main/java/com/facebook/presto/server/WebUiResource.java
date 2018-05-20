@@ -11,13 +11,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.server;
 
-import com.facebook.presto.spi.type.Type;
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import javax.ws.rs.core.Response;
 
-import java.util.List;
+import static javax.ws.rs.core.Response.Status.MOVED_PERMANENTLY;
+import static javax.ws.rs.core.UriBuilder.fromPath;
 
-public interface PageIndexerFactory
+@Path("/")
+public class WebUiResource
 {
-    PageIndexer createPageIndexer(List<? extends Type> types);
+    @GET
+    public Response redirectIndexHtml()
+    {
+        return Response.status(MOVED_PERMANENTLY)
+                .location(fromPath("/ui/").build())
+                .build();
+    }
 }
