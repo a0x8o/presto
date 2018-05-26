@@ -1712,10 +1712,13 @@ public class TestHiveIntegrationSmokeTest
                         "   c5 double COMMENT 'comment test5'\n)\n" +
                         "COMMENT 'test'\n" +
                         "WITH (\n" +
+                        "   bucket_count = 5,\n" +
+                        "   bucketed_by = ARRAY['c1','c 2'],\n" +
                         "   format = 'ORC',\n" +
                         "   orc_bloom_filter_columns = ARRAY['c1','c2'],\n" +
                         "   orc_bloom_filter_fpp = 7E-1,\n" +
-                        "   partitioned_by = ARRAY['c4','c5']\n" +
+                        "   partitioned_by = ARRAY['c4','c5'],\n" +
+                        "   sorted_by = ARRAY['c1','c 2 DESC']\n" +
                         ")",
                 getSession().getCatalog().get(),
                 getSession().getSchema().get(),
@@ -2096,7 +2099,7 @@ public class TestHiveIntegrationSmokeTest
     }
 
     @Test
-    public void testGroupedJoin()
+    public void testGroupedExecution()
     {
         try {
             assertUpdate(
@@ -2150,8 +2153,8 @@ public class TestHiveIntegrationSmokeTest
                     .build();
 
             //
-            // JOIN
-            // ====
+            // HASH JOIN
+            // =========
 
             @Language("SQL") String joinThreeBucketedTable =
                     "SELECT key1, value1, key2, value2, key3, value3\n" +
@@ -2193,6 +2196,26 @@ public class TestHiveIntegrationSmokeTest
             assertQuery(colocatedAllGroupsAtOnce, rightJoinBucketedTable, expectedOuterJoinQuery);
             assertQuery(colocatedOneGroupAtATime, leftJoinBucketedTable, expectedOuterJoinQuery);
             assertQuery(colocatedOneGroupAtATime, rightJoinBucketedTable, expectedOuterJoinQuery);
+
+            //
+            // CROSS JOIN and HASH JOIN mixed
+            // ==============================
+
+            @Language("SQL") String crossJoin =
+                    "SELECT key1, value1, key2, value2, key3, value3\n" +
+                            "FROM test_grouped_join1\n" +
+                            "JOIN test_grouped_join2\n" +
+                            "ON key1 = key2\n" +
+                            "CROSS JOIN (SELECT * FROM test_grouped_join3 WHERE key3 <= 3)";
+            @Language("SQL") String expectedCrossJoinQuery =
+                    "SELECT key1, value1, key1, value1, key3, value3\n" +
+                            "FROM\n" +
+                            "  (SELECT orderkey key1, comment value1 FROM orders)\n" +
+                            "CROSS JOIN\n" +
+                            "  (SELECT orderkey key3, comment value3 FROM orders where orderkey <= 3)";
+            assertQuery(notColocated, crossJoin, expectedCrossJoinQuery);
+            assertQuery(colocatedAllGroupsAtOnce, crossJoin, expectedCrossJoinQuery);
+            assertQuery(colocatedOneGroupAtATime, crossJoin, expectedCrossJoinQuery);
 
             //
             // UNION ALL / GROUP BY
