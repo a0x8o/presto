@@ -84,7 +84,6 @@ import static com.facebook.presto.sql.tree.SortItem.Ordering.DESCENDING;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static java.util.Collections.emptyMap;
 import static java.util.Collections.nCopies;
 import static java.util.Objects.requireNonNull;
 
@@ -196,18 +195,14 @@ public final class PlanMatchPattern
     }
 
     public static PlanMatchPattern aggregation(
-            List<String> groupBy,
             Map<String, ExpectedValueProvider<FunctionCall>> aggregations,
+            Step step,
             PlanMatchPattern source)
     {
-        return aggregation(
-                ImmutableList.of(groupBy),
-                aggregations.entrySet().stream()
-                        .collect(toImmutableMap(entry -> Optional.of(entry.getKey()), Map.Entry::getValue)),
-                emptyMap(),
-                Optional.empty(),
-                Step.SINGLE,
-                source);
+        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationStepMatcher(step));
+        aggregations.entrySet().forEach(
+                aggregation -> result.withAlias(aggregation.getKey(), new AggregationFunctionMatcher(aggregation.getValue())));
+        return result;
     }
 
     public static PlanMatchPattern aggregation(
@@ -218,7 +213,19 @@ public final class PlanMatchPattern
             Step step,
             PlanMatchPattern source)
     {
-        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationMatcher(groupingSets, masks, groupId, step));
+        return aggregation(groupingSets, aggregations, ImmutableList.of(), masks, groupId, step, source);
+    }
+
+    public static PlanMatchPattern aggregation(
+            List<List<String>> groupingSets,
+            Map<Optional<String>, ExpectedValueProvider<FunctionCall>> aggregations,
+            List<String> preGroupedSymbols,
+            Map<Symbol, Symbol> masks,
+            Optional<Symbol> groupId,
+            Step step,
+            PlanMatchPattern source)
+    {
+        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationMatcher(groupingSets, preGroupedSymbols, masks, groupId, step));
         aggregations.entrySet().forEach(
                 aggregation -> result.withAlias(aggregation.getKey(), new AggregationFunctionMatcher(aggregation.getValue())));
         return result;
@@ -272,6 +279,12 @@ public final class PlanMatchPattern
     public static PlanMatchPattern sort(PlanMatchPattern source)
     {
         return node(SortNode.class, source);
+    }
+
+    public static PlanMatchPattern sort(List<Ordering> orderBy, PlanMatchPattern source)
+    {
+        return node(SortNode.class, source)
+                .with(new SortMatcher(orderBy));
     }
 
     public static PlanMatchPattern topN(long count, List<Ordering> orderBy, PlanMatchPattern source)
@@ -364,8 +377,13 @@ public final class PlanMatchPattern
 
     public static PlanMatchPattern exchange(ExchangeNode.Scope scope, ExchangeNode.Type type, PlanMatchPattern... sources)
     {
+        return exchange(scope, type, ImmutableList.of(), sources);
+    }
+
+    public static PlanMatchPattern exchange(ExchangeNode.Scope scope, ExchangeNode.Type type, List<Ordering> orderBy, PlanMatchPattern... sources)
+    {
         return node(ExchangeNode.class, sources)
-                .with(new ExchangeMatcher(scope, type));
+                .with(new ExchangeMatcher(scope, type, orderBy));
     }
 
     public static PlanMatchPattern union(PlanMatchPattern... sources)

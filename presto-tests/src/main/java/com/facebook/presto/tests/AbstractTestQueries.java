@@ -21,6 +21,7 @@ import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.VarcharType;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
@@ -50,7 +51,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.IntStream;
 
-import static com.facebook.presto.SystemSessionProperties.REORDER_JOINS;
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_SORT;
+import static com.facebook.presto.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.operator.scalar.ApplyFunction.APPLY_FUNCTION;
 import static com.facebook.presto.operator.scalar.InvokeFunction.INVOKE_FUNCTION;
@@ -72,7 +74,6 @@ import static com.facebook.presto.testing.TestingAccessControlManager.TestingPri
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.DELETE_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.INSERT_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_COLUMN;
-import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.privilege;
 import static com.facebook.presto.testing.TestingSession.TESTING_CATALOG;
 import static com.facebook.presto.testing.TestngUtils.toDataProvider;
@@ -109,33 +110,33 @@ public abstract class AbstractTestQueries
             .getFunctions();
 
     public static final List<PropertyMetadata<?>> TEST_SYSTEM_PROPERTIES = ImmutableList.of(
-            PropertyMetadata.stringSessionProperty(
+            PropertyMetadata.stringProperty(
                     "test_string",
                     "test string property",
                     "test default",
                     false),
-            PropertyMetadata.longSessionProperty(
+            PropertyMetadata.longProperty(
                     "test_long",
                     "test long property",
                     42L,
                     false));
     public static final List<PropertyMetadata<?>> TEST_CATALOG_PROPERTIES = ImmutableList.of(
-            PropertyMetadata.stringSessionProperty(
+            PropertyMetadata.stringProperty(
                     "connector_string",
                     "connector string property",
                     "connector default",
                     false),
-            PropertyMetadata.longSessionProperty(
+            PropertyMetadata.longProperty(
                     "connector_long",
                     "connector long property",
                     33L,
                     false),
-            PropertyMetadata.booleanSessionProperty(
+            PropertyMetadata.booleanProperty(
                     "connector_boolean",
                     "connector boolean property",
                     true,
                     false),
-            PropertyMetadata.doubleSessionProperty(
+            PropertyMetadata.doubleProperty(
                     "connector_double",
                     "connector double property",
                     99.0,
@@ -1682,42 +1683,10 @@ public abstract class AbstractTestQueries
     }
 
     @Test
-    public void testJoinWithConstantFalseExpressionWithCoercion()
-    {
-        // Covers #7520
-
-        // Cannot use assertQuery because H2 behaves differently than Presto in CHAR(x) = CHAR(y) comparison, when x != y
-        // assertQuery("SELECT (cast ('a' AS char(1)) = cast ('a' AS char(2)))") would fail
-        MaterializedResult actual = computeActual("SELECT count(*) > 0 FROM nation JOIN region ON (cast('a' AS char(1)) = CAST('a' AS char(2)))");
-
-        MaterializedResult expected = resultBuilder(getSession(), BOOLEAN)
-                .row(false)
-                .build();
-
-        assertEquals(actual, expected);
-    }
-
-    @Test
     public void testJoinWithConstantTrueExpressionWithCoercion()
     {
         // Covers #7520
         assertQuery("SELECT count(*) > 0 FROM nation JOIN region ON (cast(1.2 AS real) = CAST(1.2 AS decimal(2,1)))");
-    }
-
-    @Test
-    public void testJoinWithCanonicalizedConstantFalseExpressionWithCoercion()
-    {
-        // Covers #7520
-
-        // Cannot use assertQuery because H2 behaves differently than Presto in CHAR(x) = CHAR(y) comparison, when x != y
-        // assertQuery("SELECT (cast ('a' AS char(1)) = cast ('a' AS char(2)))") would fail
-        MaterializedResult actual = computeActual("SELECT count(*) > 0 FROM nation JOIN region ON CAST((CASE WHEN (TRUE IS NOT NULL) THEN 'a' ELSE 'a' END) AS char(1)) = CAST('a' AS char(2))");
-
-        MaterializedResult expected = resultBuilder(getSession(), BOOLEAN)
-                .row(false)
-                .build();
-
-        assertEquals(actual, expected);
     }
 
     @Test
@@ -3029,6 +2998,28 @@ public abstract class AbstractTestQueries
         assertQuery(
                 "WITH t AS (SELECT orderkey x, totalprice y, orderkey z FROM orders) SELECT x, y, z FROM t ORDER BY x, y, z LIMIT 1",
                 "SELECT 1, 172799.49, 1");
+    }
+
+    @Test
+    public void testOrderByUnderManyProjections()
+    {
+        assertQuery("SELECT nationkey, arbitrary_column + arbitrary_column " +
+                "FROM " +
+                "( " +
+                "   SELECT nationkey, COALESCE(arbitrary_column, 0) arbitrary_column " +
+                "   FROM ( " +
+                "      SELECT nationkey, 1 arbitrary_column " +
+                "      FROM nation " +
+                "      ORDER BY 1 ASC))");
+    }
+
+    @Test
+    public void testUndistributedOrderBy()
+    {
+        Session undistributedOrderBy = Session.builder(getSession())
+                .setSystemProperty(DISTRIBUTED_SORT, "false")
+                .build();
+        assertQueryOrdered(undistributedOrderBy, "SELECT orderstatus FROM orders ORDER BY orderstatus");
     }
 
     @Test
@@ -4889,6 +4880,7 @@ public abstract class AbstractTestQueries
                 getSession().getSource(),
                 getSession().getCatalog(),
                 getSession().getSchema(),
+                getSession().getPath(),
                 getSession().getTraceToken(),
                 getSession().getTimeZoneKey(),
                 getSession().getLocale(),
@@ -4896,6 +4888,7 @@ public abstract class AbstractTestQueries
                 getSession().getUserAgent(),
                 getSession().getClientInfo(),
                 getSession().getClientTags(),
+                getSession().getClientCapabilities(),
                 getSession().getResourceEstimates(),
                 getSession().getStartTime(),
                 ImmutableMap.<String, String>builder()
@@ -7413,7 +7406,6 @@ public abstract class AbstractTestQueries
     @Test
     public void testAccessControl()
     {
-        assertAccessDenied("SELECT COUNT(true) FROM orders", "Cannot select from table .*.orders.*", privilege("orders", SELECT_TABLE));
         assertAccessDenied("INSERT INTO orders SELECT * FROM orders", "Cannot insert into table .*.orders.*", privilege("orders", INSERT_TABLE));
         assertAccessDenied("DELETE FROM orders", "Cannot delete from table .*.orders.*", privilege("orders", DELETE_TABLE));
         assertAccessDenied("CREATE TABLE foo AS SELECT * FROM orders", "Cannot create table .*.foo.*", privilege("foo", CREATE_TABLE));
@@ -8097,7 +8089,7 @@ public abstract class AbstractTestQueries
     protected Session noJoinReordering()
     {
         return Session.builder(getSession())
-                .setSystemProperty(REORDER_JOINS, "false")
+                .setSystemProperty(JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.NONE.name())
                 .build();
     }
 }

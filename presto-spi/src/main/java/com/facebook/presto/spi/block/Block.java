@@ -240,6 +240,15 @@ public interface Block
     Block copyRegion(int position, int length);
 
     /**
+     * Is it possible the block may have a null value?  If false, the block can not contain
+     * a null, but if true, the block may or may not have a null.
+     */
+    default boolean mayHaveNull()
+    {
+        return true;
+    }
+
+    /**
      * Is the specified position null?
      *
      * @throws IllegalArgumentException if this position is not valid
@@ -247,10 +256,14 @@ public interface Block
     boolean isNull(int position);
 
     /**
-     * Assures that all data for the block is in memory.
+     * Returns a block that assures all data is in memory.
+     * May return the same block if all block data is already in memory.
      * <p>
      * This allows streaming data sources to skip sections that are not
      * accessed in a query.
      */
-    default void assureLoaded() {}
+    default Block getLoadedBlock()
+    {
+        return this;
+    }
 }

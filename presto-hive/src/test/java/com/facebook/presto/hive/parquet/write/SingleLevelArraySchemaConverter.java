@@ -32,6 +32,7 @@ import parquet.schema.Type.Repetition;
 import parquet.schema.Types;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * This class is copied from org.apache.hadoop.hive.ql.io.parquet.convert.HiveSchemaConverter
@@ -101,7 +102,7 @@ public class SingleLevelArraySchemaConverter
             else if (typeInfo.equals(TypeInfoFactory.voidTypeInfo)) {
                 throw new UnsupportedOperationException("Void type not implemented");
             }
-            else if (typeInfo.getTypeName().toLowerCase().startsWith(
+            else if (typeInfo.getTypeName().toLowerCase(Locale.ENGLISH).startsWith(
                     serdeConstants.CHAR_TYPE_NAME)) {
                 if (repetition == Repetition.OPTIONAL) {
                     return Types.optional(PrimitiveTypeName.BINARY).as(OriginalType.UTF8).named(name);
@@ -110,7 +111,7 @@ public class SingleLevelArraySchemaConverter
                     return Types.repeated(PrimitiveTypeName.BINARY).as(OriginalType.UTF8).named(name);
                 }
             }
-            else if (typeInfo.getTypeName().toLowerCase().startsWith(
+            else if (typeInfo.getTypeName().toLowerCase(Locale.ENGLISH).startsWith(
                     serdeConstants.VARCHAR_TYPE_NAME)) {
                 if (repetition == Repetition.OPTIONAL) {
                     return Types.optional(PrimitiveTypeName.BINARY).as(OriginalType.UTF8).named(name);
@@ -162,7 +163,7 @@ public class SingleLevelArraySchemaConverter
     private static GroupType convertArrayType(final String name, final ListTypeInfo typeInfo, final Repetition repetition)
     {
         final TypeInfo subType = typeInfo.getListElementTypeInfo();
-        return listWrapper(name, OriginalType.LIST, convertType("array_element", subType, Repetition.REPEATED), repetition);
+        return listWrapper(name, OriginalType.LIST, convertType("array", subType, Repetition.REPEATED), repetition);
     }
 
     // An optional group containing multiple elements

@@ -35,10 +35,13 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.REPARTITIONED;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.JONI;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.succinctBytes;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 @DefunctConfig({
@@ -47,7 +50,8 @@ import static java.util.concurrent.TimeUnit.MINUTES;
         "experimental-syntax-enabled",
         "analyzer.experimental-syntax-enabled",
         "optimizer.processing-optimization",
-        "deprecated.legacy-order-by"})
+        "deprecated.legacy-order-by",
+        "deprecated.legacy-join-using"})
 public class FeaturesConfig
 {
     @VisibleForTesting
@@ -59,12 +63,14 @@ public class FeaturesConfig
     private double memoryCostWeight = 10;
     private double networkCostWeight = 15;
     private boolean distributedIndexJoinsEnabled;
-    private boolean distributedJoinsEnabled = true;
+    private JoinDistributionType joinDistributionType = REPARTITIONED;
     private boolean colocatedJoinsEnabled;
     private boolean groupedExecutionForAggregationEnabled;
+    private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
-    private boolean reorderJoins = true;
+    private JoinReorderingStrategy joinReorderingStrategy = ELIMINATE_CROSS_JOINS;
+    private int maxReorderedJoins = 9;
     private boolean redistributeWrites = true;
     private boolean scaleWriters;
     private DataSize writerMinSize = new DataSize(32, DataSize.Unit.MEGABYTE);
@@ -75,16 +81,16 @@ public class FeaturesConfig
     private boolean exchangeCompressionEnabled;
     private boolean legacyArrayAgg;
     private boolean legacyLogFunction;
-    private boolean legacyOrderBy;
     private boolean groupByUsesEqualTo;
     private boolean legacyTimestamp = true;
     private boolean legacyMapSubscript;
     private boolean legacyRoundNBigint;
-    private boolean legacyJoinUsing;
     private boolean legacyRowFieldOrdinalAccess;
+    private boolean legacyCharToVarcharCoercion;
     private boolean optimizeMixedDistinctAggregations;
     private boolean forceSingleNodeOutput = true;
     private boolean pagesIndexEagerCompactionEnabled;
+    private boolean distributedSort = true;
 
     private boolean dictionaryAggregation;
 
@@ -113,6 +119,30 @@ public class FeaturesConfig
     private DataSize filterAndProjectMinOutputPageSize = new DataSize(500, KILOBYTE);
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
+
+    public enum JoinReorderingStrategy
+    {
+        NONE,
+        ELIMINATE_CROSS_JOINS,
+        COST_BASED,
+    }
+
+    public enum JoinDistributionType
+    {
+        BROADCAST,
+        REPARTITIONED,
+        AUTOMATIC;
+
+        public boolean canRepartition()
+        {
+            return this == REPARTITIONED || this == AUTOMATIC;
+        }
+
+        public boolean canReplicate()
+        {
+            return this == BROADCAST || this == AUTOMATIC;
+        }
+    }
 
     public double getCpuCostWeight()
     {
@@ -162,11 +192,6 @@ public class FeaturesConfig
         return this;
     }
 
-    public boolean isDistributedJoinsEnabled()
-    {
-        return distributedJoinsEnabled;
-    }
-
     @Config("deprecated.legacy-round-n-bigint")
     public FeaturesConfig setLegacyRoundNBigint(boolean legacyRoundNBigint)
     {
@@ -179,18 +204,6 @@ public class FeaturesConfig
         return legacyRoundNBigint;
     }
 
-    @Config("deprecated.legacy-join-using")
-    public FeaturesConfig setLegacyJoinUsing(boolean value)
-    {
-        this.legacyJoinUsing = value;
-        return this;
-    }
-
-    public boolean isLegacyJoinUsing()
-    {
-        return legacyJoinUsing;
-    }
-
     @Config("deprecated.legacy-row-field-ordinal-access")
     public FeaturesConfig setLegacyRowFieldOrdinalAccess(boolean value)
     {
@@ -201,6 +214,18 @@ public class FeaturesConfig
     public boolean isLegacyRowFieldOrdinalAccess()
     {
         return legacyRowFieldOrdinalAccess;
+    }
+
+    @Config("deprecated.legacy-char-to-varchar-coercion")
+    public FeaturesConfig setLegacyCharToVarcharCoercion(boolean value)
+    {
+        this.legacyCharToVarcharCoercion = value;
+        return this;
+    }
+
+    public boolean isLegacyCharToVarcharCoercion()
+    {
+        return legacyCharToVarcharCoercion;
     }
 
     @Config("deprecated.legacy-array-agg")
@@ -263,10 +288,15 @@ public class FeaturesConfig
         return legacyMapSubscript;
     }
 
-    @Config("distributed-joins-enabled")
-    public FeaturesConfig setDistributedJoinsEnabled(boolean distributedJoinsEnabled)
+    public JoinDistributionType getJoinDistributionType()
     {
-        this.distributedJoinsEnabled = distributedJoinsEnabled;
+        return joinDistributionType;
+    }
+
+    @Config("join-distribution-type")
+    public FeaturesConfig setJoinDistributionType(JoinDistributionType joinDistributionType)
+    {
+        this.joinDistributionType = requireNonNull(joinDistributionType, "joinDistributionType is null");
         return this;
     }
 
@@ -280,6 +310,21 @@ public class FeaturesConfig
     public FeaturesConfig setGroupedExecutionForAggregationEnabled(boolean groupedExecutionForAggregationEnabled)
     {
         this.groupedExecutionForAggregationEnabled = groupedExecutionForAggregationEnabled;
+        return this;
+    }
+
+    public int getConcurrentLifespansPerTask()
+    {
+        return concurrentLifespansPerTask;
+    }
+
+    @Config("concurrent-lifespans-per-task")
+    @Min(0)
+    @ConfigDescription("Experimental: Default number of lifespans that run in parallel on each task when grouped execution is enabled")
+    // When set to zero, a limit is not imposed on the number of lifespans that run in parallel
+    public FeaturesConfig setConcurrentLifespansPerTask(int concurrentLifespansPerTask)
+    {
+        this.concurrentLifespansPerTask = concurrentLifespansPerTask;
         return this;
     }
 
@@ -322,16 +367,30 @@ public class FeaturesConfig
         return fastInequalityJoins;
     }
 
-    public boolean isJoinReorderingEnabled()
+    public JoinReorderingStrategy getJoinReorderingStrategy()
     {
-        return reorderJoins;
+        return joinReorderingStrategy;
     }
 
-    @Config("reorder-joins")
-    @ConfigDescription("Experimental: Reorder joins to optimize plan")
-    public FeaturesConfig setJoinReorderingEnabled(boolean reorderJoins)
+    @Config("optimizer.join-reordering-strategy")
+    @ConfigDescription("The strategy to use for reordering joins")
+    public FeaturesConfig setJoinReorderingStrategy(JoinReorderingStrategy joinReorderingStrategy)
     {
-        this.reorderJoins = reorderJoins;
+        this.joinReorderingStrategy = joinReorderingStrategy;
+        return this;
+    }
+
+    @Min(2)
+    public int getMaxReorderedJoins()
+    {
+        return maxReorderedJoins;
+    }
+
+    @Config("optimizer.max-reordered-joins")
+    @ConfigDescription("The maximum number of tables to reorder in cost-based join reordering")
+    public FeaturesConfig setMaxReorderedJoins(int maxReorderedJoins)
+    {
+        this.maxReorderedJoins = maxReorderedJoins;
         return this;
     }
 
@@ -761,6 +820,18 @@ public class FeaturesConfig
     public FeaturesConfig setPreAllocateMemoryThreshold(DataSize preAllocateMemoryThreshold)
     {
         this.preAllocateMemoryThreshold = preAllocateMemoryThreshold;
+        return this;
+    }
+
+    public boolean isDistributedSortEnabled()
+    {
+        return distributedSort;
+    }
+
+    @Config("distributed-sort")
+    public FeaturesConfig setDistributedSortEnabled(boolean enabled)
+    {
+        distributedSort = enabled;
         return this;
     }
 

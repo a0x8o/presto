@@ -1118,7 +1118,7 @@ let QueryDetail = React.createClass({
                                         Resource Group
                                     </td>
                                     <td className="info-text wrap-text">
-                                        { query.resourceGroupName }
+                                        { query.resourceGroupId.join(".") }
                                     </td>
                                 </tr>
                                 <tr>
@@ -1231,10 +1231,18 @@ let QueryDetail = React.createClass({
                                         </tr>
                                         <tr>
                                             <td className="info-title">
-                                                Peak Memory
+                                                Peak User Memory
                                             </td>
                                             <td className="info-text">
                                                 { query.queryStats.peakUserMemoryReservation }
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td className="info-title">
+                                                Peak Total Memory
+                                            </td>
+                                            <td className="info-text">
+                                                { query.queryStats.peakTotalMemoryReservation }
                                             </td>
                                         </tr>
                                         <tr>

@@ -24,6 +24,7 @@ import com.facebook.presto.hive.parquet.write.SingleLevelArrayMapKeyValuesSchema
 import com.facebook.presto.hive.parquet.write.SingleLevelArraySchemaConverter;
 import com.facebook.presto.hive.parquet.write.TestMapredParquetOutputFormat;
 import com.facebook.presto.spi.ConnectorPageSource;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordPageSource;
@@ -110,20 +111,24 @@ public class ParquetTester
 {
     public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("Asia/Katmandu");
     private static final boolean OPTIMIZED = true;
-    private static final HiveClientConfig HIVE_CLIENT_CONFIG = getHiveClientConfig();
+    private static final HiveClientConfig HIVE_CLIENT_CONFIG = createHiveClientConfig(false);
     private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(HIVE_CLIENT_CONFIG);
     private static final TestingConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(HIVE_CLIENT_CONFIG, new OrcFileWriterConfig()).getSessionProperties());
+    private static final TestingConnectorSession SESSION_USE_NAME = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true), new OrcFileWriterConfig()).getSessionProperties());
     private static final List<String> TEST_COLUMN = singletonList("test");
 
     private Set<CompressionCodecName> compressions = ImmutableSet.of();
 
     private Set<WriterVersion> versions = ImmutableSet.of();
 
+    private Set<TestingConnectorSession> sessions = ImmutableSet.of();
+
     public static ParquetTester quickParquetTester()
     {
         ParquetTester parquetTester = new ParquetTester();
         parquetTester.compressions = ImmutableSet.of(GZIP);
         parquetTester.versions = ImmutableSet.of(PARQUET_1_0);
+        parquetTester.sessions = ImmutableSet.of(SESSION);
         return parquetTester;
     }
 
@@ -132,6 +137,7 @@ public class ParquetTester
         ParquetTester parquetTester = new ParquetTester();
         parquetTester.compressions = ImmutableSet.of(GZIP, UNCOMPRESSED, SNAPPY, LZO);
         parquetTester.versions = ImmutableSet.copyOf(WriterVersion.values());
+        parquetTester.sessions = ImmutableSet.of(SESSION, SESSION_USE_NAME);
         return parquetTester;
     }
 
@@ -152,10 +158,10 @@ public class ParquetTester
     {
         ArrayList<TypeInfo> typeInfos = TypeInfoUtils.getTypeInfosFromTypeString(objectInspector.getTypeName());
         MessageType schema = SingleLevelArraySchemaConverter.convert(TEST_COLUMN, typeInfos);
-        testRoundTrip(objectInspector, writeValues, readValues, type, Optional.of(schema));
+        testSingleLevelArrayRoundTrip(objectInspector, writeValues, readValues, type, Optional.of(schema));
         if (objectInspector.getTypeName().contains("map<")) {
             schema = SingleLevelArrayMapKeyValuesSchemaConverter.convert(TEST_COLUMN, typeInfos);
-            testRoundTrip(objectInspector, writeValues, readValues, type, Optional.of(schema));
+            testSingleLevelArrayRoundTrip(objectInspector, writeValues, readValues, type, Optional.of(schema));
         }
     }
 
@@ -163,7 +169,8 @@ public class ParquetTester
             throws Exception
     {
         // just the values
-        testRoundTripType(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, TEST_COLUMN, singletonList(type), Optional.empty());
+        testRoundTripType(singletonList(objectInspector), new Iterable<?>[] {writeValues},
+                new Iterable<?>[] {readValues}, TEST_COLUMN, singletonList(type), Optional.empty(), false);
 
         // all nulls
         assertRoundTrip(singletonList(objectInspector), new Iterable<?>[] {transform(writeValues, constant(null))},
@@ -173,7 +180,7 @@ public class ParquetTester
             MessageType schema = MapKeyValuesSchemaConverter.convert(TEST_COLUMN, typeInfos);
             // just the values
             testRoundTripType(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {
-                    readValues}, TEST_COLUMN, singletonList(type), Optional.of(schema));
+                    readValues}, TEST_COLUMN, singletonList(type), Optional.of(schema), false);
 
             // all nulls
             assertRoundTrip(singletonList(objectInspector), new Iterable<?>[] {transform(writeValues, constant(null))},
@@ -184,34 +191,52 @@ public class ParquetTester
     public void testRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, Type type, Optional<MessageType> parquetSchema)
             throws Exception
     {
-        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, TEST_COLUMN, singletonList(type), parquetSchema);
+        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, TEST_COLUMN, singletonList(type), parquetSchema, false);
     }
 
-    public void testRoundTrip(List<ObjectInspector> objectInspectors, Iterable<?>[] writeValues, Iterable<?>[] readValues, List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema)
+    public void testSingleLevelArrayRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, Type type, Optional<MessageType> parquetSchema)
+            throws Exception
+    {
+        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, TEST_COLUMN, singletonList(type), parquetSchema, true);
+    }
+
+    public void testRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, String columnName, Type type, Optional<MessageType> parquetSchema)
+            throws Exception
+    {
+        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, singletonList(columnName), singletonList(type), parquetSchema, false);
+    }
+
+    public void testSingleLevelArrayRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, String columnName, Type type, Optional<MessageType> parquetSchema)
+            throws Exception
+    {
+        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, singletonList(columnName), singletonList(type), parquetSchema, true);
+    }
+
+    public void testRoundTrip(List<ObjectInspector> objectInspectors, Iterable<?>[] writeValues, Iterable<?>[] readValues, List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema, boolean singleLevelArray)
             throws Exception
     {
         // just the values
-        testRoundTripType(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema);
+        testRoundTripType(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema, singleLevelArray);
 
         // all nulls
-        assertRoundTrip(objectInspectors, transformToNulls(writeValues), transformToNulls(readValues), columnNames, columnTypes, parquetSchema);
+        assertRoundTrip(objectInspectors, transformToNulls(writeValues), transformToNulls(readValues), columnNames, columnTypes, parquetSchema, singleLevelArray);
     }
 
     private void testRoundTripType(List<ObjectInspector> objectInspectors, Iterable<?>[] writeValues, Iterable<?>[] readValues,
-            List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema)
+            List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema, boolean singleLevelArray)
             throws Exception
     {
         // forward order
-        assertRoundTrip(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema);
+        assertRoundTrip(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema, singleLevelArray);
 
         // reverse order
-        assertRoundTrip(objectInspectors, reverse(writeValues), reverse(readValues), columnNames, columnTypes, parquetSchema);
+        assertRoundTrip(objectInspectors, reverse(writeValues), reverse(readValues), columnNames, columnTypes, parquetSchema, singleLevelArray);
 
         // forward order with nulls
-        assertRoundTrip(objectInspectors, insertNullEvery(5, writeValues), insertNullEvery(5, readValues), columnNames, columnTypes, parquetSchema);
+        assertRoundTrip(objectInspectors, insertNullEvery(5, writeValues), insertNullEvery(5, readValues), columnNames, columnTypes, parquetSchema, singleLevelArray);
 
         // reverse order with nulls
-        assertRoundTrip(objectInspectors, insertNullEvery(5, reverse(writeValues)), insertNullEvery(5, reverse(readValues)), columnNames, columnTypes, parquetSchema);
+        assertRoundTrip(objectInspectors, insertNullEvery(5, reverse(writeValues)), insertNullEvery(5, reverse(readValues)), columnNames, columnTypes, parquetSchema, singleLevelArray);
     }
 
     void assertRoundTrip(List<ObjectInspector> objectInspectors,
@@ -222,39 +247,57 @@ public class ParquetTester
             Optional<MessageType> parquetSchema)
             throws Exception
     {
+        assertRoundTrip(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema, false);
+    }
+
+    void assertRoundTrip(List<ObjectInspector> objectInspectors,
+            Iterable<?>[] writeValues,
+            Iterable<?>[] readValues,
+            List<String> columnNames,
+            List<Type> columnTypes,
+            Optional<MessageType> parquetSchema,
+            boolean singleLevelArray)
+            throws Exception
+    {
         for (WriterVersion version : versions) {
             for (CompressionCodecName compressionCodecName : compressions) {
-                try (TempFile tempFile = new TempFile("test", "parquet")) {
-                    JobConf jobConf = new JobConf();
-                    jobConf.setEnum(COMPRESSION, compressionCodecName);
-                    jobConf.setBoolean(ENABLE_DICTIONARY, true);
-                    jobConf.setEnum(WRITER_VERSION, version);
-                    writeParquetColumn(
-                            jobConf,
-                            tempFile.getFile(),
-                            compressionCodecName,
-                            createTableProperties(columnNames, objectInspectors),
-                            getStandardStructObjectInspector(columnNames, objectInspectors),
-                            getIterators(writeValues),
-                            parquetSchema);
-                    assertFileContents(
-                            tempFile.getFile(),
-                            getIterators(readValues),
-                            columnNames,
-                            columnTypes);
+                for (ConnectorSession session : sessions) {
+                    try (TempFile tempFile = new TempFile("test", "parquet")) {
+                        JobConf jobConf = new JobConf();
+                        jobConf.setEnum(COMPRESSION, compressionCodecName);
+                        jobConf.setBoolean(ENABLE_DICTIONARY, true);
+                        jobConf.setEnum(WRITER_VERSION, version);
+                        writeParquetColumn(
+                                jobConf,
+                                tempFile.getFile(),
+                                compressionCodecName,
+                                createTableProperties(columnNames, objectInspectors),
+                                getStandardStructObjectInspector(columnNames, objectInspectors),
+                                getIterators(writeValues),
+                                parquetSchema,
+                                singleLevelArray);
+                        assertFileContents(
+                                session,
+                                tempFile.getFile(),
+                                getIterators(readValues),
+                                columnNames,
+                                columnTypes);
+                    }
                 }
             }
         }
     }
 
-    private static void assertFileContents(File dataFile,
+    private static void assertFileContents(
+            ConnectorSession session,
+            File dataFile,
             Iterator<?>[] expectedValues,
             List<String> columnNames,
             List<Type> columnTypes)
             throws IOException
     {
         try (ConnectorPageSource pageSource = getFileFormat().createFileFormatReader(
-                SESSION,
+                session,
                 HDFS_ENVIRONMENT,
                 dataFile,
                 columnNames,
@@ -363,12 +406,13 @@ public class ParquetTester
         return Collections.unmodifiableList(values);
     }
 
-    private static HiveClientConfig getHiveClientConfig()
+    private static HiveClientConfig createHiveClientConfig(boolean useParquetColumnNames)
     {
         HiveClientConfig config = new HiveClientConfig();
-        config.setHiveStorageFormat(HiveStorageFormat.PARQUET);
-        config.setParquetOptimizedReaderEnabled(OPTIMIZED);
-        config.setParquetPredicatePushdownEnabled(OPTIMIZED);
+        config.setHiveStorageFormat(HiveStorageFormat.PARQUET)
+                .setParquetOptimizedReaderEnabled(OPTIMIZED)
+                .setParquetPredicatePushdownEnabled(OPTIMIZED)
+                .setUseParquetColumnNames(useParquetColumnNames);
         return config;
     }
 
@@ -383,10 +427,11 @@ public class ParquetTester
             Properties tableProperties,
             SettableStructObjectInspector objectInspector,
             Iterator<?>[] valuesByField,
-            Optional<MessageType> parquetSchema)
+            Optional<MessageType> parquetSchema,
+            boolean singleLevelArray)
             throws Exception
     {
-        RecordWriter recordWriter = new TestMapredParquetOutputFormat(parquetSchema)
+        RecordWriter recordWriter = new TestMapredParquetOutputFormat(parquetSchema, singleLevelArray)
                 .getHiveRecordWriter(
                         jobConf,
                         new Path(outputFile.toURI()),

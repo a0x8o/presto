@@ -15,8 +15,9 @@ package com.facebook.presto.cost;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.matching.Pattern;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause;
@@ -27,7 +28,6 @@ import com.google.common.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
 
@@ -35,7 +35,7 @@ import static com.facebook.presto.cost.FilterStatsCalculator.UNKNOWN_FILTER_COEF
 import static com.facebook.presto.cost.PlanNodeStatsEstimate.UNKNOWN_STATS;
 import static com.facebook.presto.cost.SymbolStatsEstimate.buildFrom;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
-import static com.facebook.presto.sql.tree.ComparisonExpressionType.EQUAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.EQUAL;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Sets.difference;
@@ -74,7 +74,7 @@ public class JoinStatsRule
     }
 
     @Override
-    protected Optional<PlanNodeStatsEstimate> doCalculate(JoinNode node, StatsProvider sourceStats, Lookup lookup, Session session, Map<Symbol, Type> types)
+    protected Optional<PlanNodeStatsEstimate> doCalculate(JoinNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types)
     {
         PlanNodeStatsEstimate leftStats = sourceStats.getStats(node.getLeft());
         PlanNodeStatsEstimate rightStats = sourceStats.getStats(node.getRight());
@@ -100,7 +100,7 @@ public class JoinStatsRule
             PlanNodeStatsEstimate rightStats,
             PlanNodeStatsEstimate crossJoinStats,
             Session session,
-            Map<Symbol, Type> types)
+            TypeProvider types)
     {
         PlanNodeStatsEstimate rightJoinComplementStats = calculateJoinComplementStats(node.getFilter(), flippedCriteria(node), rightStats, leftStats);
         return addJoinComplementStats(
@@ -115,7 +115,7 @@ public class JoinStatsRule
             PlanNodeStatsEstimate rightStats,
             PlanNodeStatsEstimate crossJoinStats,
             Session session,
-            Map<Symbol, Type> types)
+            TypeProvider types)
     {
         PlanNodeStatsEstimate innerJoinStats = computeInnerJoinStats(node, crossJoinStats, session, types);
         PlanNodeStatsEstimate leftJoinComplementStats = calculateJoinComplementStats(node.getFilter(), node.getCriteria(), leftStats, rightStats);
@@ -131,7 +131,7 @@ public class JoinStatsRule
             PlanNodeStatsEstimate rightStats,
             PlanNodeStatsEstimate crossJoinStats,
             Session session,
-            Map<Symbol, Type> types)
+            TypeProvider types)
     {
         PlanNodeStatsEstimate innerJoinStats = computeInnerJoinStats(node, crossJoinStats, session, types);
         PlanNodeStatsEstimate rightJoinComplementStats = calculateJoinComplementStats(node.getFilter(), flippedCriteria(node), rightStats, leftStats);
@@ -141,7 +141,7 @@ public class JoinStatsRule
                 rightJoinComplementStats);
     }
 
-    private PlanNodeStatsEstimate computeInnerJoinStats(JoinNode node, PlanNodeStatsEstimate crossJoinStats, Session session, Map<Symbol, Type> types)
+    private PlanNodeStatsEstimate computeInnerJoinStats(JoinNode node, PlanNodeStatsEstimate crossJoinStats, Session session, TypeProvider types)
     {
         List<EquiJoinClause> equiJoinClauses = node.getCriteria();
 
@@ -175,7 +175,7 @@ public class JoinStatsRule
             EquiJoinClause drivingClause,
             List<EquiJoinClause> auxiliaryClauses,
             Session session,
-            Map<Symbol, Type> types)
+            TypeProvider types)
     {
         ComparisonExpression drivingPredicate = new ComparisonExpression(EQUAL, drivingClause.getLeft().toSymbolReference(), drivingClause.getRight().toSymbolReference());
         PlanNodeStatsEstimate filteredStats = filterStatsCalculator.filterStats(stats, drivingPredicate, session, types);
@@ -240,24 +240,24 @@ public class JoinStatsRule
             PlanNodeStatsEstimate leftStats,
             PlanNodeStatsEstimate rightStats)
     {
-        // TODO: add support for non-equality conditions (e.g: <=, !=, >)
-        if (filter.isPresent()) {
-            // non-equi filters are not supported
-            return UNKNOWN_STATS;
+        if (rightStats.getOutputRowCount() == 0) {
+            // no left side rows are matched
+            return leftStats;
         }
 
         if (criteria.isEmpty()) {
-            if (rightStats.getOutputRowCount() > 0) {
-                // all left side rows are matched
-                return leftStats.mapOutputRowCount(rowCount -> 0.0);
+            // TODO: account for non-equi conditions
+            if (filter.isPresent()) {
+                return UNKNOWN_STATS;
             }
-            if (rightStats.getOutputRowCount() == 0) {
-                // no left side rows are matched
-                return leftStats;
-            }
-            // right stats row count is NaN
-            return UNKNOWN_STATS;
+
+            return leftStats.mapOutputRowCount(rowCount -> 0.0);
         }
+
+        // TODO: add support for non-equality conditions (e.g: <=, !=, >)
+        int numberOfFilterClauses = filter.map(
+                exression -> ExpressionUtils.extractConjuncts(exression).size())
+                .orElse(0);
 
         // Heuristics: select the most selective criteria for join complement clause.
         // Principals behind this heuristics is the same as in computeInnerJoinStats:
@@ -265,8 +265,7 @@ public class JoinStatsRule
         return IntStream.range(0, criteria.size())
                 .mapToObj(drivingClauseId -> {
                     EquiJoinClause drivingClause = criteria.get(drivingClauseId);
-                    List<EquiJoinClause> remainingClauses = copyWithout(criteria, drivingClauseId);
-                    return calculateJoinComplementStats(leftStats, rightStats, drivingClause, remainingClauses);
+                    return calculateJoinComplementStats(leftStats, rightStats, drivingClause, criteria.size() - 1 + numberOfFilterClauses);
                 })
                 .max(comparingDouble(PlanNodeStatsEstimate::getOutputRowCount))
                 .get();
@@ -276,7 +275,7 @@ public class JoinStatsRule
             PlanNodeStatsEstimate leftStats,
             PlanNodeStatsEstimate rightStats,
             EquiJoinClause drivingClause,
-            List<EquiJoinClause> remainingClauses)
+            int numberOfRemainingClauses)
     {
         PlanNodeStatsEstimate result = leftStats;
 
@@ -317,10 +316,8 @@ public class JoinStatsRule
             return UNKNOWN_STATS;
         }
 
-        // account for remaining clauses
-        for (int i = 0; i < remainingClauses.size(); ++i) {
-            result = result.mapOutputRowCount(rowCount -> min(leftStats.getOutputRowCount(), rowCount / UNKNOWN_FILTER_COEFFICIENT));
-        }
+        // limit the number of complement rows (to left row count) and account for remaining clauses
+        result = result.mapOutputRowCount(rowCount -> min(leftStats.getOutputRowCount(), rowCount / Math.pow(UNKNOWN_FILTER_COEFFICIENT, numberOfRemainingClauses)));
 
         return result;
     }

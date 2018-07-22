@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.spi.predicate.Domain;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.optimizations.AddLocalExchanges;
@@ -46,8 +47,9 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
-import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_SORT;
 import static com.facebook.presto.SystemSessionProperties.FORCE_SINGLE_NODE_OUTPUT;
+import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.SystemSessionProperties.OPTIMIZE_HASH_GENERATION;
 import static com.facebook.presto.spi.predicate.Domain.singleValue;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -57,6 +59,7 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.any;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.anyNot;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.apply;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.assignUniqueId;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.constrainedTableScan;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.constrainedTableScanWithTableLayout;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
@@ -69,10 +72,15 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.node;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.output;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.sort;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictTableScan;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.FINAL;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.PARTIAL;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.LOCAL;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
@@ -81,6 +89,8 @@ import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.PAR
 import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.REPLICATED;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.LEFT;
+import static com.facebook.presto.sql.tree.SortItem.NullOrdering.LAST;
+import static com.facebook.presto.sql.tree.SortItem.Ordering.DESCENDING;
 import static com.facebook.presto.tests.QueryTemplate.queryTemplate;
 import static com.facebook.presto.util.MorePredicates.isInstanceOfAny;
 import static io.airlift.slice.Slices.utf8Slice;
@@ -90,6 +100,36 @@ import static org.testng.Assert.assertFalse;
 public class TestLogicalPlanner
         extends BasePlanTest
 {
+    @Test
+    public void testAggregation()
+    {
+        // simple group by
+        assertDistributedPlan("SELECT orderstatus, sum(totalprice) FROM orders GROUP BY orderstatus",
+                anyTree(
+                        aggregation(
+                                ImmutableMap.of("final_sum", functionCall("sum", ImmutableList.of("partial_sum"))),
+                                FINAL,
+                                exchange(LOCAL, GATHER,
+                                        exchange(REMOTE, REPARTITION,
+                                                aggregation(
+                                                        ImmutableMap.of("partial_sum", functionCall("sum", ImmutableList.of("totalprice"))),
+                                                        PARTIAL,
+                                                        anyTree(tableScan("orders", ImmutableMap.of("totalprice", "totalprice")))))))));
+
+        // simple group by over filter that keeps at most one group
+        assertDistributedPlan("SELECT orderstatus, sum(totalprice) FROM orders WHERE orderstatus='O' GROUP BY orderstatus",
+                anyTree(
+                        aggregation(
+                                ImmutableMap.of("final_sum", functionCall("sum", ImmutableList.of("partial_sum"))),
+                                FINAL,
+                                exchange(LOCAL, GATHER,
+                                        exchange(REMOTE, REPARTITION,
+                                                aggregation(
+                                                        ImmutableMap.of("partial_sum", functionCall("sum", ImmutableList.of("totalprice"))),
+                                                        PARTIAL,
+                                                        anyTree(tableScan("orders", ImmutableMap.of("totalprice", "totalprice")))))))));
+    }
+
     @Test
     public void testDistinctLimitOverInequalityJoin()
     {
@@ -355,6 +395,101 @@ public class TestLogicalPlanner
                                 tableScan("orders", ImmutableMap.of("X", "orderkey")))));
     }
 
+    @Test
+    public void testStreamingAggregationForCorrelatedSubquery()
+    {
+        // Use equi-clause to trigger hash partitioning of the join sources
+        assertDistributedPlan(
+                "SELECT name, (SELECT max(name) FROM region WHERE regionkey = nation.regionkey AND length(name) > length(nation.name)) FROM nation",
+                anyTree(
+                        aggregation(
+                                ImmutableList.of(ImmutableList.of("n_name", "n_regionkey", "unique")),
+                                ImmutableMap.of(Optional.of("max"), functionCall("max", ImmutableList.of("r_name"))),
+                                ImmutableList.of("n_name", "n_regionkey", "unique"),
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                node(JoinNode.class,
+                                        assignUniqueId("unique",
+                                                exchange(REMOTE, REPARTITION,
+                                                        anyTree(
+                                                                tableScan("nation", ImmutableMap.of("n_name", "name", "n_regionkey", "regionkey"))))),
+                                        anyTree(
+                                                tableScan("region", ImmutableMap.of("r_name", "name")))))));
+
+        // Don't use equi-clauses to trigger replicated join
+        assertDistributedPlan(
+                "SELECT name, (SELECT max(name) FROM region WHERE regionkey > nation.regionkey) FROM nation",
+                anyTree(
+                        aggregation(
+                                ImmutableList.of(ImmutableList.of("n_name", "n_regionkey", "unique")),
+                                ImmutableMap.of(Optional.of("max"), functionCall("max", ImmutableList.of("r_name"))),
+                                ImmutableList.of("n_name", "n_regionkey", "unique"),
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                node(JoinNode.class,
+                                        assignUniqueId("unique",
+                                                tableScan("nation", ImmutableMap.of("n_name", "name", "n_regionkey", "regionkey"))),
+                                        anyTree(
+                                                tableScan("region", ImmutableMap.of("r_name", "name")))))));
+    }
+
+    @Test
+    public void testStreamingAggregationOverJoin()
+    {
+        // "orders" table is naturally grouped on orderkey
+        // this grouping should survive inner and left joins and allow for streaming aggregation later
+        // this grouping should not survive a cross join
+
+        // inner join -> streaming aggregation
+        assertPlan("SELECT o.orderkey, count(*) FROM orders o, lineitem l WHERE o.orderkey=l.orderkey GROUP BY 1",
+                anyTree(
+                        aggregation(
+                                ImmutableList.of(ImmutableList.of("o_orderkey")),
+                                ImmutableMap.of(Optional.empty(), functionCall("count", ImmutableList.of())),
+                                ImmutableList.of("o_orderkey"), // streaming
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                join(INNER, ImmutableList.of(equiJoinClause("o_orderkey", "l_orderkey")),
+                                        anyTree(
+                                                tableScan("orders", ImmutableMap.of("o_orderkey", "orderkey"))),
+                                        anyTree(
+                                                tableScan("lineitem", ImmutableMap.of("l_orderkey", "orderkey")))))));
+
+        // left join -> streaming aggregation
+        assertPlan("SELECT o.orderkey, count(*) FROM orders o LEFT JOIN lineitem l ON o.orderkey=l.orderkey GROUP BY 1",
+                anyTree(
+                        aggregation(
+                                ImmutableList.of(ImmutableList.of("o_orderkey")),
+                                ImmutableMap.of(Optional.empty(), functionCall("count", ImmutableList.of())),
+                                ImmutableList.of("o_orderkey"), // streaming
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                join(LEFT, ImmutableList.of(equiJoinClause("o_orderkey", "l_orderkey")),
+                                        anyTree(
+                                                tableScan("orders", ImmutableMap.of("o_orderkey", "orderkey"))),
+                                        anyTree(
+                                                tableScan("lineitem", ImmutableMap.of("l_orderkey", "orderkey")))))));
+
+        // cross join - no streaming
+        assertPlan("SELECT o.orderkey, count(*) FROM orders o, lineitem l GROUP BY 1",
+                anyTree(
+                        aggregation(
+                                ImmutableList.of(ImmutableList.of("orderkey")),
+                                ImmutableMap.of(Optional.empty(), functionCall("count", ImmutableList.of())),
+                                ImmutableList.of(), // not streaming
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                join(INNER, ImmutableList.of(),
+                                        tableScan("orders", ImmutableMap.of("orderkey", "orderkey")),
+                                        anyTree(
+                                                node(TableScanNode.class))))));
+    }
+
     /**
      * Handling of correlated IN pulls up everything possible to the generated outer join condition.
      * This test ensures uncorrelated conditions are pushed back down.
@@ -419,16 +554,12 @@ public class TestLogicalPlanner
                 "SELECT orderkey FROM orders WHERE EXISTS(SELECT 1 WHERE orderkey = 3)", // EXISTS maps to count(*) > 0
                 anyTree(
                         filter("FINAL_COUNT > BIGINT '0'",
-                                any(
-                                        aggregation(ImmutableMap.of("FINAL_COUNT", functionCall("count", ImmutableList.of("PARTIAL_COUNT"))),
+                                aggregation(ImmutableMap.of("FINAL_COUNT", functionCall("count", ImmutableList.of("NON_NULL"))),
+                                        join(LEFT, ImmutableList.of(), Optional.of("BIGINT '3' = ORDERKEY"),
                                                 any(
-                                                        aggregation(ImmutableMap.of("PARTIAL_COUNT", functionCall("count", ImmutableList.of("NON_NULL"))),
-                                                                any(
-                                                                        join(LEFT, ImmutableList.of(), Optional.of("BIGINT '3' = ORDERKEY"),
-                                                                                any(
-                                                                                        tableScan("orders", ImmutableMap.of("ORDERKEY", "orderkey"))),
-                                                                                project(ImmutableMap.of("NON_NULL", expression("true")),
-                                                                                        node(ValuesNode.class)))))))))));
+                                                        tableScan("orders", ImmutableMap.of("ORDERKEY", "orderkey"))),
+                                                project(ImmutableMap.of("NON_NULL", expression("true")),
+                                                        node(ValuesNode.class)))))));
     }
 
     @Test
@@ -478,11 +609,11 @@ public class TestLogicalPlanner
     public void testBroadcastCorrelatedSubqueryAvoidsRemoteExchangeBeforeAggregation()
     {
         Session broadcastJoin = Session.builder(this.getQueryRunner().getDefaultSession())
-                .setSystemProperty(DISTRIBUTED_JOIN, Boolean.toString(false))
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.BROADCAST.name())
                 .setSystemProperty(FORCE_SINGLE_NODE_OUTPUT, Boolean.toString(false))
                 .build();
 
-        // make sure there is remote exchange in build side
+        // make sure there is a remote exchange on the build side
         PlanMatchPattern joinBuildSideWithRemoteExchange =
                 anyTree(
                         node(JoinNode.class,
@@ -500,13 +631,21 @@ public class TestLogicalPlanner
                         node -> node instanceof ExchangeNode && ((ExchangeNode) node).getScope() == REMOTE),
                 1);
 
+        Consumer<Plan> validateSingleStreamingAggregation = plan -> assertEquals(
+                countOfMatchingNodes(
+                        plan,
+                        node -> node instanceof AggregationNode
+                                && ((AggregationNode) node).getGroupingKeys().contains(new Symbol("unique"))
+                                && ((AggregationNode) node).isStreamable()),
+                1);
+
         // region is unpartitioned, AssignUniqueId should provide satisfying partitioning for count(*) after LEFT JOIN
         assertPlanWithSession(
                 "SELECT (SELECT count(*) FROM region r2 WHERE r2.regionkey > r1.regionkey) FROM region r1",
                 broadcastJoin,
                 false,
                 joinBuildSideWithRemoteExchange,
-                validateSingleRemoteExchange);
+                validateSingleRemoteExchange.andThen(validateSingleStreamingAggregation));
 
         // orders is naturally partitioned, AssignUniqueId should not overwrite its natural partitioning
         assertPlanWithSession(
@@ -516,14 +655,14 @@ public class TestLogicalPlanner
                 broadcastJoin,
                 false,
                 joinBuildSideWithRemoteExchange,
-                validateSingleRemoteExchange);
+                validateSingleRemoteExchange.andThen(validateSingleStreamingAggregation));
     }
 
     @Test
     public void testUsesDistributedJoinIfNaturallyPartitionedOnProbeSymbols()
     {
         Session broadcastJoin = Session.builder(this.getQueryRunner().getDefaultSession())
-                .setSystemProperty(DISTRIBUTED_JOIN, Boolean.toString(false))
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.BROADCAST.name())
                 .setSystemProperty(FORCE_SINGLE_NODE_OUTPUT, Boolean.toString(false))
                 .setSystemProperty(OPTIMIZE_HASH_GENERATION, Boolean.toString(false))
                 .build();
@@ -576,5 +715,32 @@ public class TestLogicalPlanner
                                 anyTree(
                                         exchange(REMOTE, REPLICATE,
                                                 node(TableScanNode.class))))));
+    }
+
+    @Test
+    public void testDistributedSort()
+    {
+        ImmutableList<PlanMatchPattern.Ordering> orderBy = ImmutableList.of(sort("ORDERKEY", DESCENDING, LAST));
+        assertDistributedPlan(
+                "SELECT orderkey FROM orders ORDER BY orderkey DESC",
+                output(
+                        exchange(REMOTE, GATHER, orderBy,
+                                exchange(LOCAL, GATHER, orderBy,
+                                        sort(orderBy,
+                                                exchange(REMOTE, REPARTITION,
+                                                        tableScan("orders", ImmutableMap.of(
+                                                                "ORDERKEY", "orderkey"))))))));
+
+        assertDistributedPlan(
+                "SELECT orderkey FROM orders ORDER BY orderkey DESC",
+                Session.builder(this.getQueryRunner().getDefaultSession())
+                        .setSystemProperty(DISTRIBUTED_SORT, Boolean.toString(false))
+                        .build(),
+                output(
+                        sort(orderBy,
+                                exchange(LOCAL, GATHER,
+                                        exchange(REMOTE, GATHER,
+                                                tableScan("orders", ImmutableMap.of(
+                                                        "ORDERKEY", "orderkey")))))));
     }
 }

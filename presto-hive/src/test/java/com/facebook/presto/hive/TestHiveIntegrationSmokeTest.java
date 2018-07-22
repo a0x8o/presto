@@ -52,8 +52,8 @@ import java.util.stream.LongStream;
 
 import static com.facebook.presto.SystemSessionProperties.COLOCATED_JOIN;
 import static com.facebook.presto.SystemSessionProperties.CONCURRENT_LIFESPANS_PER_NODE;
-import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
 import static com.facebook.presto.SystemSessionProperties.GROUPED_EXECUTION_FOR_AGGREGATION;
+import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.hive.HiveColumnHandle.BUCKET_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveColumnHandle.PATH_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveQueryRunner.HIVE_CATALOG;
@@ -77,6 +77,7 @@ import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.BROADCAST;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.testing.assertions.Assert.assertEquals;
@@ -2157,13 +2158,14 @@ public class TestHiveIntegrationSmokeTest
                     "SELECT a, a <= 'bbc' FROM test_table_with_char",
                     "VALUES (cast('aaa' as char(20)), true), " +
                             "(cast('bbb' as char(20)), true), " +
-                            "(cast('bbc' as char(20)), false), " +
+                            "(cast('bbc' as char(20)), true), " +
                             "(cast('bbd' as char(20)), false)");
 
             assertQuery(
                     "SELECT a FROM test_table_with_char WHERE a <= 'bbc'",
                     "VALUES cast('aaa' as char(20)), " +
-                            "cast('bbb' as char(20))");
+                            "cast('bbb' as char(20)), " +
+                            "cast('bbc' as char(20))");
         }
         finally {
             assertUpdate("DROP TABLE test_table_with_char");
@@ -2208,7 +2210,7 @@ public class TestHiveIntegrationSmokeTest
             Session colocatedAllGroupsAtOnce = Session.builder(getSession())
                     .setSystemProperty(COLOCATED_JOIN, "true")
                     .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
-                    .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "-1")
+                    .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "0")
                     .build();
             // Co-located JOIN, 1 group per worker at a time
             Session colocatedOneGroupAtATime = Session.builder(getSession())
@@ -2218,7 +2220,7 @@ public class TestHiveIntegrationSmokeTest
                     .build();
             // Broadcast JOIN, 1 group per worker at a time
             Session broadcastOneGroupAtATime = Session.builder(getSession())
-                    .setSystemProperty(DISTRIBUTED_JOIN, "false")
+                    .setSystemProperty(JOIN_DISTRIBUTION_TYPE, BROADCAST.name())
                     .setSystemProperty(COLOCATED_JOIN, "true")
                     .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
                     .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "1")
@@ -2293,7 +2295,7 @@ public class TestHiveIntegrationSmokeTest
             // UNION ALL / GROUP BY
             // ====================
 
-            @Language("SQL") String groupBySingleBucketedTable =
+            @Language("SQL") String groupBySingleBucketed =
                     "SELECT\n" +
                             "  keyD,\n" +
                             "  count(valueD)\n" +
@@ -2301,7 +2303,7 @@ public class TestHiveIntegrationSmokeTest
                             "  test_grouped_joinDual\n" +
                             "GROUP BY keyD";
             @Language("SQL") String expectedSingleGroupByQuery = "SELECT orderkey, 2 from orders";
-            @Language("SQL") String groupByThreeBucketedTable =
+            @Language("SQL") String groupByOfUnionBucketed =
                     "SELECT\n" +
                             "  key\n" +
                             ", arbitrary(value1)\n" +
@@ -2320,7 +2322,7 @@ public class TestHiveIntegrationSmokeTest
                             "  WHERE key3 % 3 = 0\n" +
                             ")\n" +
                             "GROUP BY key";
-            @Language("SQL") String groupByThreeMixedTable =
+            @Language("SQL") String groupByOfUnionMixed =
                     "SELECT\n" +
                             "  key\n" +
                             ", arbitrary(value1)\n" +
@@ -2339,16 +2341,42 @@ public class TestHiveIntegrationSmokeTest
                             "  WHERE keyN % 3 = 0\n" +
                             ")\n" +
                             "GROUP BY key";
-            @Language("SQL") String expectedThreeGroupByQuery = "SELECT orderkey, comment, CASE mod(orderkey, 2) WHEN 0 THEN comment END, CASE mod(orderkey, 3) WHEN 0 THEN comment END from orders";
+            @Language("SQL") String expectedGroupByOfUnion = "SELECT orderkey, comment, CASE mod(orderkey, 2) WHEN 0 THEN comment END, CASE mod(orderkey, 3) WHEN 0 THEN comment END from orders";
+            // In this case:
+            // * left side can take advantage of bucketed execution
+            // * right side does not have the necessary organization to allow its parent to take advantage of bucketed execution
+            // In this scenario, we give up bucketed execution altogether. This can potentially be improved.
+            //
+            //       AGG(key)
+            //           |
+            //       UNION ALL
+            //      /         \
+            //  AGG(key)  Scan (not bucketed)
+            //     |
+            // Scan (bucketed on key)
+            @Language("SQL") String groupByOfUnionOfGroupByMixed =
+                    "SELECT\n" +
+                            "  key, sum(cnt) cnt\n" +
+                            "FROM (\n" +
+                            "  SELECT keyD key, count(valueD) cnt\n" +
+                            "  FROM test_grouped_joinDual\n" +
+                            "  GROUP BY keyD\n" +
+                            "UNION ALL\n" +
+                            "  SELECT keyN key, 1 cnt\n" +
+                            "  FROM test_grouped_joinN\n" +
+                            ")\n" +
+                            "group by key";
+            @Language("SQL") String expectedGroupByOfUnionOfGroupBy = "SELECT orderkey, 3 from orders";
 
             // Eligible GROUP BYs run in the same fragment regardless of colocated_join flag
-            assertQuery(colocatedAllGroupsAtOnce, groupBySingleBucketedTable, expectedSingleGroupByQuery);
-            assertQuery(colocatedOneGroupAtATime, groupBySingleBucketedTable, expectedSingleGroupByQuery);
-            assertQuery(colocatedAllGroupsAtOnce, groupByThreeBucketedTable, expectedThreeGroupByQuery);
-            assertQuery(colocatedOneGroupAtATime, groupByThreeBucketedTable, expectedThreeGroupByQuery);
+            assertQuery(colocatedAllGroupsAtOnce, groupBySingleBucketed, expectedSingleGroupByQuery);
+            assertQuery(colocatedOneGroupAtATime, groupBySingleBucketed, expectedSingleGroupByQuery);
+            assertQuery(colocatedAllGroupsAtOnce, groupByOfUnionBucketed, expectedGroupByOfUnion);
+            assertQuery(colocatedOneGroupAtATime, groupByOfUnionBucketed, expectedGroupByOfUnion);
 
             // cannot be executed in a grouped manner but should still produce correct result
-            assertQuery(colocatedOneGroupAtATime, groupByThreeMixedTable, expectedThreeGroupByQuery);
+            assertQuery(colocatedOneGroupAtATime, groupByOfUnionMixed, expectedGroupByOfUnion);
+            assertQuery(colocatedOneGroupAtATime, groupByOfUnionOfGroupByMixed, expectedGroupByOfUnionOfGroupBy);
 
             //
             // GROUP BY and JOIN mixed

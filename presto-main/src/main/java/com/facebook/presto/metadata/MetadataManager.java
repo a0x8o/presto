@@ -18,7 +18,6 @@ import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.spi.CatalogSchemaName;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.ColumnIdentity;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
@@ -35,7 +34,6 @@ import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
-import com.facebook.presto.spi.TableIdentity;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
@@ -177,7 +175,7 @@ public class MetadataManager
 
     public static MetadataManager createTestMetadataManager(CatalogManager catalogManager, FeaturesConfig featuresConfig)
     {
-        TypeManager typeManager = new TypeRegistry();
+        TypeManager typeManager = new TypeRegistry(ImmutableSet.of(), featuresConfig);
         return new MetadataManager(
                 featuresConfig,
                 typeManager,
@@ -425,11 +423,10 @@ public class MetadataManager
         if (catalog.isPresent()) {
             CatalogMetadata catalogMetadata = catalog.get();
 
-            String schemaNameOrNull = prefix.getSchemaName().orElse(null);
             for (ConnectorId connectorId : catalogMetadata.listConnectorIds()) {
                 ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
                 ConnectorSession connectorSession = session.toConnectorSession(connectorId);
-                metadata.listTables(connectorSession, schemaNameOrNull).stream()
+                metadata.listTables(connectorSession, prefix.getSchemaName()).stream()
                         .map(convertFromSchemaTableName(prefix.getCatalogName()))
                         .filter(prefix::matches)
                         .forEach(tables::add);
@@ -505,34 +502,6 @@ public class MetadataManager
         ConnectorId connectorId = catalogMetadata.getConnectorId();
         ConnectorMetadata metadata = catalogMetadata.getMetadata();
         metadata.renameSchema(session.toConnectorSession(connectorId), source.getSchemaName(), target);
-    }
-
-    @Override
-    public TableIdentity getTableIdentity(Session session, TableHandle tableHandle)
-    {
-        ConnectorMetadata metadata = getMetadata(session, tableHandle.getConnectorId());
-        return metadata.getTableIdentity(tableHandle.getConnectorHandle());
-    }
-
-    @Override
-    public TableIdentity deserializeTableIdentity(Session session, String catalogName, byte[] bytes)
-    {
-        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalogName);
-        return catalogMetadata.getMetadata().deserializeTableIdentity(bytes);
-    }
-
-    @Override
-    public ColumnIdentity getColumnIdentity(Session session, TableHandle tableHandle, ColumnHandle columnHandle)
-    {
-        ConnectorMetadata metadata = getMetadata(session, tableHandle.getConnectorId());
-        return metadata.getColumnIdentity(columnHandle);
-    }
-
-    @Override
-    public ColumnIdentity deserializeColumnIdentity(Session session, String catalogName, byte[] bytes)
-    {
-        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalogName);
-        return catalogMetadata.getMetadata().deserializeColumnIdentity(bytes);
     }
 
     @Override
@@ -756,11 +725,10 @@ public class MetadataManager
         if (catalog.isPresent()) {
             CatalogMetadata catalogMetadata = catalog.get();
 
-            String schemaNameOrNull = prefix.getSchemaName().orElse(null);
             for (ConnectorId connectorId : catalogMetadata.listConnectorIds()) {
                 ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
                 ConnectorSession connectorSession = session.toConnectorSession(connectorId);
-                metadata.listViews(connectorSession, schemaNameOrNull).stream()
+                metadata.listViews(connectorSession, prefix.getSchemaName()).stream()
                         .map(convertFromSchemaTableName(prefix.getCatalogName()))
                         .filter(prefix::matches)
                         .forEach(views::add);
