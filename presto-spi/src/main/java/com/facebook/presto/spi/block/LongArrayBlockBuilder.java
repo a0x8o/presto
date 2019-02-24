@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
+import static com.facebook.presto.spi.block.BlockUtil.countUsedPositions;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
@@ -148,9 +149,21 @@ public class LongArrayBlockBuilder
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return (Long.BYTES + Byte.BYTES) * (long) countUsedPositions(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : Long.BYTES;
     }
 
     @Override

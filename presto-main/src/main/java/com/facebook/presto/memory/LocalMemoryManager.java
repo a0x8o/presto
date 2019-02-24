@@ -24,6 +24,7 @@ import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.memory.NodeMemoryConfig.QUERY_MAX_MEMORY_PER_NODE_CONFIG;
 import static com.facebook.presto.memory.NodeMemoryConfig.QUERY_MAX_TOTAL_MEMORY_PER_NODE_CONFIG;
@@ -37,22 +38,15 @@ public final class LocalMemoryManager
 {
     public static final MemoryPoolId GENERAL_POOL = new MemoryPoolId("general");
     public static final MemoryPoolId RESERVED_POOL = new MemoryPoolId("reserved");
-    public static final MemoryPoolId SYSTEM_POOL = new MemoryPoolId("system");
 
     private DataSize maxMemory;
     private Map<MemoryPoolId, MemoryPool> pools;
 
     @Inject
-    public LocalMemoryManager(NodeMemoryConfig config, ReservedSystemMemoryConfig systemMemoryConfig)
+    public LocalMemoryManager(NodeMemoryConfig config)
     {
         requireNonNull(config, "config is null");
-        long availableMemory = Runtime.getRuntime().maxMemory();
-        if (config.isLegacySystemPoolEnabled()) {
-            configureLegacyMemoryPools(config, systemMemoryConfig, availableMemory);
-        }
-        else {
-            configureMemoryPools(config, availableMemory);
-        }
+        configureMemoryPools(config, Runtime.getRuntime().maxMemory());
     }
 
     private void configureMemoryPools(NodeMemoryConfig config, long availableMemory)
@@ -65,24 +59,13 @@ public final class LocalMemoryManager
                 QUERY_MAX_MEMORY_PER_NODE_CONFIG,
                 QUERY_MAX_TOTAL_MEMORY_PER_NODE_CONFIG);
         ImmutableMap.Builder<MemoryPoolId, MemoryPool> builder = ImmutableMap.builder();
-        builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryTotalMemoryPerNode()));
-        long generalPoolSize = maxMemory.toBytes() - config.getMaxQueryTotalMemoryPerNode().toBytes();
+        long generalPoolSize = maxMemory.toBytes();
+        if (config.isReservedPoolEnabled()) {
+            builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryTotalMemoryPerNode()));
+            generalPoolSize -= config.getMaxQueryTotalMemoryPerNode().toBytes();
+        }
         verify(generalPoolSize > 0, "general memory pool size is 0");
         builder.put(GENERAL_POOL, new MemoryPool(GENERAL_POOL, new DataSize(generalPoolSize, BYTE)));
-        this.pools = builder.build();
-    }
-
-    private void configureLegacyMemoryPools(NodeMemoryConfig config, ReservedSystemMemoryConfig systemMemoryConfig, long availableMemory)
-    {
-        checkArgument(systemMemoryConfig.getReservedSystemMemory().toBytes() < availableMemory, "Reserved memory %s is greater than available heap %s", systemMemoryConfig.getReservedSystemMemory(), new DataSize(availableMemory, BYTE));
-        maxMemory = new DataSize(availableMemory - systemMemoryConfig.getReservedSystemMemory().toBytes(), BYTE);
-
-        ImmutableMap.Builder<MemoryPoolId, MemoryPool> builder = ImmutableMap.builder();
-        checkArgument(config.getMaxQueryMemoryPerNode().toBytes() <= maxMemory.toBytes(), format("%s set to %s, but only %s of useable heap available", QUERY_MAX_MEMORY_PER_NODE_CONFIG, config.getMaxQueryMemoryPerNode(), maxMemory));
-        builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryMemoryPerNode()));
-        DataSize generalPoolSize = new DataSize(Math.max(0, maxMemory.toBytes() - config.getMaxQueryMemoryPerNode().toBytes()), BYTE);
-        builder.put(GENERAL_POOL, new MemoryPool(GENERAL_POOL, generalPoolSize));
-        builder.put(SYSTEM_POOL, new MemoryPool(SYSTEM_POOL, systemMemoryConfig.getReservedSystemMemory()));
         this.pools = builder.build();
     }
 
@@ -116,8 +99,13 @@ public final class LocalMemoryManager
         return ImmutableList.copyOf(pools.values());
     }
 
-    public MemoryPool getPool(MemoryPoolId id)
+    public MemoryPool getGeneralPool()
     {
-        return pools.get(id);
+        return pools.get(GENERAL_POOL);
+    }
+
+    public Optional<MemoryPool> getReservedPool()
+    {
+        return Optional.ofNullable(pools.get(RESERVED_POOL));
     }
 }

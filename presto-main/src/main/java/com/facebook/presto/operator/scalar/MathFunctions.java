@@ -16,7 +16,6 @@ package com.facebook.presto.operator.scalar;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.aggregation.TypedSet;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.function.Description;
@@ -31,6 +30,7 @@ import com.facebook.presto.type.Constraint;
 import com.facebook.presto.type.LiteralParameter;
 import com.google.common.primitives.Doubles;
 import io.airlift.slice.Slice;
+import org.apache.commons.math3.distribution.BetaDistribution;
 import org.apache.commons.math3.special.Erf;
 
 import java.math.BigInteger;
@@ -60,7 +60,6 @@ import static java.lang.Character.MAX_RADIX;
 import static java.lang.Character.MIN_RADIX;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.Float.intBitsToFloat;
-import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 
 public final class MathFunctions
@@ -614,7 +613,7 @@ public final class MathFunctions
     public static double inverseNormalCdf(@SqlType(StandardTypes.DOUBLE) double mean, @SqlType(StandardTypes.DOUBLE) double sd, @SqlType(StandardTypes.DOUBLE) double p)
     {
         checkCondition(p > 0 && p < 1, INVALID_FUNCTION_ARGUMENT, "p must be 0 > p > 1");
-        checkCondition(sd > 0, INVALID_FUNCTION_ARGUMENT, "sd must > 0");
+        checkCondition(sd > 0, INVALID_FUNCTION_ARGUMENT, "sd must be > 0");
 
         return mean + sd * 1.4142135623730951 * Erf.erfInv(2 * p - 1);
     }
@@ -627,8 +626,36 @@ public final class MathFunctions
             @SqlType(StandardTypes.DOUBLE) double standardDeviation,
             @SqlType(StandardTypes.DOUBLE) double value)
     {
-        checkCondition(standardDeviation > 0, INVALID_FUNCTION_ARGUMENT, "standardDeviation must > 0");
+        checkCondition(standardDeviation > 0, INVALID_FUNCTION_ARGUMENT, "standardDeviation must be > 0");
         return 0.5 * (1 + Erf.erf((value - mean) / (standardDeviation * Math.sqrt(2))));
+    }
+
+    @Description("inverse of Beta cdf given a, b parameters and probability")
+    @ScalarFunction
+    @SqlType(StandardTypes.DOUBLE)
+    public static double inverseBetaCdf(
+            @SqlType(StandardTypes.DOUBLE) double a,
+            @SqlType(StandardTypes.DOUBLE) double b,
+            @SqlType(StandardTypes.DOUBLE) double p)
+    {
+        checkCondition(p >= 0 && p <= 1, INVALID_FUNCTION_ARGUMENT, "p must be 0 >= p >= 1");
+        checkCondition(a > 0 && b > 0, INVALID_FUNCTION_ARGUMENT, "a, b must be > 0");
+        BetaDistribution distribution = new BetaDistribution(null, a, b, BetaDistribution.DEFAULT_INVERSE_ABSOLUTE_ACCURACY);
+        return distribution.inverseCumulativeProbability(p);
+    }
+
+    @Description("Beta cdf given the a, b parameters and value")
+    @ScalarFunction
+    @SqlType(StandardTypes.DOUBLE)
+    public static double betaCdf(
+            @SqlType(StandardTypes.DOUBLE) double a,
+            @SqlType(StandardTypes.DOUBLE) double b,
+            @SqlType(StandardTypes.DOUBLE) double value)
+    {
+        checkCondition(value >= 0 && value <= 1, INVALID_FUNCTION_ARGUMENT, "value must be 0 >= v >= 1");
+        checkCondition(a > 0 && b > 0, INVALID_FUNCTION_ARGUMENT, "a, b must be > 0");
+        BetaDistribution distribution = new BetaDistribution(null, a, b, BetaDistribution.DEFAULT_INVERSE_ABSOLUTE_ACCURACY);
+        return distribution.cumulativeProbability(value);
     }
 
     @Description("round to nearest integer")
@@ -674,29 +701,11 @@ public final class MathFunctions
 
     @Description("round to nearest integer")
     @ScalarFunction("round")
-    @SqlType(StandardTypes.TINYINT)
-    public static long roundTinyintBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.TINYINT) long num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return roundTinyint(num, toIntExact(decimals));
-    }
-
-    @Description("round to nearest integer")
-    @ScalarFunction("round")
     @SqlType(StandardTypes.SMALLINT)
     public static long roundSmallint(@SqlType(StandardTypes.SMALLINT) long num, @SqlType(StandardTypes.INTEGER) long decimals)
     {
         // TODO implement support for `decimals < 0`
         return num;
-    }
-
-    @Description("round to nearest integer")
-    @ScalarFunction("round")
-    @SqlType(StandardTypes.SMALLINT)
-    public static long roundSmallintBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.SMALLINT) long num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return roundSmallint(num, toIntExact(decimals));
     }
 
     @Description("round to nearest integer")
@@ -709,30 +718,12 @@ public final class MathFunctions
     }
 
     @Description("round to nearest integer")
-    @ScalarFunction("round")
-    @SqlType(StandardTypes.INTEGER)
-    public static long roundIntegerBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.INTEGER) long num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return roundInteger(num, toIntExact(decimals));
-    }
-
-    @Description("round to nearest integer")
     @ScalarFunction
     @SqlType(StandardTypes.BIGINT)
     public static long round(@SqlType(StandardTypes.BIGINT) long num, @SqlType(StandardTypes.INTEGER) long decimals)
     {
         // TODO implement support for `decimals < 0`
         return num;
-    }
-
-    @Description("round to nearest integer")
-    @ScalarFunction
-    @SqlType(StandardTypes.BIGINT)
-    public static long roundBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.BIGINT) long num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return round(num, toIntExact(decimals));
     }
 
     @Description("round to nearest integer")
@@ -768,14 +759,6 @@ public final class MathFunctions
         return Math.round(num * factor) / factor;
     }
 
-    @ScalarFunction
-    @SqlType(StandardTypes.DOUBLE)
-    public static double roundBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.DOUBLE) double num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return round(num, toIntExact(decimals));
-    }
-
     @Description("round to given number of decimal places")
     @ScalarFunction("round")
     @SqlType(StandardTypes.REAL)
@@ -792,15 +775,6 @@ public final class MathFunctions
         }
 
         return floatToRawIntBits((float) (Math.round(numInFloat * factor) / factor));
-    }
-
-    @Description("round to given number of decimal places")
-    @ScalarFunction("round")
-    @SqlType(StandardTypes.REAL)
-    public static long roundFloatBigintDecimals(ConnectorSession session, @SqlType(StandardTypes.REAL) long num, @SqlType(StandardTypes.BIGINT) long decimals)
-    {
-        checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-        return roundFloat(num, toIntExact(decimals));
     }
 
     @ScalarFunction("round")
@@ -919,55 +893,6 @@ public final class MathFunctions
         }
     }
 
-    @ScalarFunction("round")
-    @Description("round to given number of decimal places")
-    public static final class RoundNBigintDecimals
-    {
-        private RoundNBigintDecimals() {}
-
-        @LiteralParameters({"p", "s", "rp"})
-        @SqlType("decimal(rp, s)")
-        @Constraint(variable = "rp", expression = "min(38, p + 1)")
-        public static long roundNShortBigintDecimals(
-                @LiteralParameter("p") long numPrecision,
-                @LiteralParameter("s") long numScale,
-                ConnectorSession session,
-                @SqlType("decimal(p, s)") long num,
-                @SqlType(StandardTypes.BIGINT) long decimals)
-        {
-            checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-            return RoundN.roundNShort(numPrecision, numScale, num, toIntExact(decimals));
-        }
-
-        @LiteralParameters({"p", "s", "rp"})
-        @SqlType("decimal(rp, s)")
-        @Constraint(variable = "rp", expression = "min(38, p + 1)")
-        public static Slice roundNLongBigintDecimals(
-                @LiteralParameter("s") long numScale,
-                @LiteralParameter("rp") long resultPrecision,
-                ConnectorSession session,
-                @SqlType("decimal(p, s)") Slice num,
-                @SqlType(StandardTypes.BIGINT) long decimals)
-        {
-            checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-            return RoundN.roundNLong(numScale, resultPrecision, num, toIntExact(decimals));
-        }
-
-        @LiteralParameters({"p", "s", "rp"})
-        @SqlType("decimal(rp, s)")
-        @Constraint(variable = "rp", expression = "min(38, p + 1)")
-        public static Slice roundNShortLongBigintDecimals(
-                @LiteralParameter("s") long numScale,
-                @LiteralParameter("rp") long resultPrecision,
-                ConnectorSession session,
-                @SqlType("decimal(p, s)") long num,
-                @SqlType(StandardTypes.BIGINT) long decimals)
-        {
-            checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "ROUND(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-            return RoundN.roundNShortLong(numScale, resultPrecision, num, toIntExact(decimals));
-        }
-    }
-
     @ScalarFunction("truncate")
     @Description("round to integer by dropping digits after decimal point")
     public static final class Truncate
@@ -1050,39 +975,6 @@ public final class MathFunctions
             }
             int rescaleFactor = (int) (numScale - roundScale);
             return rescaleTruncate(rescaleTruncate(num, -rescaleFactor), rescaleFactor);
-        }
-    }
-
-    @ScalarFunction("truncate")
-    @Description("round to integer by dropping given number of digits after decimal point")
-    public static final class TruncateNBigintDecimals
-    {
-        private TruncateNBigintDecimals() {}
-
-        @LiteralParameters({"p", "s"})
-        @SqlType("decimal(p, s)")
-        public static long truncateShortBigintDecimals(
-                @LiteralParameter("p") long numPrecision,
-                @LiteralParameter("s") long numScale,
-                ConnectorSession session,
-                @SqlType("decimal(p, s)") long num,
-                @SqlType(StandardTypes.BIGINT) long roundScale)
-        {
-            checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "TRUNCATE(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-            return TruncateN.truncateShort(numPrecision, numScale, num, toIntExact(roundScale));
-        }
-
-        @LiteralParameters({"p", "s"})
-        @SqlType("decimal(p, s)")
-        public static Slice truncateLongBigintDecimals(
-                @LiteralParameter("p") long numPrecision,
-                @LiteralParameter("s") long numScale,
-                ConnectorSession session,
-                @SqlType("decimal(p, s)") Slice num,
-                @SqlType(StandardTypes.BIGINT) long roundScale)
-        {
-            checkCondition(session.isLegacyRoundNBigint(), INVALID_FUNCTION_ARGUMENT, "TRUNCATE(x, d) does not accept d being a BIGINT. Please cast the second argument to INTEGER");
-            return TruncateN.truncateLong(numPrecision, numScale, num, toIntExact(roundScale));
         }
     }
 

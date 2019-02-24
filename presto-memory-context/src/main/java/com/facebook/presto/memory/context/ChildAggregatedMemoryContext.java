@@ -15,6 +15,7 @@ package com.facebook.presto.memory.context;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static java.util.Objects.requireNonNull;
 
@@ -30,18 +31,19 @@ class ChildAggregatedMemoryContext
     }
 
     @Override
-    synchronized ListenableFuture<?> updateBytes(long bytes)
+    synchronized ListenableFuture<?> updateBytes(String allocationTag, long bytes)
     {
+        checkState(!isClosed(), "ChildAggregatedMemoryContext is already closed");
         // update the parent before updating usedBytes as it may throw a runtime exception (e.g., ExceededMemoryLimitException)
-        ListenableFuture<?> future = parentMemoryContext.updateBytes(bytes);
+        ListenableFuture<?> future = parentMemoryContext.updateBytes(allocationTag, bytes);
         addBytes(bytes);
         return future;
     }
 
     @Override
-    synchronized boolean tryUpdateBytes(long delta)
+    synchronized boolean tryUpdateBytes(String allocationTag, long delta)
     {
-        if (parentMemoryContext.tryUpdateBytes(delta)) {
+        if (parentMemoryContext.tryUpdateBytes(allocationTag, delta)) {
             addBytes(delta);
             return true;
         }
@@ -56,6 +58,6 @@ class ChildAggregatedMemoryContext
 
     void closeContext()
     {
-        parentMemoryContext.updateBytes(-getBytes());
+        parentMemoryContext.updateBytes(FORCE_FREE_TAG, -getBytes());
     }
 }

@@ -15,6 +15,7 @@ package com.facebook.presto.sql.analyzer;
 
 import com.facebook.presto.operator.aggregation.arrayagg.ArrayAggGroupImplementation;
 import com.facebook.presto.operator.aggregation.histogram.HistogramGroupImplementation;
+import com.facebook.presto.operator.aggregation.multimapagg.MultimapAggGroupImplementation;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
@@ -35,12 +36,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
-import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.REPARTITIONED;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.JONI;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
-import static io.airlift.units.DataSize.succinctBytes;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
@@ -63,9 +63,11 @@ public class FeaturesConfig
     private double memoryCostWeight = 10;
     private double networkCostWeight = 15;
     private boolean distributedIndexJoinsEnabled;
-    private JoinDistributionType joinDistributionType = REPARTITIONED;
+    private JoinDistributionType joinDistributionType = PARTITIONED;
+    private DataSize joinMaxBroadcastTableSize;
     private boolean colocatedJoinsEnabled;
     private boolean groupedExecutionForAggregationEnabled;
+    private boolean dynamicScheduleForGroupedExecution;
     private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
@@ -84,7 +86,6 @@ public class FeaturesConfig
     private boolean groupByUsesEqualTo;
     private boolean legacyTimestamp = true;
     private boolean legacyMapSubscript;
-    private boolean legacyRoundNBigint;
     private boolean legacyRowFieldOrdinalAccess;
     private boolean legacyCharToVarcharCoercion;
     private boolean optimizeMixedDistinctAggregations;
@@ -99,43 +100,47 @@ public class FeaturesConfig
     private RegexLibrary regexLibrary = JONI;
     private HistogramGroupImplementation histogramGroupImplementation = HistogramGroupImplementation.NEW;
     private ArrayAggGroupImplementation arrayAggGroupImplementation = ArrayAggGroupImplementation.NEW;
+    private MultimapAggGroupImplementation multimapAggGroupImplementation = MultimapAggGroupImplementation.NEW;
     private boolean spillEnabled;
     private DataSize aggregationOperatorUnspillMemoryLimit = new DataSize(4, DataSize.Unit.MEGABYTE);
     private List<Path> spillerSpillPaths = ImmutableList.of();
     private int spillerThreads = 4;
     private double spillMaxUsedSpaceThreshold = 0.9;
     private boolean iterativeOptimizerEnabled = true;
-    private boolean enableNewStatsCalculator = true;
+    private boolean enableStatsCalculator = true;
+    private boolean ignoreStatsCalculatorFailures = true;
+    private boolean defaultFilterFactorEnabled;
     private boolean pushAggregationThroughJoin = true;
     private double memoryRevokingTarget = 0.5;
     private double memoryRevokingThreshold = 0.9;
     private boolean parseDecimalLiteralsAsDouble;
     private boolean useMarkDistinct = true;
     private boolean preferPartialAggregation = true;
-    private DataSize preAllocateMemoryThreshold = succinctBytes(0);
+    private boolean optimizeTopNRowNumber = true;
 
     private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
 
     private DataSize filterAndProjectMinOutputPageSize = new DataSize(500, KILOBYTE);
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
+    private boolean legacyUnnestArrayRows;
 
     public enum JoinReorderingStrategy
     {
         NONE,
         ELIMINATE_CROSS_JOINS,
-        COST_BASED,
+        AUTOMATIC,
     }
 
     public enum JoinDistributionType
     {
         BROADCAST,
-        REPARTITIONED,
+        PARTITIONED,
         AUTOMATIC;
 
-        public boolean canRepartition()
+        public boolean canPartition()
         {
-            return this == REPARTITIONED || this == AUTOMATIC;
+            return this == PARTITIONED || this == AUTOMATIC;
         }
 
         public boolean canReplicate()
@@ -190,18 +195,6 @@ public class FeaturesConfig
     {
         this.distributedIndexJoinsEnabled = distributedIndexJoinsEnabled;
         return this;
-    }
-
-    @Config("deprecated.legacy-round-n-bigint")
-    public FeaturesConfig setLegacyRoundNBigint(boolean legacyRoundNBigint)
-    {
-        this.legacyRoundNBigint = legacyRoundNBigint;
-        return this;
-    }
-
-    public boolean isLegacyRoundNBigint()
-    {
-        return legacyRoundNBigint;
     }
 
     @Config("deprecated.legacy-row-field-ordinal-access")
@@ -300,6 +293,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public DataSize getJoinMaxBroadcastTableSize()
+    {
+        return joinMaxBroadcastTableSize;
+    }
+
+    @Config("join-max-broadcast-table-size")
+    public FeaturesConfig setJoinMaxBroadcastTableSize(DataSize joinMaxBroadcastTableSize)
+    {
+        this.joinMaxBroadcastTableSize = joinMaxBroadcastTableSize;
+        return this;
+    }
+
     public boolean isGroupedExecutionForAggregationEnabled()
     {
         return groupedExecutionForAggregationEnabled;
@@ -310,6 +315,19 @@ public class FeaturesConfig
     public FeaturesConfig setGroupedExecutionForAggregationEnabled(boolean groupedExecutionForAggregationEnabled)
     {
         this.groupedExecutionForAggregationEnabled = groupedExecutionForAggregationEnabled;
+        return this;
+    }
+
+    public boolean isDynamicScheduleForGroupedExecutionEnabled()
+    {
+        return dynamicScheduleForGroupedExecution;
+    }
+
+    @Config("dynamic-schedule-for-grouped-execution")
+    @ConfigDescription("Experimental: Use dynamic schedule for grouped execution when possible")
+    public FeaturesConfig setDynamicScheduleForGroupedExecutionEnabled(boolean dynamicScheduleForGroupedExecution)
+    {
+        this.dynamicScheduleForGroupedExecution = dynamicScheduleForGroupedExecution;
         return this;
     }
 
@@ -468,6 +486,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isOptimizeTopNRowNumber()
+    {
+        return optimizeTopNRowNumber;
+    }
+
+    @Config("optimizer.optimize-top-n-row-number")
+    public FeaturesConfig setOptimizeTopNRowNumber(boolean optimizeTopNRowNumber)
+    {
+        this.optimizeTopNRowNumber = optimizeTopNRowNumber;
+        return this;
+    }
+
     public boolean isOptimizeHashGeneration()
     {
         return optimizeHashGeneration;
@@ -578,16 +608,41 @@ public class FeaturesConfig
         return this;
     }
 
-    public boolean isEnableNewStatsCalculator()
+    public boolean isEnableStatsCalculator()
     {
-        return enableNewStatsCalculator;
+        return enableStatsCalculator;
     }
 
-    @Config("experimental.enable-new-stats-calculator")
-    public FeaturesConfig setEnableNewStatsCalculator(boolean enableNewStatsCalculator)
+    @Config("experimental.enable-stats-calculator")
+    public FeaturesConfig setEnableStatsCalculator(boolean enableStatsCalculator)
     {
-        this.enableNewStatsCalculator = enableNewStatsCalculator;
+        this.enableStatsCalculator = enableStatsCalculator;
         return this;
+    }
+
+    public boolean isIgnoreStatsCalculatorFailures()
+    {
+        return ignoreStatsCalculatorFailures;
+    }
+
+    @Config("optimizer.ignore-stats-calculator-failures")
+    @ConfigDescription("Ignore statistics calculator failures")
+    public FeaturesConfig setIgnoreStatsCalculatorFailures(boolean ignoreStatsCalculatorFailures)
+    {
+        this.ignoreStatsCalculatorFailures = ignoreStatsCalculatorFailures;
+        return this;
+    }
+
+    @Config("optimizer.default-filter-factor-enabled")
+    public FeaturesConfig setDefaultFilterFactorEnabled(boolean defaultFilterFactorEnabled)
+    {
+        this.defaultFilterFactorEnabled = defaultFilterFactorEnabled;
+        return this;
+    }
+
+    public boolean isDefaultFilterFactorEnabled()
+    {
+        return defaultFilterFactorEnabled;
     }
 
     public DataSize getAggregationOperatorUnspillMemoryLimit()
@@ -611,7 +666,7 @@ public class FeaturesConfig
     public FeaturesConfig setSpillerSpillPaths(String spillPaths)
     {
         List<String> spillPathsSplit = ImmutableList.copyOf(Splitter.on(",").trimResults().omitEmptyStrings().split(spillPaths));
-        this.spillerSpillPaths = spillPathsSplit.stream().map(path -> Paths.get(path)).collect(toImmutableList());
+        this.spillerSpillPaths = spillPathsSplit.stream().map(Paths::get).collect(toImmutableList());
         return this;
     }
 
@@ -810,16 +865,15 @@ public class FeaturesConfig
         return this;
     }
 
-    @NotNull
-    public DataSize getPreAllocateMemoryThreshold()
+    public MultimapAggGroupImplementation getMultimapAggGroupImplementation()
     {
-        return preAllocateMemoryThreshold;
+        return multimapAggGroupImplementation;
     }
 
-    @Config("experimental.preallocate-memory-threshold")
-    public FeaturesConfig setPreAllocateMemoryThreshold(DataSize preAllocateMemoryThreshold)
+    @Config("multimapagg.implementation")
+    public FeaturesConfig setMultimapAggGroupImplementation(MultimapAggGroupImplementation groupByMode)
     {
-        this.preAllocateMemoryThreshold = preAllocateMemoryThreshold;
+        this.multimapAggGroupImplementation = groupByMode;
         return this;
     }
 
@@ -844,6 +898,18 @@ public class FeaturesConfig
     public FeaturesConfig setMaxGroupingSets(int maxGroupingSets)
     {
         this.maxGroupingSets = maxGroupingSets;
+        return this;
+    }
+
+    public boolean isLegacyUnnestArrayRows()
+    {
+        return legacyUnnestArrayRows;
+    }
+
+    @Config("deprecated.legacy-unnest-array-rows")
+    public FeaturesConfig setLegacyUnnestArrayRows(boolean legacyUnnestArrayRows)
+    {
+        this.legacyUnnestArrayRows = legacyUnnestArrayRows;
         return this;
     }
 }

@@ -14,11 +14,14 @@
 package com.facebook.presto.operator.annotations;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.spi.function.InvocationConvention;
 import com.facebook.presto.spi.type.TypeManager;
 
 import java.lang.invoke.MethodHandle;
+import java.util.Objects;
+import java.util.Optional;
 
 import static com.facebook.presto.metadata.SignatureBinder.applyBoundVariables;
 import static java.util.Objects.requireNonNull;
@@ -27,10 +30,12 @@ public abstract class ScalarImplementationDependency
         implements ImplementationDependency
 {
     private final Signature signature;
+    private final Optional<InvocationConvention> invocationConvention;
 
-    protected ScalarImplementationDependency(Signature signature)
+    protected ScalarImplementationDependency(Signature signature, Optional<InvocationConvention> invocationConvention)
     {
         this.signature = requireNonNull(signature, "signature is null");
+        this.invocationConvention = invocationConvention;
     }
 
     public Signature getSignature()
@@ -39,9 +44,34 @@ public abstract class ScalarImplementationDependency
     }
 
     @Override
-    public MethodHandle resolve(BoundVariables boundVariables, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public MethodHandle resolve(BoundVariables boundVariables, TypeManager typeManager, FunctionManager functionManager)
     {
         Signature signature = applyBoundVariables(this.signature, boundVariables, this.signature.getArgumentTypes().size());
-        return functionRegistry.getScalarFunctionImplementation(signature).getMethodHandle();
+        if (invocationConvention.isPresent()) {
+            return functionManager.getFunctionInvokerProvider().createFunctionInvoker(signature, invocationConvention).methodHandle();
+        }
+        else {
+            return functionManager.getScalarFunctionImplementation(signature).getMethodHandle();
+        }
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        ScalarImplementationDependency that = (ScalarImplementationDependency) o;
+        return Objects.equals(signature, that.signature) &&
+                Objects.equals(invocationConvention, that.invocationConvention);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hash(signature, invocationConvention);
     }
 }

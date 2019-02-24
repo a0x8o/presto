@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
+import static com.facebook.presto.spi.block.BlockUtil.countUsedPositions;
 import static io.airlift.slice.SizeOf.sizeOf;
 
 public class ByteArrayBlock
@@ -82,9 +83,21 @@ public class ByteArrayBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return (Byte.BYTES + Byte.BYTES) * (long) countUsedPositions(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : Byte.BYTES;
     }
 
     @Override

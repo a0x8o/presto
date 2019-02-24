@@ -34,7 +34,12 @@ public class TestAggregationStatsRule
                         .lowValue(10)
                         .highValue(15)
                         .distinctValuesCount(4)
-                        .nullsFraction(0.2));
+                        .nullsFraction(0.2))
+                .symbolStats("y", symbolStatsAssertion -> symbolStatsAssertion
+                        .lowValue(0)
+                        .highValue(3)
+                        .distinctValuesCount(3)
+                        .nullsFraction(0));
 
         testAggregation(
                 SymbolStatsEstimate.builder()
@@ -56,10 +61,13 @@ public class TestAggregationStatsRule
         Consumer<PlanNodeStatsAssertion> outputRowsCountAndZStatsAreNotFullyCalculated = check -> check
                 .outputRowsCountUnknown()
                 .symbolStats("z", symbolStatsAssertion -> symbolStatsAssertion
-                        .lowValue(10)
-                        .highValue(15)
+                        .unknownRange()
                         .distinctValuesCountUnknown()
-                        .nullsFractionUnknown());
+                        .nullsFractionUnknown())
+                .symbolStats("y", symbolStatsAssertion -> symbolStatsAssertion
+                        .unknownRange()
+                        .nullsFractionUnknown()
+                        .distinctValuesCountUnknown());
 
         testAggregation(
                 SymbolStatsEstimate.builder()
@@ -84,7 +92,7 @@ public class TestAggregationStatsRule
                         .addAggregation(pb.symbol("sum", BIGINT), expression("sum(x)"), ImmutableList.of(BIGINT))
                         .addAggregation(pb.symbol("count", BIGINT), expression("count()"), ImmutableList.of())
                         .addAggregation(pb.symbol("count_on_x", BIGINT), expression("count(x)"), ImmutableList.of(BIGINT))
-                        .addGroupingSet(pb.symbol("y", BIGINT), pb.symbol("z", BIGINT))
+                        .singleGroupingSet(pb.symbol("y", BIGINT), pb.symbol("z", BIGINT))
                         .source(pb.values(pb.symbol("x", BIGINT), pb.symbol("y", BIGINT), pb.symbol("z", BIGINT)))))
                 .withSourceStats(PlanNodeStatsEstimate.builder()
                         .setOutputRowCount(100)
@@ -122,12 +130,7 @@ public class TestAggregationStatsRule
                                 .lowValueUnknown()
                                 .highValueUnknown()
                                 .distinctValuesCountUnknown()
-                                .nullsFractionUnknown())
-                        .symbolStats("y", symbolStatsAssertion -> symbolStatsAssertion
-                                .lowValue(0)
-                                .highValue(3)
-                                .distinctValuesCount(3)
-                                .nullsFraction(0)));
+                                .nullsFractionUnknown()));
     }
 
     @Test
@@ -136,7 +139,7 @@ public class TestAggregationStatsRule
         tester().assertStatsFor(pb -> pb
                 .aggregation(ab -> ab
                         .addAggregation(pb.symbol("count_on_x", BIGINT), expression("count(x)"), ImmutableList.of(BIGINT))
-                        .addGroupingSet(pb.symbol("y", BIGINT), pb.symbol("z", BIGINT))
+                        .singleGroupingSet(pb.symbol("y", BIGINT), pb.symbol("z", BIGINT))
                         .source(pb.values(pb.symbol("x", BIGINT), pb.symbol("y", BIGINT), pb.symbol("z", BIGINT)))))
                 .withSourceStats(PlanNodeStatsEstimate.builder()
                         .setOutputRowCount(100)

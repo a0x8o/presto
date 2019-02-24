@@ -81,9 +81,9 @@ public class BenchmarkHashAndStreamingAggregationOperators
 {
     private static final MetadataManager metadata = MetadataManager.createTestMetadataManager();
 
-    private static final InternalAggregationFunction LONG_SUM = metadata.getFunctionRegistry().getAggregateFunctionImplementation(
+    private static final InternalAggregationFunction LONG_SUM = metadata.getFunctionManager().getAggregateFunctionImplementation(
             new Signature("sum", AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()));
-    private static final InternalAggregationFunction COUNT = metadata.getFunctionRegistry().getAggregateFunctionImplementation(
+    private static final InternalAggregationFunction COUNT = metadata.getFunctionManager().getAggregateFunctionImplementation(
             new Signature("count", AGGREGATE, BIGINT.getTypeSignature()));
 
     @State(Thread)
@@ -165,12 +165,13 @@ public class BenchmarkHashAndStreamingAggregationOperators
                     hashChannel,
                     Optional.empty(),
                     100_000,
-                    new DataSize(16, MEGABYTE),
+                    Optional.of(new DataSize(16, MEGABYTE)),
                     false,
                     succinctBytes(8),
                     succinctBytes(Integer.MAX_VALUE),
                     spillerFactory,
-                    joinCompiler);
+                    joinCompiler,
+                    false);
         }
 
         private static void repeatToStringBlock(String value, int count, BlockBuilder blockBuilder)
@@ -199,7 +200,7 @@ public class BenchmarkHashAndStreamingAggregationOperators
     @Benchmark
     public List<Page> benchmark(Context context)
     {
-        DriverContext driverContext = context.createTaskContext().addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = context.createTaskContext().addPipelineContext(0, true, true, false).addDriverContext();
         Operator operator = context.getOperatorFactory().createOperator(driverContext);
 
         Iterator<Page> input = context.getPages().iterator();

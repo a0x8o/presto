@@ -494,7 +494,7 @@ public abstract class DefaultTraversalVisitor<R, C>
     @Override
     protected R visitSimpleGroupBy(SimpleGroupBy node, C context)
     {
-        for (Expression expression : node.getColumnExpressions()) {
+        for (Expression expression : node.getExpressions()) {
             process(expression, context);
         }
 
@@ -545,6 +545,15 @@ public abstract class DefaultTraversalVisitor<R, C>
     }
 
     @Override
+    protected R visitAnalyze(Analyze node, C context)
+    {
+        for (Property property : node.getProperties()) {
+            process(property, context);
+        }
+        return null;
+    }
+
+    @Override
     protected R visitCreateView(CreateView node, C context)
     {
         process(node.getQuery(), context);
@@ -576,20 +585,6 @@ public abstract class DefaultTraversalVisitor<R, C>
         }
         for (Property property : node.getProperties()) {
             process(property, context);
-        }
-
-        return null;
-    }
-
-    @Override
-    protected R visitShowPartitions(ShowPartitions node, C context)
-    {
-        if (node.getWhere().isPresent()) {
-            process(node.getWhere().get(), context);
-        }
-
-        for (SortItem sortItem : node.getOrderBy()) {
-            process(sortItem, context);
         }
 
         return null;

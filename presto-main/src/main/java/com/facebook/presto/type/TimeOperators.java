@@ -15,9 +15,13 @@ package com.facebook.presto.type;
 
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.function.BlockIndex;
+import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.IsNull;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarOperator;
+import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.AbstractLongType;
 import com.facebook.presto.spi.type.StandardTypes;
@@ -40,6 +44,7 @@ import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
 import static com.facebook.presto.spi.function.OperatorType.XX_HASH_64;
 import static com.facebook.presto.spi.type.DateTimeEncoding.packDateTimeWithZone;
+import static com.facebook.presto.spi.type.TimeType.TIME;
 import static com.facebook.presto.util.DateTimeUtils.parseTimeWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.printTimeWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeZoneIndex.getChronology;
@@ -60,14 +65,16 @@ public final class TimeOperators
 
     @ScalarOperator(EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean equal(@SqlType(StandardTypes.TIME) long left, @SqlType(StandardTypes.TIME) long right)
+    @SqlNullable
+    public static Boolean equal(@SqlType(StandardTypes.TIME) long left, @SqlType(StandardTypes.TIME) long right)
     {
         return left == right;
     }
 
     @ScalarOperator(NOT_EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean notEqual(@SqlType(StandardTypes.TIME) long left, @SqlType(StandardTypes.TIME) long right)
+    @SqlNullable
+    public static Boolean notEqual(@SqlType(StandardTypes.TIME) long left, @SqlType(StandardTypes.TIME) long right)
     {
         return left != right;
     }
@@ -186,20 +193,39 @@ public final class TimeOperators
     }
 
     @ScalarOperator(IS_DISTINCT_FROM)
-    @SqlType(StandardTypes.BOOLEAN)
-    public static boolean isDistinctFrom(
-            @SqlType(StandardTypes.TIME) long left,
-            @IsNull boolean leftNull,
-            @SqlType(StandardTypes.TIME) long right,
-            @IsNull boolean rightNull)
+    public static class TimeDistinctFromOperator
     {
-        if (leftNull != rightNull) {
-            return true;
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @SqlType(StandardTypes.TIME) long left,
+                @IsNull boolean leftNull,
+                @SqlType(StandardTypes.TIME) long right,
+                @IsNull boolean rightNull)
+        {
+            if (leftNull != rightNull) {
+                return true;
+            }
+            if (leftNull) {
+                return false;
+            }
+            return notEqual(left, right);
         }
-        if (leftNull) {
-            return false;
+
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @BlockPosition @SqlType(value = StandardTypes.TIME, nativeContainerType = long.class) Block left,
+                @BlockIndex int leftPosition,
+                @BlockPosition @SqlType(value = StandardTypes.TIME, nativeContainerType = long.class) Block right,
+                @BlockIndex int rightPosition)
+        {
+            if (left.isNull(leftPosition) != right.isNull(rightPosition)) {
+                return true;
+            }
+            if (left.isNull(leftPosition)) {
+                return false;
+            }
+            return notEqual(TIME.getLong(left, leftPosition), TIME.getLong(right, rightPosition));
         }
-        return notEqual(left, right);
     }
 
     @ScalarOperator(INDETERMINATE)

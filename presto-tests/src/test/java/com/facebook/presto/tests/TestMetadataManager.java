@@ -24,6 +24,7 @@ import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.tests.tpch.TpchQueryRunnerBuilder;
 import com.facebook.presto.transaction.TransactionBuilder;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -54,18 +55,22 @@ public class TestMetadataManager
             throws Exception
     {
         queryRunner = TpchQueryRunnerBuilder.builder().build();
-        queryRunner.installPlugin(new Plugin() {
+        queryRunner.installPlugin(new Plugin()
+        {
             @Override
             public Iterable<ConnectorFactory> getConnectorFactories()
             {
-                return ImmutableList.of(new MockConnectorFactory(
-                        session -> ImmutableList.of("UPPER_CASE_SCHEMA"),
-                        (session, schemaNameOrNull) -> {
+                MockConnectorFactory connectorFactory = MockConnectorFactory.builder()
+                        .withListSchemaNames(session -> ImmutableList.of("UPPER_CASE_SCHEMA"))
+                        .withListTables((session, schemaNameOrNull) -> {
                             throw new UnsupportedOperationException();
-                        },
-                        (session, tableHandle) -> {
+                        })
+                        .withGetViews((session, prefix) -> ImmutableMap.of())
+                        .withGetColumnHandles((session, tableHandle) -> {
                             throw new UnsupportedOperationException();
-                        }));
+                        })
+                        .build();
+                return ImmutableList.of(connectorFactory);
             }
         });
         queryRunner.createCatalog("upper_case_schema_catalog", "mock");
@@ -118,7 +123,7 @@ public class TestMetadataManager
 
         // wait until query starts running
         while (true) {
-            QueryInfo queryInfo = queryManager.getQueryInfo(queryId);
+            QueryInfo queryInfo = queryManager.getFullQueryInfo(queryId);
             if (queryInfo.getState().isDone()) {
                 assertEquals(queryInfo.getState(), FAILED);
                 throw queryInfo.getFailureInfo().toException();

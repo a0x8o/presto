@@ -13,11 +13,10 @@
  */
 package com.facebook.presto.execution.buffer;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.StateMachine;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.TaskId;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -335,12 +334,6 @@ public class LazyOutputBuffer
             return outputBuffer.getPeakMemoryUsage();
         }
         return 0;
-    }
-
-    @Override
-    public synchronized void forceFreeMemory()
-    {
-        delegate.forceFreeMemory();
     }
 
     private static class PendingRead

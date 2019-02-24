@@ -65,6 +65,7 @@ import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.HivePrivilegeInfo;
 import com.facebook.presto.hive.metastore.Partition;
+import com.facebook.presto.hive.metastore.PartitionWithStatistics;
 import com.facebook.presto.hive.metastore.PrincipalPrivileges;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.hive.metastore.glue.converter.GlueInputConverter;
@@ -75,6 +76,8 @@ import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.statistics.ColumnStatisticType;
+import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -215,9 +218,9 @@ public class GlueHiveMetastore
     }
 
     @Override
-    public boolean supportsColumnStatistics()
+    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
-        return false;
+        return ImmutableSet.of();
     }
 
     private Table getTableOrElseThrow(String databaseName, String tableName)
@@ -496,29 +499,6 @@ public class GlueHiveMetastore
     }
 
     @Override
-    public synchronized void updateTableParameters(String databaseName, String tableName, Function<Map<String, String>, Map<String, String>> update)
-    {
-        Table table = getTableOrElseThrow(databaseName, tableName);
-        try {
-            Map<String, String> parameters = table.getParameters();
-            Map<String, String> updatedParameters = requireNonNull(update.apply(parameters), "updatedParameters is null");
-            if (!parameters.equals(updatedParameters)) {
-                TableInput tableInput = GlueInputConverter.convertTable(table);
-                tableInput.setParameters(updatedParameters);
-                glueClient.updateTable(new UpdateTableRequest()
-                        .withDatabaseName(databaseName)
-                        .withTableInput(tableInput));
-            }
-        }
-        catch (EntityNotFoundException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
-        }
-        catch (AmazonServiceException e) {
-            throw new PrestoException(HIVE_METASTORE_ERROR, e);
-        }
-    }
-
-    @Override
     public void addColumn(String databaseName, String tableName, String columnName, HiveType columnType, String columnComment)
     {
         Table oldTable = getTableOrElseThrow(databaseName, tableName);
@@ -607,6 +587,7 @@ public class GlueHiveMetastore
      *     ['1','2','3'] or
      *     ['', '2', '']
      * </pre>
+     *
      * @param parts Full or partial list of partition values to filter on. Keys without filter will be empty strings.
      * @return a list of partition names.
      */
@@ -656,6 +637,7 @@ public class GlueHiveMetastore
      * Ex: Partition keys = ['a', 'b']
      *     Partition names = ['a=1/b=2', 'a=2/b=2']
      * </pre>
+     *
      * @param partitionNames List of full partition names
      * @return Mapping of partition name to partition object
      */
@@ -715,13 +697,13 @@ public class GlueHiveMetastore
     }
 
     @Override
-    public void addPartitions(String databaseName, String tableName, List<Partition> partitions)
+    public void addPartitions(String databaseName, String tableName, List<PartitionWithStatistics> partitions)
     {
         try {
-            List<List<Partition>> batchedPartitions = Lists.partition(partitions, BATCH_CREATE_PARTITION_MAX_PAGE_SIZE);
+            List<List<PartitionWithStatistics>> batchedPartitions = Lists.partition(partitions, BATCH_CREATE_PARTITION_MAX_PAGE_SIZE);
             List<Future<BatchCreatePartitionResult>> futures = new ArrayList<>();
 
-            for (List<Partition> partitionBatch : batchedPartitions) {
+            for (List<PartitionWithStatistics> partitionBatch : batchedPartitions) {
                 List<PartitionInput> partitionInputs = partitionBatch.stream().map(GlueInputConverter::convertPartition).collect(toList());
                 futures.add(glueClient.batchCreatePartitionAsync(new BatchCreatePartitionRequest()
                         .withDatabaseName(databaseName)
@@ -783,7 +765,7 @@ public class GlueHiveMetastore
     }
 
     @Override
-    public void alterPartition(String databaseName, String tableName, Partition partition)
+    public void alterPartition(String databaseName, String tableName, PartitionWithStatistics partition)
     {
         try {
             PartitionInput newPartition = GlueInputConverter.convertPartition(partition);
@@ -791,36 +773,10 @@ public class GlueHiveMetastore
                     .withDatabaseName(databaseName)
                     .withTableName(tableName)
                     .withPartitionInput(newPartition)
-                    .withPartitionValueList(partition.getValues()));
+                    .withPartitionValueList(partition.getPartition().getValues()));
         }
         catch (EntityNotFoundException e) {
-            throw new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partition.getValues());
-        }
-        catch (AmazonServiceException e) {
-            throw new PrestoException(HIVE_METASTORE_ERROR, e);
-        }
-    }
-
-    @Override
-    public synchronized void updatePartitionParameters(String databaseName, String tableName, List<String> partitionValues, Function<Map<String, String>, Map<String, String>> update)
-    {
-        Partition partition = getPartition(databaseName, tableName, partitionValues)
-                .orElseThrow(() -> new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partitionValues));
-        try {
-            Map<String, String> parameters = partition.getParameters();
-            Map<String, String> updatedParameters = requireNonNull(update.apply(parameters), "updatedParameters is null");
-            if (!parameters.equals(updatedParameters)) {
-                PartitionInput partitionInput = GlueInputConverter.convertPartition(partition);
-                partitionInput.setParameters(updatedParameters);
-                glueClient.updatePartition(new UpdatePartitionRequest()
-                        .withDatabaseName(databaseName)
-                        .withTableName(tableName)
-                        .withPartitionValueList(partition.getValues())
-                        .withPartitionInput(partitionInput));
-            }
-        }
-        catch (EntityNotFoundException e) {
-            throw new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partition.getValues());
+            throw new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partition.getPartition().getValues());
         }
         catch (AmazonServiceException e) {
             throw new PrestoException(HIVE_METASTORE_ERROR, e);

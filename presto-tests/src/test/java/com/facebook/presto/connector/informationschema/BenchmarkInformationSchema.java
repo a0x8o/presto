@@ -75,19 +75,19 @@ public class BenchmarkInformationSchema
 
         @Param({"FULL_SCAN", "LIKE_PREDICATE", "MIXED_PREDICATE"})
         private String queryId = "LIKE_PREDICATE";
-        @Param({"200"})
+        @Param("200")
         private String schemasCount = "200";
-        @Param({"200"})
+        @Param("200")
         private String tablesCount = "200";
-        @Param({"100"})
+        @Param("100")
         private String columnsCount = "100";
 
         private QueryRunner queryRunner;
 
         private Session session = testSessionBuilder()
-                    .setCatalog("test_catalog")
-                    .setSchema("test_schema")
-                    .build();
+                .setCatalog("test_catalog")
+                .setSchema("test_schema")
+                .build();
 
         private String query;
 
@@ -96,7 +96,8 @@ public class BenchmarkInformationSchema
                 throws Exception
         {
             queryRunner = DistributedQueryRunner.builder(session).build();
-            queryRunner.installPlugin(new Plugin() {
+            queryRunner.installPlugin(new Plugin()
+            {
                 @Override
                 public Iterable<ConnectorFactory> getConnectorFactories()
                 {
@@ -126,7 +127,13 @@ public class BenchmarkInformationSchema
                             .boxed()
                             .map(i -> "column_" + i)
                             .collect(toImmutableMap(column -> column, column -> new TpchColumnHandle(column, createUnboundedVarcharType()) {}));
-                    return ImmutableList.of(new MockConnectorFactory(listSchemaNames, listTables, getColumnHandles));
+                    MockConnectorFactory connectorFactory = MockConnectorFactory.builder()
+                            .withListSchemaNames(listSchemaNames)
+                            .withListTables(listTables)
+                            .withGetViews((session, prefix) -> ImmutableMap.of())
+                            .withGetColumnHandles(getColumnHandles)
+                            .build();
+                    return ImmutableList.of(connectorFactory);
                 }
             });
             queryRunner.createCatalog("test_catalog", "mock", ImmutableMap.of());

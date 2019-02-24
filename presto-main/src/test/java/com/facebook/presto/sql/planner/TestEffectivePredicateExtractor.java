@@ -80,6 +80,8 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.ExpressionUtils.and;
 import static com.facebook.presto.sql.ExpressionUtils.combineConjuncts;
 import static com.facebook.presto.sql.ExpressionUtils.or;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.globalAggregation;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static org.testng.Assert.assertEquals;
@@ -132,10 +134,7 @@ public class TestEffectivePredicateExtractor
                 newId(),
                 DUAL_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
-                assignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+                assignments);
 
         expressionNormalizer = new ExpressionIdentityNormalizer();
     }
@@ -156,7 +155,7 @@ public class TestEffectivePredicateExtractor
                 ImmutableMap.of(
                         C, new Aggregation(fakeFunction(), fakeFunctionHandle("test", AGGREGATE), Optional.empty()),
                         D, new Aggregation(fakeFunction(), fakeFunctionHandle("test", AGGREGATE), Optional.empty())),
-                ImmutableList.of(ImmutableList.of(A, B, C)),
+                singleGroupingSet(ImmutableList.of(A, B, C)),
                 ImmutableList.of(),
                 AggregationNode.Step.FINAL,
                 Optional.empty(),
@@ -180,7 +179,7 @@ public class TestEffectivePredicateExtractor
                 newId(),
                 filter(baseTableScan, FALSE_LITERAL),
                 ImmutableMap.of(),
-                ImmutableList.of(ImmutableList.of()),
+                globalAggregation(),
                 ImmutableList.of(),
                 AggregationNode.Step.FINAL,
                 Optional.empty(),
@@ -328,10 +327,7 @@ public class TestEffectivePredicateExtractor
                 newId(),
                 DUAL_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
-                assignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+                assignments);
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
         assertEquals(effectivePredicate, BooleanLiteral.TRUE_LITERAL);
 
@@ -342,7 +338,7 @@ public class TestEffectivePredicateExtractor
                 assignments,
                 Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.none(),
-                null);
+                TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
         assertEquals(effectivePredicate, FALSE_LITERAL);
 
@@ -353,7 +349,7 @@ public class TestEffectivePredicateExtractor
                 assignments,
                 Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.withColumnDomains(ImmutableMap.of(scanAssignments.get(A), Domain.singleValue(BIGINT, 1L))),
-                null);
+                TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
         assertEquals(normalizeConjuncts(effectivePredicate), normalizeConjuncts(equals(bigintLiteral(1L), AE)));
 
@@ -366,7 +362,7 @@ public class TestEffectivePredicateExtractor
                 TupleDomain.withColumnDomains(ImmutableMap.of(
                         scanAssignments.get(A), Domain.singleValue(BIGINT, 1L),
                         scanAssignments.get(B), Domain.singleValue(BIGINT, 2L))),
-                null);
+                TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
         assertEquals(normalizeConjuncts(effectivePredicate), normalizeConjuncts(equals(bigintLiteral(2L), BE), equals(bigintLiteral(1L), AE)));
 
@@ -377,7 +373,7 @@ public class TestEffectivePredicateExtractor
                 assignments,
                 Optional.empty(),
                 TupleDomain.all(),
-                null);
+                TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
         assertEquals(effectivePredicate, BooleanLiteral.TRUE_LITERAL);
     }
@@ -410,24 +406,10 @@ public class TestEffectivePredicateExtractor
         List<JoinNode.EquiJoinClause> criteria = criteriaBuilder.build();
 
         Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
-        TableScanNode leftScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(leftAssignments.keySet()),
-                leftAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode leftScan = tableScanNode(leftAssignments);
 
         Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
-        TableScanNode rightScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(rightAssignments.keySet()),
-                rightAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode rightScan = tableScanNode(rightAssignments);
 
         FilterNode left = filter(leftScan,
                 and(
@@ -448,7 +430,7 @@ public class TestEffectivePredicateExtractor
                         .addAll(left.getOutputSymbols())
                         .addAll(right.getOutputSymbols())
                         .build(),
-                Optional.empty(),
+                Optional.of(lessThanOrEqual(BE, EE)),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
@@ -462,7 +444,68 @@ public class TestEffectivePredicateExtractor
                         equals(DE, EE),
                         lessThan(FE, bigintLiteral(100)),
                         equals(AE, DE),
-                        equals(BE, EE)));
+                        equals(BE, EE),
+                        lessThanOrEqual(BE, EE)));
+    }
+
+    @Test
+    public void testInnerJoinPropagatesPredicatesViaEquiConditions()
+    {
+        Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
+        TableScanNode leftScan = tableScanNode(leftAssignments);
+
+        Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
+        TableScanNode rightScan = tableScanNode(rightAssignments);
+
+        FilterNode left = filter(leftScan, equals(AE, bigintLiteral(10)));
+
+        // predicates on "a" column should be propagated to output symbols via join equi conditions
+        PlanNode node = new JoinNode(newId(),
+                JoinNode.Type.INNER,
+                left,
+                rightScan,
+                ImmutableList.of(new JoinNode.EquiJoinClause(A, D)),
+                ImmutableList.<Symbol>builder()
+                        .addAll(rightScan.getOutputSymbols())
+                        .build(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+
+        Expression effectivePredicate = effectivePredicateExtractor.extract(node);
+
+        assertEquals(
+                normalizeConjuncts(effectivePredicate),
+                normalizeConjuncts(equals(DE, bigintLiteral(10))));
+    }
+
+    @Test
+    public void testInnerJoinWithFalseFilter()
+    {
+        Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
+        TableScanNode leftScan = tableScanNode(leftAssignments);
+
+        Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
+        TableScanNode rightScan = tableScanNode(rightAssignments);
+
+        PlanNode node = new JoinNode(newId(),
+                JoinNode.Type.INNER,
+                leftScan,
+                rightScan,
+                ImmutableList.of(new JoinNode.EquiJoinClause(A, D)),
+                ImmutableList.<Symbol>builder()
+                        .addAll(leftScan.getOutputSymbols())
+                        .addAll(rightScan.getOutputSymbols())
+                        .build(),
+                Optional.of(FALSE_LITERAL),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+
+        Expression effectivePredicate = effectivePredicateExtractor.extract(node);
+
+        assertEquals(effectivePredicate, FALSE_LITERAL);
     }
 
     @Test
@@ -474,24 +517,10 @@ public class TestEffectivePredicateExtractor
         List<JoinNode.EquiJoinClause> criteria = criteriaBuilder.build();
 
         Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
-        TableScanNode leftScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(leftAssignments.keySet()),
-                leftAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode leftScan = tableScanNode(leftAssignments);
 
         Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
-        TableScanNode rightScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(rightAssignments.keySet()),
-                rightAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode rightScan = tableScanNode(rightAssignments);
 
         FilterNode left = filter(leftScan,
                 and(
@@ -534,24 +563,10 @@ public class TestEffectivePredicateExtractor
         List<JoinNode.EquiJoinClause> criteria = ImmutableList.of(new JoinNode.EquiJoinClause(A, D));
 
         Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
-        TableScanNode leftScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(leftAssignments.keySet()),
-                leftAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode leftScan = tableScanNode(leftAssignments);
 
         Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
-        TableScanNode rightScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(rightAssignments.keySet()),
-                rightAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode rightScan = tableScanNode(rightAssignments);
 
         FilterNode left = filter(leftScan,
                 and(
@@ -591,24 +606,10 @@ public class TestEffectivePredicateExtractor
         List<JoinNode.EquiJoinClause> criteria = criteriaBuilder.build();
 
         Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
-        TableScanNode leftScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(leftAssignments.keySet()),
-                leftAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode leftScan = tableScanNode(leftAssignments);
 
         Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
-        TableScanNode rightScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(rightAssignments.keySet()),
-                rightAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode rightScan = tableScanNode(rightAssignments);
 
         FilterNode left = filter(leftScan,
                 and(
@@ -651,24 +652,10 @@ public class TestEffectivePredicateExtractor
         List<JoinNode.EquiJoinClause> criteria = ImmutableList.of(new JoinNode.EquiJoinClause(A, D));
 
         Map<Symbol, ColumnHandle> leftAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C)));
-        TableScanNode leftScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(leftAssignments.keySet()),
-                leftAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode leftScan = tableScanNode(leftAssignments);
 
         Map<Symbol, ColumnHandle> rightAssignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(D, E, F)));
-        TableScanNode rightScan = new TableScanNode(
-                newId(),
-                DUAL_TABLE_HANDLE,
-                ImmutableList.copyOf(rightAssignments.keySet()),
-                rightAssignments,
-                Optional.empty(),
-                TupleDomain.all(),
-                null);
+        TableScanNode rightScan = tableScanNode(rightAssignments);
 
         FilterNode left = filter(leftScan, FALSE_LITERAL);
         FilterNode right = filter(rightScan,
@@ -716,6 +703,18 @@ public class TestEffectivePredicateExtractor
                 normalizeConjuncts(and(greaterThan(AE, bigintLiteral(10)), lessThan(AE, bigintLiteral(100)))));
     }
 
+    private static TableScanNode tableScanNode(Map<Symbol, ColumnHandle> scanAssignments)
+    {
+        return new TableScanNode(
+                newId(),
+                DUAL_TABLE_HANDLE,
+                ImmutableList.copyOf(scanAssignments.keySet()),
+                scanAssignments,
+                Optional.empty(),
+                TupleDomain.all(),
+                TupleDomain.all());
+    }
+
     private static PlanNodeId newId()
     {
         return new PlanNodeId(UUID.randomUUID().toString());
@@ -742,6 +741,11 @@ public class TestEffectivePredicateExtractor
     private static ComparisonExpression lessThan(Expression expression1, Expression expression2)
     {
         return new ComparisonExpression(ComparisonExpression.Operator.LESS_THAN, expression1, expression2);
+    }
+
+    private static ComparisonExpression lessThanOrEqual(Expression expression1, Expression expression2)
+    {
+        return new ComparisonExpression(ComparisonExpression.Operator.LESS_THAN_OR_EQUAL, expression1, expression2);
     }
 
     private static ComparisonExpression greaterThan(Expression expression1, Expression expression2)

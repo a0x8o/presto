@@ -14,9 +14,12 @@
 package com.facebook.presto.block;
 
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.IntArrayBlock;
 import com.facebook.presto.spi.block.IntArrayBlockBuilder;
 import io.airlift.slice.Slice;
 import org.testng.annotations.Test;
+
+import java.util.Optional;
 
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static org.testng.Assert.assertEquals;
@@ -30,13 +33,13 @@ public class TestIntArrayBlock
     {
         Slice[] expectedValues = createTestValue(17);
         assertFixedWithValues(expectedValues);
-        assertFixedWithValues((Slice[]) alternatingNullValues(expectedValues));
+        assertFixedWithValues(alternatingNullValues(expectedValues));
     }
 
     @Test
     public void testCopyPositions()
     {
-        Slice[] expectedValues = (Slice[]) alternatingNullValues(createTestValue(17));
+        Slice[] expectedValues = alternatingNullValues(createTestValue(17));
         BlockBuilder blockBuilder = createBlockBuilderWithValues(expectedValues);
         assertBlockFilteredPositions(expectedValues, blockBuilder.build(), () -> blockBuilder.newBlockBuilderLike(null), 0, 2, 4, 6, 7, 9, 10, 16);
     }
@@ -58,6 +61,24 @@ public class TestIntArrayBlock
         blockBuilder = blockBuilder.newBlockBuilderLike(null);
         assertEquals(blockBuilder.getSizeInBytes(), emptyBlockBuilder.getSizeInBytes());
         assertEquals(blockBuilder.getRetainedSizeInBytes(), emptyBlockBuilder.getRetainedSizeInBytes());
+    }
+
+    @Test
+    public void testEstimatedDataSizeForStats()
+    {
+        Slice[] expectedValues = createTestValue(100);
+        assertEstimatedDataSizeForStats(createBlockBuilderWithValues(expectedValues), expectedValues);
+    }
+
+    @Test
+    public void testCompactBlock()
+    {
+        int[] intArray = {0, 0, 1, 2, 3, 4};
+        boolean[] valueIsNull = {false, true, false, false, false, false};
+
+        testCompactBlock(new IntArrayBlock(0, Optional.empty(), new int[0]));
+        testCompactBlock(new IntArrayBlock(intArray.length, Optional.of(valueIsNull), intArray));
+        testIncompactBlock(new IntArrayBlock(intArray.length - 1, Optional.of(valueIsNull), intArray));
     }
 
     private void assertFixedWithValues(Slice[] expectedValues)

@@ -14,8 +14,9 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
+import com.facebook.presto.operator.aggregation.AggregationMetadata.AccumulatorStateDescriptor;
 import com.facebook.presto.operator.aggregation.state.KeyValuePairStateSerializer;
 import com.facebook.presto.operator.aggregation.state.KeyValuePairsState;
 import com.facebook.presto.operator.aggregation.state.KeyValuePairsStateFactory;
@@ -63,7 +64,7 @@ public class MapUnionAggregation
     }
 
     @Override
-    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type keyType = boundVariables.getTypeVariable("K");
         Type valueType = boundVariables.getTypeVariable("V");
@@ -86,13 +87,14 @@ public class MapUnionAggregation
                 INPUT_FUNCTION.bindTo(keyType).bindTo(valueType),
                 COMBINE_FUNCTION,
                 OUTPUT_FUNCTION,
-                KeyValuePairsState.class,
-                stateSerializer,
-                new KeyValuePairsStateFactory(keyType, valueType),
+                ImmutableList.of(new AccumulatorStateDescriptor(
+                        KeyValuePairsState.class,
+                        stateSerializer,
+                        new KeyValuePairsStateFactory(keyType, valueType))),
                 outputType);
 
         GenericAccumulatorFactoryBinder factory = AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader);
-        return new InternalAggregationFunction(NAME, inputTypes, intermediateType, outputType, true, false, factory);
+        return new InternalAggregationFunction(NAME, inputTypes, ImmutableList.of(intermediateType), outputType, true, false, factory);
     }
 
     private static List<ParameterMetadata> createInputParameterMetadata(Type inputType)

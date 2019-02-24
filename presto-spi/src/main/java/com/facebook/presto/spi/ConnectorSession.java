@@ -30,8 +30,6 @@ public interface ConnectorSession
         return getIdentity().getUser();
     }
 
-    String getPath();
-
     Identity getIdentity();
 
     TimeZoneKey getTimeZoneKey();
@@ -44,9 +42,6 @@ public interface ConnectorSession
 
     @Deprecated
     boolean isLegacyTimestamp();
-
-    @Deprecated
-    boolean isLegacyRoundNBigint();
 
     <T> T getProperty(String name, Class<T> type);
 }

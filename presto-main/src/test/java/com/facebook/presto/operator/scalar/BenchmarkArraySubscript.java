@@ -56,6 +56,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.block.BlockAssertions.createSlicesBlock;
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -80,7 +81,12 @@ public class BenchmarkArraySubscript
     @OperationsPerInvocation(POSITIONS)
     public List<Optional<Page>> arraySubscript(BenchmarkData data)
     {
-        return ImmutableList.copyOf(data.getPageProcessor().process(SESSION, new DriverYieldSignal(), data.getPage()));
+        return ImmutableList.copyOf(
+                data.getPageProcessor().process(
+                        SESSION,
+                        new DriverYieldSignal(),
+                        newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
+                        data.getPage()));
     }
 
     @SuppressWarnings("FieldMayBeFinal")
@@ -164,7 +170,7 @@ public class BenchmarkArraySubscript
             for (int i = 0; i < offsets.length; i++) {
                 offsets[i] = arraySize * i;
             }
-            return ArrayBlock.fromElementBlock(positionCount, new boolean[positionCount], offsets, elementsBlock);
+            return ArrayBlock.fromElementBlock(positionCount, Optional.empty(), offsets, elementsBlock);
         }
 
         private static Block createFixWidthValueBlock(int positionCount, int mapSize)

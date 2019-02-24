@@ -27,10 +27,13 @@ import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.Privilege;
+import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
+import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.facebook.presto.sql.tree.QualifiedName;
 import io.airlift.slice.Slice;
 
@@ -66,9 +69,25 @@ public interface Metadata
 
     Optional<SystemTable> getSystemTable(Session session, QualifiedObjectName tableName);
 
+    Optional<TableHandle> getTableHandleForStatisticsCollection(Session session, QualifiedObjectName tableName, Map<String, Object> analyzeProperties);
+
     List<TableLayoutResult> getLayouts(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns);
 
     TableLayout getLayout(Session session, TableLayoutHandle handle);
+
+    /**
+     * Return a table layout handle whose partitioning is converted to the provided partitioning handle,
+     * but otherwise identical to the provided table layout handle.
+     * The provided table layout handle must be one that the connector can transparently convert to from
+     * the original partitioning handle associated with the provided table layout handle,
+     * as promised by {@link #getCommonPartitioning}.
+     */
+    TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle);
+
+    /**
+     * Return a partitioning handle which the connector can transparently convert both {@code left} and {@code right} into.
+     */
+    Optional<PartitioningHandle> getCommonPartitioning(Session session, PartitioningHandle left, PartitioningHandle right);
 
     Optional<Object> getInfo(Session session, TableLayoutHandle handle);
 
@@ -167,9 +186,29 @@ public interface Metadata
     /**
      * Finish a table creation with data after the data is written.
      */
-    Optional<ConnectorOutputMetadata> finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments);
+    Optional<ConnectorOutputMetadata> finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics);
 
     Optional<NewTableLayout> getInsertLayout(Session session, TableHandle target);
+
+    /**
+     * Describes statistics that must be collected during a write.
+     */
+    TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(Session session, String catalogName, ConnectorTableMetadata tableMetadata);
+
+    /**
+     * Describe statistics that must be collected during a statistics collection
+     */
+    TableStatisticsMetadata getStatisticsCollectionMetadata(Session session, String catalogName, ConnectorTableMetadata tableMetadata);
+
+    /**
+     * Begin statistics collection
+     */
+    AnalyzeTableHandle beginStatisticsCollection(Session session, TableHandle tableHandle);
+
+    /**
+     * Finish statistics collection
+     */
+    void finishStatisticsCollection(Session session, AnalyzeTableHandle tableHandle, Collection<ComputedStatistics> computedStatistics);
 
     /**
      * Start a SELECT/UPDATE/INSERT/DELETE query
@@ -190,7 +229,7 @@ public interface Metadata
     /**
      * Finish insert query
      */
-    Optional<ConnectorOutputMetadata> finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments);
+    Optional<ConnectorOutputMetadata> finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics);
 
     /**
      * Get the row ID column handle used with UpdatablePageSource.
@@ -276,7 +315,7 @@ public interface Metadata
      */
     List<GrantInfo> listTablePrivileges(Session session, QualifiedTablePrefix prefix);
 
-    FunctionRegistry getFunctionRegistry();
+    FunctionManager getFunctionManager();
 
     ProcedureRegistry getProcedureRegistry();
 
@@ -289,4 +328,8 @@ public interface Metadata
     SchemaPropertyManager getSchemaPropertyManager();
 
     TablePropertyManager getTablePropertyManager();
+
+    ColumnPropertyManager getColumnPropertyManager();
+
+    AnalyzePropertyManager getAnalyzePropertyManager();
 }

@@ -13,22 +13,23 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.NodeTaskMap.PartitionedSplitCountTracker;
 import com.facebook.presto.execution.buffer.LazyOutputBuffer;
 import com.facebook.presto.execution.buffer.OutputBuffer;
-import com.facebook.presto.memory.DefaultQueryContext;
+import com.facebook.presto.execution.buffer.OutputBuffers;
 import com.facebook.presto.memory.MemoryPool;
+import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.memory.context.SimpleLocalMemoryContext;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.memory.MemoryPoolId;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spiller.SpillSpaceTracker;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
@@ -68,15 +69,15 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
-import static com.facebook.presto.OutputBuffers.BufferType.BROADCAST;
-import static com.facebook.presto.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.execution.StateMachine.StateChangeListener;
+import static com.facebook.presto.execution.buffer.OutputBuffers.BufferType.BROADCAST;
+import static com.facebook.presto.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
-import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
@@ -111,15 +112,14 @@ public class MockRemoteTaskFactory
                         sourceId,
                         new TableHandle(new ConnectorId("test"), new TestingTableHandle()),
                         ImmutableList.of(symbol),
-                        ImmutableMap.of(symbol, new TestingColumnHandle("column")),
-                        Optional.empty(),
-                        TupleDomain.all(),
-                        null),
+                        ImmutableMap.of(symbol, new TestingColumnHandle("column"))),
                 ImmutableMap.of(symbol, VARCHAR),
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(sourceId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
-                UNGROUPED_EXECUTION);
+                StageExecutionDescriptor.ungroupedExecution(),
+                StatsAndCosts.empty(),
+                Optional.empty());
 
         ImmutableMultimap.Builder<PlanNodeId, Split> initialSplits = ImmutableMultimap.builder();
         for (Split sourceSplit : splits) {
@@ -183,7 +183,7 @@ public class MockRemoteTaskFactory
 
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
             SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
-            DefaultQueryContext queryContext = new DefaultQueryContext(taskId.getQueryId(),
+            QueryContext queryContext = new QueryContext(taskId.getQueryId(),
                     new DataSize(1, MEGABYTE),
                     new DataSize(2, MEGABYTE),
                     memoryPool,
@@ -201,7 +201,7 @@ public class MockRemoteTaskFactory
                     TASK_INSTANCE_ID,
                     executor,
                     new DataSize(1, BYTE),
-                    () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext()));
+                    () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"));
 
             this.fragment = requireNonNull(fragment, "fragment is null");
             this.nodeId = requireNonNull(nodeId, "nodeId is null");
@@ -254,8 +254,7 @@ public class MockRemoteTaskFactory
                     outputBuffer.getInfo(),
                     ImmutableSet.of(),
                     taskContext.getTaskStats(),
-                    true,
-                    false);
+                    true);
         }
 
         @Override
@@ -373,6 +372,19 @@ public class MockRemoteTaskFactory
         public void addStateChangeListener(StateChangeListener<TaskStatus> stateChangeListener)
         {
             taskStateMachine.addStateChangeListener(newValue -> stateChangeListener.stateChanged(getTaskStatus()));
+        }
+
+        @Override
+        public void addFinalTaskInfoListener(StateChangeListener<TaskInfo> stateChangeListener)
+        {
+            AtomicBoolean done = new AtomicBoolean();
+            StateChangeListener<TaskState> fireOnceStateChangeListener = state -> {
+                if (state.isDone() && done.compareAndSet(false, true)) {
+                    stateChangeListener.stateChanged(getTaskInfo());
+                }
+            };
+            taskStateMachine.addStateChangeListener(fireOnceStateChangeListener);
+            fireOnceStateChangeListener.stateChanged(taskStateMachine.getState());
         }
 
         @Override

@@ -15,7 +15,6 @@ package com.facebook.presto.server;
 
 import com.facebook.presto.client.QueryError;
 import com.facebook.presto.client.QueryResults;
-import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.type.TimeZoneNotSupportedException;
@@ -139,7 +138,7 @@ public class TestServer
                 .setHeader(PRESTO_PATH, "path")
                 .setHeader(PRESTO_CLIENT_INFO, "{\"clientVersion\":\"testVersion\"}")
                 .addHeader(PRESTO_SESSION, QUERY_MAX_MEMORY + "=1GB")
-                .addHeader(PRESTO_SESSION, JOIN_DISTRIBUTION_TYPE + "=repartitioned," + HASH_PARTITION_COUNT + " = 43")
+                .addHeader(PRESTO_SESSION, JOIN_DISTRIBUTION_TYPE + "=partitioned," + HASH_PARTITION_COUNT + " = 43")
                 .addHeader(PRESTO_PREPARED_STATEMENT, "foo=select * from bar")
                 .build();
 
@@ -156,12 +155,12 @@ public class TestServer
         assertNull(queryResults.getError());
 
         // get the query info
-        QueryInfo queryInfo = server.getQueryManager().getQueryInfo(new QueryId(queryResults.getId()));
+        BasicQueryInfo queryInfo = server.getQueryManager().getQueryInfo(new QueryId(queryResults.getId()));
 
         // verify session properties
         assertEquals(queryInfo.getSession().getSystemProperties(), ImmutableMap.builder()
                 .put(QUERY_MAX_MEMORY, "1GB")
-                .put(JOIN_DISTRIBUTION_TYPE, "repartitioned")
+                .put(JOIN_DISTRIBUTION_TYPE, "partitioned")
                 .put(HASH_PARTITION_COUNT, "43")
                 .build());
 

@@ -36,6 +36,7 @@ import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.joda.time.DateTimeZone;
@@ -76,6 +77,7 @@ public class OrcWriter
         implements Closeable
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(OrcWriter.class).instanceSize();
+    private static final Logger log = Logger.get(OrcWriter.class);
 
     static final String PRESTO_ORC_WRITER_VERSION_METADATA_KEY = "presto.writer.version";
     static final String PRESTO_ORC_WRITER_VERSION;
@@ -92,6 +94,7 @@ public class OrcWriter
     private final CompressionKind compression;
     private final int stripeMinBytes;
     private final int stripeMaxBytes;
+    private final int chunkMaxLogicalBytes;
     private final int stripeMaxRowCount;
     private final int rowGroupMaxRowCount;
     private final int maxCompressionBufferSize;
@@ -140,6 +143,7 @@ public class OrcWriter
         checkArgument(options.getStripeMaxSize().compareTo(options.getStripeMinSize()) >= 0, "stripeMaxSize must be greater than stripeMinSize");
         this.stripeMinBytes = toIntExact(requireNonNull(options.getStripeMinSize(), "stripeMinSize is null").toBytes());
         this.stripeMaxBytes = toIntExact(requireNonNull(options.getStripeMaxSize(), "stripeMaxSize is null").toBytes());
+        this.chunkMaxLogicalBytes = Math.max(1, stripeMaxBytes / 2);
         this.stripeMaxRowCount = options.getStripeMaxRowCount();
         this.rowGroupMaxRowCount = options.getRowGroupMaxRowCount();
         recordValidation(validation -> validation.setRowGroupMaxRowCount(rowGroupMaxRowCount));
@@ -236,16 +240,22 @@ public class OrcWriter
 
         while (page != null) {
             // align page to row group boundaries
-            Page chunk;
-            if (rowGroupRowCount + page.getPositionCount() > rowGroupMaxRowCount || stripeRowCount + page.getPositionCount() > stripeMaxRowCount) {
-                int chunkRows = min(rowGroupMaxRowCount - rowGroupRowCount, stripeMaxRowCount - stripeRowCount);
-                chunk = page.getRegion(0, chunkRows);
+            int chunkRows = min(page.getPositionCount(), min(rowGroupMaxRowCount - rowGroupRowCount, stripeMaxRowCount - stripeRowCount));
+            Page chunk = page.getRegion(0, chunkRows);
+
+            // avoid chunk with huge logical size
+            while (chunkRows > 1 && chunk.getLogicalSizeInBytes() > chunkMaxLogicalBytes) {
+                chunkRows /= 2;
+                chunk = chunk.getRegion(0, chunkRows);
+            }
+
+            if (chunkRows < page.getPositionCount()) {
                 page = page.getRegion(chunkRows, page.getPositionCount() - chunkRows);
             }
             else {
-                chunk = page;
                 page = null;
             }
+
             writeChunk(chunk);
         }
 
@@ -352,7 +362,7 @@ public class OrcWriter
         }
 
         // convert any dictionary encoded column with a low compression ratio to direct
-        dictionaryCompressionOptimizer.finalOptimize();
+        dictionaryCompressionOptimizer.finalOptimize(bufferedBytes);
 
         columnWriters.forEach(ColumnWriter::close);
 
@@ -413,6 +423,7 @@ public class OrcWriter
         closedStripesRetainedBytes += closedStripe.getRetainedSizeInBytes();
         recordValidation(validation -> validation.addStripe(stripeInformation.getNumberOfRows()));
         stats.recordStripeWritten(flushReason, stripeInformation.getTotalLength(), stripeInformation.getNumberOfRows(), dictionaryCompressionOptimizer.getDictionaryMemoryBytes());
+
         return outputData;
     }
 

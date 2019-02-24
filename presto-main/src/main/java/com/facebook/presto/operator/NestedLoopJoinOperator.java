@@ -41,14 +41,15 @@ public class NestedLoopJoinOperator
     {
         private final int operatorId;
         private final PlanNodeId planNodeId;
-        private final JoinBridgeLifecycleManager<NestedLoopJoinPagesBridge> joinBridgeManager;
+        private final JoinBridgeManager<NestedLoopJoinBridge> joinBridgeManager;
         private boolean closed;
 
-        public NestedLoopJoinOperatorFactory(int operatorId, PlanNodeId planNodeId, JoinBridgeDataManager<NestedLoopJoinPagesBridge> nestedLoopJoinPagesSupplierManager)
+        public NestedLoopJoinOperatorFactory(int operatorId, PlanNodeId planNodeId, JoinBridgeManager<NestedLoopJoinBridge> nestedLoopJoinBridgeManager)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
-            this.joinBridgeManager = JoinBridgeLifecycleManager.nestedLoop(LookupJoinOperators.JoinType.INNER, nestedLoopJoinPagesSupplierManager);
+            this.joinBridgeManager = nestedLoopJoinBridgeManager;
+            this.joinBridgeManager.incrementProbeFactoryCount();
         }
 
         private NestedLoopJoinOperatorFactory(NestedLoopJoinOperatorFactory other)
@@ -57,28 +58,27 @@ public class NestedLoopJoinOperator
             this.operatorId = other.operatorId;
             this.planNodeId = other.planNodeId;
 
-            // joinBridgeManager must be duplicated here.
-            // Otherwise, reference counting and lifecycle management will be wrong.
-            this.joinBridgeManager = other.joinBridgeManager.duplicate();
+            this.joinBridgeManager = other.joinBridgeManager;
 
             // closed is intentionally not copied
             closed = false;
+
+            joinBridgeManager.incrementProbeFactoryCount();
         }
 
         @Override
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            NestedLoopJoinPagesBridge nestedLoopJoinPagesBridge = joinBridgeManager.getJoinBridge(driverContext.getLifespan());
-            ReferenceCount probeReferenceCount = joinBridgeManager.getProbeReferenceCount(driverContext.getLifespan());
+            NestedLoopJoinBridge nestedLoopJoinBridge = joinBridgeManager.getJoinBridge(driverContext.getLifespan());
 
             OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NestedLoopJoinOperator.class.getSimpleName());
 
-            probeReferenceCount.retain();
+            joinBridgeManager.probeOperatorCreated(driverContext.getLifespan());
             return new NestedLoopJoinOperator(
                     operatorContext,
-                    nestedLoopJoinPagesBridge,
-                    probeReferenceCount::release);
+                    nestedLoopJoinBridge,
+                    () -> joinBridgeManager.probeOperatorClosed(driverContext.getLifespan()));
         }
 
         @Override
@@ -88,13 +88,13 @@ public class NestedLoopJoinOperator
                 return;
             }
             closed = true;
-            joinBridgeManager.noMoreLifespan();
+            joinBridgeManager.probeOperatorFactoryClosedForAllLifespans();
         }
 
         @Override
         public void noMoreOperators(Lifespan lifespan)
         {
-            joinBridgeManager.getProbeReferenceCount(lifespan).release();
+            joinBridgeManager.probeOperatorFactoryClosed(lifespan);
         }
 
         @Override
@@ -116,10 +116,10 @@ public class NestedLoopJoinOperator
     private boolean finishing;
     private boolean closed;
 
-    public NestedLoopJoinOperator(OperatorContext operatorContext, NestedLoopJoinPagesBridge buildPagesSupplier, Runnable afterClose)
+    private NestedLoopJoinOperator(OperatorContext operatorContext, NestedLoopJoinBridge joinBridge, Runnable afterClose)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
-        this.nestedLoopJoinPagesFuture = buildPagesSupplier.getPagesFuture();
+        this.nestedLoopJoinPagesFuture = joinBridge.getPagesFuture();
         this.afterClose = requireNonNull(afterClose, "afterClose is null");
     }
 

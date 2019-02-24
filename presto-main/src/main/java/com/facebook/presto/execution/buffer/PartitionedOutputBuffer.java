@@ -13,10 +13,9 @@
  */
 package com.facebook.presto.execution.buffer;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.StateMachine;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -28,13 +27,13 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
-import static com.facebook.presto.OutputBuffers.BufferType.PARTITIONED;
 import static com.facebook.presto.execution.buffer.BufferState.FAILED;
 import static com.facebook.presto.execution.buffer.BufferState.FINISHED;
 import static com.facebook.presto.execution.buffer.BufferState.FLUSHING;
 import static com.facebook.presto.execution.buffer.BufferState.NO_MORE_BUFFERS;
 import static com.facebook.presto.execution.buffer.BufferState.NO_MORE_PAGES;
 import static com.facebook.presto.execution.buffer.BufferState.OPEN;
+import static com.facebook.presto.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -246,6 +245,7 @@ public class PartitionedOutputBuffer
         if (state.setIf(FINISHED, oldState -> !oldState.isTerminal())) {
             partitions.forEach(ClientBuffer::destroy);
             memoryManager.setNoBlockOnFull();
+            forceFreeMemory();
         }
     }
 
@@ -255,6 +255,7 @@ public class PartitionedOutputBuffer
         // ignore fail if the buffer already in a terminal state.
         if (state.setIf(FAILED, oldState -> !oldState.isTerminal())) {
             memoryManager.setNoBlockOnFull();
+            forceFreeMemory();
             // DO NOT destroy buffers or set no more pages.  The coordinator manages the teardown of failed queries.
         }
     }
@@ -265,8 +266,8 @@ public class PartitionedOutputBuffer
         return memoryManager.getPeakMemoryUsage();
     }
 
-    @Override
-    public void forceFreeMemory()
+    @VisibleForTesting
+    void forceFreeMemory()
     {
         memoryManager.close();
     }

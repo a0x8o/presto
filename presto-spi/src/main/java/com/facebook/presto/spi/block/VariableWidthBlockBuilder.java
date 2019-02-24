@@ -29,6 +29,7 @@ import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetBytes;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidPosition;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
 import static com.facebook.presto.spi.block.BlockUtil.compactOffsets;
@@ -117,6 +118,21 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        checkValidPositions(positions, getPositionCount());
+        long sizeInBytes = 0;
+        int usedPositionCount = 0;
+        for (int i = 0; i < positions.length; ++i) {
+            if (positions[i]) {
+                usedPositionCount++;
+                sizeInBytes += getOffset(i + 1) - getOffset(i);
+            }
+        }
+        return sizeInBytes + (Integer.BYTES + Byte.BYTES) * (long) usedPositionCount;
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         long size = INSTANCE_SIZE + sliceOutput.getRetainedSize() + arraysRetainedSizeInBytes;
@@ -157,7 +173,7 @@ public class VariableWidthBlockBuilder
                 newValueIsNull[i] = true;
             }
             else {
-                newSlice.appendBytes(sliceOutput.getUnderlyingSlice().getBytes(getPositionOffset(position), getSliceLength(position)));
+                newSlice.writeBytes(sliceOutput.getUnderlyingSlice(), getPositionOffset(position), getSliceLength(position));
             }
             newOffsets[i + 1] = newSlice.size();
         }

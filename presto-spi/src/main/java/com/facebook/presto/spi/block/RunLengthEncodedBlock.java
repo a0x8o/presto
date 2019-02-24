@@ -82,9 +82,21 @@ public class RunLengthEncodedBlock
     }
 
     @Override
+    public long getLogicalSizeInBytes()
+    {
+        return positionCount * value.getLogicalSizeInBytes();
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         return INSTANCE_SIZE + value.getRetainedSizeInBytes();
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return value.getEstimatedDataSizeForStats(0);
     }
 
     @Override
@@ -129,6 +141,12 @@ public class RunLengthEncodedBlock
 
     @Override
     public long getRegionSizeInBytes(int position, int length)
+    {
+        return value.getSizeInBytes();
+    }
+
+    @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
     {
         return value.getSizeInBytes();
     }

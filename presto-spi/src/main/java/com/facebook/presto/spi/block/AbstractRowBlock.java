@@ -15,6 +15,7 @@ package com.facebook.presto.spi.block;
 
 import static com.facebook.presto.spi.block.BlockUtil.arraySame;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
 import static com.facebook.presto.spi.block.BlockUtil.compactOffsets;
@@ -108,6 +109,30 @@ public abstract class AbstractRowBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        checkValidPositions(positions, getPositionCount());
+
+        int usedPositionCount = 0;
+        boolean[] fieldPositions = new boolean[getRawFieldBlocks()[0].getPositionCount()];
+        for (int i = 0; i < positions.length; i++) {
+            if (positions[i]) {
+                usedPositionCount++;
+                int startFieldBlockOffset = getFieldBlockOffset(i);
+                int endFieldBlockOffset = getFieldBlockOffset(i + 1);
+                for (int j = startFieldBlockOffset; j < endFieldBlockOffset; j++) {
+                    fieldPositions[j] = true;
+                }
+            }
+        }
+        long sizeInBytes = 0;
+        for (int j = 0; j < numFields; j++) {
+            sizeInBytes += getRawFieldBlocks()[j].getPositionsSizeInBytes(fieldPositions);
+        }
+        return sizeInBytes + (Integer.BYTES + Byte.BYTES) * (long) usedPositionCount;
+    }
+
+    @Override
     public Block copyRegion(int position, int length)
     {
         int positionCount = getPositionCount();
@@ -122,9 +147,10 @@ public abstract class AbstractRowBlock
         }
 
         int[] newOffsets = compactOffsets(getFieldBlockOffsets(), position + getOffsetBase(), length);
-        boolean[] newRowIsNull = compactArray(getRowIsNull(), position + getOffsetBase(), length);
+        boolean[] rowIsNull = getRowIsNull();
+        boolean[] newRowIsNull = rowIsNull == null ? null : compactArray(rowIsNull, position + getOffsetBase(), length);
 
-        if (arraySame(newBlocks, getRawFieldBlocks()) && newOffsets == getFieldBlockOffsets() && newRowIsNull == getRowIsNull()) {
+        if (arraySame(newBlocks, getRawFieldBlocks()) && newOffsets == getFieldBlockOffsets() && newRowIsNull == rowIsNull) {
             return this;
         }
         return createRowBlockInternal(0, length, newRowIsNull, newOffsets, newBlocks);
@@ -167,10 +193,28 @@ public abstract class AbstractRowBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        checkReadablePosition(position);
+
+        if (isNull(position)) {
+            return 0;
+        }
+
+        Block[] rawFieldBlocks = getRawFieldBlocks();
+        long size = 0;
+        for (int i = 0; i < numFields; i++) {
+            size += rawFieldBlocks[i].getEstimatedDataSizeForStats(getFieldBlockOffset(position));
+        }
+        return size;
+    }
+
+    @Override
     public boolean isNull(int position)
     {
         checkReadablePosition(position);
-        return getRowIsNull()[position + getOffsetBase()];
+        boolean[] rowIsNull = getRowIsNull();
+        return rowIsNull != null && rowIsNull[position + getOffsetBase()];
     }
 
     private void checkReadablePosition(int position)

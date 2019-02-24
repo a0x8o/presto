@@ -15,6 +15,7 @@ package com.facebook.presto.type;
 
 import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
@@ -62,6 +63,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.createExpression;
@@ -535,7 +537,12 @@ public class BenchmarkDecimalOperators
 
     private Object execute(BaseState state)
     {
-        return ImmutableList.copyOf(state.getProcessor().process(SESSION, new DriverYieldSignal(), state.getInputPage()));
+        return ImmutableList.copyOf(
+                state.getProcessor().process(
+                        SESSION,
+                        new DriverYieldSignal(),
+                        newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
+                        state.getInputPage()));
     }
 
     private static class BaseState
@@ -611,8 +618,8 @@ public class BenchmarkDecimalOperators
             Map<Integer, Type> types = sourceLayout.entrySet().stream()
                     .collect(toMap(Map.Entry::getValue, entry -> symbolTypes.get(entry.getKey())));
 
-            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList());
-            return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), TEST_SESSION, true);
+            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList(), WarningCollector.NOOP);
+            return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, metadata.getFunctionManager(), metadata.getTypeManager(), TEST_SESSION, true);
         }
 
         private Object generateRandomValue(Type type)

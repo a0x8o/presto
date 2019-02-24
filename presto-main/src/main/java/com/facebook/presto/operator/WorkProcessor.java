@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator;
 
+import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import javax.annotation.concurrent.Immutable;
@@ -20,14 +21,9 @@ import javax.annotation.concurrent.Immutable;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
-import static com.facebook.presto.operator.WorkProcessor.ProcessorState.Type.BLOCKED;
-import static com.facebook.presto.operator.WorkProcessor.ProcessorState.Type.FINISHED;
-import static com.facebook.presto.operator.WorkProcessor.ProcessorState.Type.NEEDS_MORE_DATA;
-import static com.facebook.presto.operator.WorkProcessor.ProcessorState.Type.RESULT;
-import static com.facebook.presto.operator.WorkProcessor.ProcessorState.Type.YIELD;
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 public interface WorkProcessor<T>
@@ -58,6 +54,16 @@ public interface WorkProcessor<T>
      */
     T getResult();
 
+    /**
+     * Makes {@link WorkProcessor} yield when given {@code yieldSignal} is set. The processor is
+     * guaranteed to progress computations on subsequent {@link WorkProcessor#process()} calls
+     * even if {@code yieldSignal} is permanently on.
+     */
+    default WorkProcessor<T> yielding(BooleanSupplier yieldSignal)
+    {
+        return WorkProcessorUtils.yielding(this, yieldSignal);
+    }
+
     default <R> WorkProcessor<R> flatMap(Function<T, WorkProcessor<R>> mapper)
     {
         return WorkProcessorUtils.flatMap(this, mapper);
@@ -77,14 +83,23 @@ public interface WorkProcessor<T>
         return WorkProcessorUtils.flatTransform(this, transformation);
     }
 
+    /**
+     * Transforms {@link WorkProcessor} using {@link Transformation}. {@link Transformation} instance will be dereferenced immediately after
+     * {@link WorkProcessor} is exhausted.
+     */
     default <R> WorkProcessor<R> transform(Transformation<T, R> transformation)
     {
         return WorkProcessorUtils.transform(this, transformation);
     }
 
+    default <R> WorkProcessor<R> transformProcessor(Function<WorkProcessor<T>, WorkProcessor<R>> transformation)
+    {
+        return transformation.apply(this);
+    }
+
     /**
      * Converts {@link WorkProcessor} into an {@link Iterator}. The iterator will throw {@link IllegalStateException} when underlying {@link WorkProcessor}
-     * yields or becomes blocked.
+     * yields or becomes blocked. {@link WorkProcessor} instance will be dereferenced immediately after iterator is finished.
      */
     default Iterator<T> iterator()
     {
@@ -93,11 +108,22 @@ public interface WorkProcessor<T>
 
     /**
      * Converts {@link WorkProcessor} into an yielding {@link Iterator}. The iterator will throw {@link IllegalStateException} when underlying {@link WorkProcessor}
-     * becomes blocked.
+     * becomes blocked. {@link WorkProcessor} instance will be dereferenced immediately after iterator is exhausted.
      */
     default Iterator<Optional<T>> yieldingIterator()
     {
         return WorkProcessorUtils.yieldingIteratorFrom(this);
+    }
+
+    static <T> WorkProcessor<T> flatten(WorkProcessor<WorkProcessor<T>> processor)
+    {
+        return WorkProcessorUtils.flatten(processor);
+    }
+
+    @SafeVarargs
+    static <T> WorkProcessor<T> of(T... elements)
+    {
+        return fromIterator(Iterators.forArray(elements));
     }
 
     static <T> WorkProcessor<T> fromIterable(Iterable<T> iterable)
@@ -110,6 +136,9 @@ public interface WorkProcessor<T>
         return WorkProcessorUtils.fromIterator(iterator);
     }
 
+    /**
+     * Creates {@link WorkProcessor} from {@link Process}. {@link Process} instance will be dereferenced immediately after {@link WorkProcessor} is finished.
+     */
     static <T> WorkProcessor<T> create(Process<T> process)
     {
         return WorkProcessorUtils.create(process);
@@ -122,20 +151,43 @@ public interface WorkProcessor<T>
 
     interface Transformation<T, R>
     {
-        ProcessorState<R> process(Optional<T> elementOptional);
+        /**
+         * Processes input elements and returns current transformation state.
+         *
+         * @param elementOptional an element to be transformed. Will be empty
+         * when there are no more elements. In such case transformation should
+         * finish processing and flush any remaining data.
+         * @return the current transformation state, optionally bearing a result
+         * @see TransformationState#needsMoreData()
+         * @see TransformationState#blocked(ListenableFuture)
+         * @see TransformationState#yield()
+         * @see TransformationState#ofResult(Object)
+         * @see TransformationState#ofResult(Object, boolean)
+         * @see TransformationState#finished()
+         */
+        TransformationState<R> process(Optional<T> elementOptional);
     }
 
     interface Process<T>
     {
-        ProcessorState<T> process();
+        /**
+         * Does some work and returns current state.
+         *
+         * @return the current state, optionally bearing a result
+         * @see ProcessState#blocked(ListenableFuture)
+         * @see ProcessState#yield()
+         * @see ProcessState#ofResult(Object)
+         * @see ProcessState#finished()
+         */
+        ProcessState<T> process();
     }
 
     @Immutable
-    final class ProcessorState<T>
+    final class TransformationState<T>
     {
-        private static final ProcessorState NEEDS_MORE_DATE_STATE = new ProcessorState<>(NEEDS_MORE_DATA, true, Optional.empty(), Optional.empty());
-        private static final ProcessorState YIELD_STATE = new ProcessorState<>(YIELD, false, Optional.empty(), Optional.empty());
-        private static final ProcessorState FINISHED_STATE = new ProcessorState<>(FINISHED, false, Optional.empty(), Optional.empty());
+        private static final TransformationState<?> NEEDS_MORE_DATE_STATE = new TransformationState<>(Type.NEEDS_MORE_DATA, true, Optional.empty(), Optional.empty());
+        private static final TransformationState<?> YIELD_STATE = new TransformationState<>(Type.YIELD, false, Optional.empty(), Optional.empty());
+        private static final TransformationState<?> FINISHED_STATE = new TransformationState<>(Type.FINISHED, false, Optional.empty(), Optional.empty());
 
         enum Type
         {
@@ -146,51 +198,74 @@ public interface WorkProcessor<T>
             FINISHED
         }
 
-        private final ProcessorState.Type type;
+        private final Type type;
         private final boolean needsMoreData;
         private final Optional<T> result;
         private final Optional<ListenableFuture<?>> blocked;
 
-        ProcessorState(Type type, boolean needsMoreData, Optional<T> result, Optional<ListenableFuture<?>> blocked)
+        private TransformationState(Type type, boolean needsMoreData, Optional<T> result, Optional<ListenableFuture<?>> blocked)
         {
             this.type = requireNonNull(type, "type is null");
             this.needsMoreData = needsMoreData;
             this.result = requireNonNull(result, "result is null");
             this.blocked = requireNonNull(blocked, "blocked is null");
-
-            checkArgument(!needsMoreData || type == NEEDS_MORE_DATA || type == RESULT);
-            checkArgument(!blocked.isPresent() || type == BLOCKED);
-            checkArgument(!result.isPresent() || type == RESULT);
         }
 
-        public static <T> ProcessorState<T> needsMoreData()
+        /**
+         * Signals that transformation requires more data in order to continue and no result has been produced.
+         * {@link #process()} will be called with a new input element or with {@link Optional#empty()} if there
+         * are no more elements.
+         */
+        @SuppressWarnings("unchecked")
+        public static <T> TransformationState<T> needsMoreData()
         {
-            return NEEDS_MORE_DATE_STATE;
+            return (TransformationState<T>) NEEDS_MORE_DATE_STATE;
         }
 
-        public static <T> ProcessorState<T> blocked(ListenableFuture<?> blocked)
+        /**
+         * Signals that transformation is blocked. {@link #process()} will be called again with the same input
+         * element after {@code blocked} future is done.
+         */
+        public static <T> TransformationState<T> blocked(ListenableFuture<?> blocked)
         {
-            return new ProcessorState<>(Type.BLOCKED, false, Optional.empty(), Optional.of(blocked));
+            return new TransformationState<>(Type.BLOCKED, false, Optional.empty(), Optional.of(blocked));
         }
 
-        public static <T> ProcessorState<T> yield()
+        /**
+         * Signals that transformation has yielded. {@link #process()} will be called again with the same input element.
+         */
+        @SuppressWarnings("unchecked")
+        public static <T> TransformationState<T> yield()
         {
-            return YIELD_STATE;
+            return (TransformationState<T>) YIELD_STATE;
         }
 
-        public static <T> ProcessorState<T> ofResult(T result)
+        /**
+         * Signals that transformation has produced a result from its input. {@link #process()} will be called again with
+         * a new element or with {@link Optional#empty()} if there are no more elements.
+         */
+        public static <T> TransformationState<T> ofResult(T result)
         {
             return ofResult(result, true);
         }
 
-        public static <T> ProcessorState<T> ofResult(T result, boolean needsMoreData)
+        /**
+         * Signals that transformation has produced a result. If {@code needsMoreData}, {@link #process()} will be called again
+         * with a new element (or with {@link Optional#empty()} if there are no more elements). If not @{code needsMoreData},
+         * {@link #process()} will be called again with the same element.
+         */
+        public static <T> TransformationState<T> ofResult(T result, boolean needsMoreData)
         {
-            return new ProcessorState<>(Type.RESULT, needsMoreData, Optional.of(result), Optional.empty());
+            return new TransformationState<>(Type.RESULT, needsMoreData, Optional.of(result), Optional.empty());
         }
 
-        public static <T> ProcessorState<T> finished()
+        /**
+         * Signals that transformation has finished. {@link #process()} method will not be called again.
+         */
+        @SuppressWarnings("unchecked")
+        public static <T> TransformationState<T> finished()
         {
-            return FINISHED_STATE;
+            return (TransformationState<T>) FINISHED_STATE;
         }
 
         Type getType()
@@ -201,6 +276,81 @@ public interface WorkProcessor<T>
         boolean isNeedsMoreData()
         {
             return needsMoreData;
+        }
+
+        Optional<T> getResult()
+        {
+            return result;
+        }
+
+        Optional<ListenableFuture<?>> getBlocked()
+        {
+            return blocked;
+        }
+    }
+
+    @Immutable
+    final class ProcessState<T>
+    {
+        private static final ProcessState<?> YIELD_STATE = new ProcessState<>(Type.YIELD, Optional.empty(), Optional.empty());
+        private static final ProcessState<?> FINISHED_STATE = new ProcessState<>(Type.FINISHED, Optional.empty(), Optional.empty());
+
+        enum Type
+        {
+            BLOCKED,
+            YIELD,
+            RESULT,
+            FINISHED
+        }
+
+        private final Type type;
+        private final Optional<T> result;
+        private final Optional<ListenableFuture<?>> blocked;
+
+        private ProcessState(Type type, Optional<T> result, Optional<ListenableFuture<?>> blocked)
+        {
+            this.type = requireNonNull(type, "type is null");
+            this.result = requireNonNull(result, "result is null");
+            this.blocked = requireNonNull(blocked, "blocked is null");
+        }
+
+        /**
+         * Signals that process is blocked. {@link #process()} will be called again after {@code blocked} future is done.
+         */
+        public static <T> ProcessState<T> blocked(ListenableFuture<?> blocked)
+        {
+            return new ProcessState<>(Type.BLOCKED, Optional.empty(), Optional.of(blocked));
+        }
+
+        /**
+         * Signals that process has yielded. {@link #process()} will be called again later.
+         */
+        @SuppressWarnings("unchecked")
+        public static <T> ProcessState<T> yield()
+        {
+            return (ProcessState<T>) YIELD_STATE;
+        }
+
+        /**
+         * Signals that process has produced a result. {@link #process()} will be called again.
+         */
+        public static <T> ProcessState<T> ofResult(T result)
+        {
+            return new ProcessState<>(Type.RESULT, Optional.of(result), Optional.empty());
+        }
+
+        /**
+         * Signals that process has finished. {@link #process()} method will not be called again.
+         */
+        @SuppressWarnings("unchecked")
+        public static <T> ProcessState<T> finished()
+        {
+            return (ProcessState<T>) FINISHED_STATE;
+        }
+
+        Type getType()
+        {
+            return type;
         }
 
         Optional<T> getResult()

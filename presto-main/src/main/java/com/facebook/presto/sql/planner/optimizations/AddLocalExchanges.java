@@ -14,7 +14,9 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.ConstantProperty;
 import com.facebook.presto.spi.GroupingProperty;
 import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SortingProperty;
@@ -43,6 +45,8 @@ import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
+import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -100,7 +104,7 @@ public class AddLocalExchanges
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         PlanWithProperties result = plan.accept(new Rewriter(symbolAllocator, idAllocator, session), any());
         return result.getNode();
@@ -189,6 +193,14 @@ public class AddLocalExchanges
         }
 
         @Override
+        public PlanWithProperties visitStatisticsWriterNode(StatisticsWriterNode node, StreamPreferredProperties context)
+        {
+            // analyze finish requires that all data be in one stream
+            // this node changes the input organization completely, so we do not pass through parent preferences
+            return planAndEnforceChildren(node, singleStream(), defaultParallelism(session));
+        }
+
+        @Override
         public PlanWithProperties visitTableFinish(TableFinishNode node, StreamPreferredProperties parentPreferences)
         {
             // table commit requires that all data be in one stream
@@ -266,13 +278,13 @@ public class AddLocalExchanges
         {
             checkState(node.getStep() == AggregationNode.Step.SINGLE, "step of aggregation is expected to be SINGLE, but it is %s", node.getStep());
 
-            if (node.hasSingleNodeExecutionPreference(metadata.getFunctionRegistry())) {
+            if (node.hasSingleNodeExecutionPreference(metadata.getFunctionManager())) {
                 return planAndEnforceChildren(node, singleStream(), defaultParallelism(session));
             }
 
             List<Symbol> groupingKeys = node.getGroupingKeys();
             if (node.hasDefaultOutput()) {
-                checkState(node.isDecomposable(metadata.getFunctionRegistry()));
+                checkState(node.isDecomposable(metadata.getFunctionManager()));
 
                 // Put fixed local exchange directly below final aggregation to ensure that final and partial aggregations are separated by exchange (in a local runner mode)
                 // This is required so that default outputs from multiple instances of partial aggregations are passed to a single final aggregation.
@@ -366,8 +378,73 @@ public class AddLocalExchanges
         public PlanWithProperties visitMarkDistinct(MarkDistinctNode node, StreamPreferredProperties parentPreferences)
         {
             // mark distinct requires that all data partitioned
-            StreamPreferredProperties requiredProperties = parentPreferences.withDefaultParallelism(session).withPartitioning(node.getDistinctSymbols());
-            return planAndEnforceChildren(node, requiredProperties, requiredProperties);
+            StreamPreferredProperties childRequirements = parentPreferences
+                    .constrainTo(node.getSource().getOutputSymbols())
+                    .withDefaultParallelism(session)
+                    .withPartitioning(node.getDistinctSymbols());
+
+            PlanWithProperties child = planAndEnforce(node.getSource(), childRequirements, childRequirements);
+
+            MarkDistinctNode result = new MarkDistinctNode(
+                    node.getId(),
+                    child.getNode(),
+                    node.getMarkerSymbol(),
+                    pruneMarkDistinctSymbols(node, child.getProperties().getLocalProperties()),
+                    node.getHashSymbol());
+
+            return deriveProperties(result, child.getProperties());
+        }
+
+        /**
+         * Prune redundant distinct symbols to reduce CPU cost of hashing corresponding values and amount of memory
+         * needed to store all the distinct values.
+         * <p>
+         * Consider the following plan,
+         * <pre>
+         *  - MarkDistinctNode (unique, c1, c2)
+         *      - Join
+         *          - AssignUniqueId (unique)
+         *              - probe (c1, c2)
+         *          - build
+         * </pre>
+         * In this case MarkDistinctNode (unique, c1, c2) is equivalent to MarkDistinctNode (unique),
+         * because if two rows match on `unique`, they must match on `c1` and `c2` as well.
+         * <p>
+         * More generally, any distinct symbol that is functionally dependent on a subset of
+         * other distinct symbols can be dropped.
+         * <p>
+         * Ideally, this logic would be encapsulated in a separate rule, but currently no rule other
+         * than AddLocalExchanges can reason about local properties.
+         */
+        private List<Symbol> pruneMarkDistinctSymbols(MarkDistinctNode node, List<LocalProperty<Symbol>> localProperties)
+        {
+            if (localProperties.isEmpty()) {
+                return node.getDistinctSymbols();
+            }
+
+            // Identify functional dependencies between distinct symbols: in the list of local properties any constant
+            // symbol is functionally dependent on the set of symbols that appears earlier.
+            ImmutableSet.Builder<Symbol> redundantSymbolsBuilder = ImmutableSet.builder();
+            for (LocalProperty<Symbol> property : localProperties) {
+                if (property instanceof ConstantProperty) {
+                    redundantSymbolsBuilder.add(((ConstantProperty<Symbol>) property).getColumn());
+                }
+                else if (!node.getDistinctSymbols().containsAll(property.getColumns())) {
+                    // Ran into a non-distinct symbol. There will be no more symbols that are functionally dependent on distinct symbols exclusively.
+                    break;
+                }
+            }
+
+            Set<Symbol> redundantSymbols = redundantSymbolsBuilder.build();
+            List<Symbol> remainingSymbols = node.getDistinctSymbols().stream()
+                    .filter(symbol -> !redundantSymbols.contains(symbol))
+                    .collect(toImmutableList());
+            if (remainingSymbols.isEmpty()) {
+                // This happens when all distinct symbols are constants.
+                // In that case, keep the first symbol (don't drop them all).
+                return ImmutableList.of(node.getDistinctSymbols().get(0));
+            }
+            return remainingSymbols;
         }
 
         @Override
@@ -539,6 +616,20 @@ public class AddLocalExchanges
             PlanWithProperties filteringSource = planAndEnforce(node.getFilteringSource(), singleStream(), singleStream());
 
             return rebaseAndDeriveProperties(node, ImmutableList.of(source, filteringSource));
+        }
+
+        @Override
+        public PlanWithProperties visitSpatialJoin(SpatialJoinNode node, StreamPreferredProperties parentPreferences)
+        {
+            PlanWithProperties probe = planAndEnforce(
+                    node.getLeft(),
+                    defaultParallelism(session),
+                    parentPreferences.constrainTo(node.getLeft().getOutputSymbols())
+                            .withDefaultParallelism(session));
+
+            PlanWithProperties build = planAndEnforce(node.getRight(), singleStream(), singleStream());
+
+            return rebaseAndDeriveProperties(node, ImmutableList.of(probe, build));
         }
 
         @Override

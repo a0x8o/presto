@@ -15,9 +15,13 @@ package com.facebook.presto.type;
 
 import com.facebook.presto.operator.scalar.MathFunctions;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.function.BlockIndex;
+import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.IsNull;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarOperator;
+import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.AbstractIntType;
 import com.facebook.presto.spi.type.StandardTypes;
@@ -47,6 +51,7 @@ import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.SATURATED_FLOOR_CAST;
 import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
 import static com.facebook.presto.spi.function.OperatorType.XX_HASH_64;
+import static com.facebook.presto.spi.type.RealType.REAL;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Float.floatToIntBits;
 import static java.lang.Float.floatToRawIntBits;
@@ -113,14 +118,16 @@ public final class RealOperators
 
     @ScalarOperator(EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean equal(@SqlType(StandardTypes.REAL) long left, @SqlType(StandardTypes.REAL) long right)
+    @SqlNullable
+    public static Boolean equal(@SqlType(StandardTypes.REAL) long left, @SqlType(StandardTypes.REAL) long right)
     {
         return intBitsToFloat((int) left) == intBitsToFloat((int) right);
     }
 
     @ScalarOperator(NOT_EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean notEqual(@SqlType(StandardTypes.REAL) long left, @SqlType(StandardTypes.REAL) long right)
+    @SqlNullable
+    public static Boolean notEqual(@SqlType(StandardTypes.REAL) long left, @SqlType(StandardTypes.REAL) long right)
     {
         return intBitsToFloat((int) left) != intBitsToFloat((int) right);
     }
@@ -241,25 +248,44 @@ public final class RealOperators
     }
 
     @ScalarOperator(IS_DISTINCT_FROM)
-    @SqlType(StandardTypes.BOOLEAN)
-    public static boolean isDistinctFrom(
-            @SqlType(StandardTypes.REAL) long left,
-            @IsNull boolean leftNull,
-            @SqlType(StandardTypes.REAL) long right,
-            @IsNull boolean rightNull)
+    public static class RealDistinctFromOperator
     {
-        if (leftNull != rightNull) {
-            return true;
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @SqlType(StandardTypes.REAL) long left,
+                @IsNull boolean leftNull,
+                @SqlType(StandardTypes.REAL) long right,
+                @IsNull boolean rightNull)
+        {
+            if (leftNull != rightNull) {
+                return true;
+            }
+            if (leftNull) {
+                return false;
+            }
+            float leftFloat = intBitsToFloat((int) left);
+            float rightFloat = intBitsToFloat((int) right);
+            if (Float.isNaN(leftFloat) && Float.isNaN(rightFloat)) {
+                return false;
+            }
+            return notEqual(left, right);
         }
-        if (leftNull) {
-            return false;
+
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @BlockPosition @SqlType(value = StandardTypes.REAL, nativeContainerType = long.class) Block left,
+                @BlockIndex int leftPosition,
+                @BlockPosition @SqlType(value = StandardTypes.REAL, nativeContainerType = long.class) Block right,
+                @BlockIndex int rightPosition)
+        {
+            if (left.isNull(leftPosition) != right.isNull(rightPosition)) {
+                return true;
+            }
+            if (left.isNull(leftPosition)) {
+                return false;
+            }
+            return notEqual(REAL.getLong(left, leftPosition), REAL.getLong(right, rightPosition));
         }
-        float leftFloat = intBitsToFloat((int) left);
-        float rightFloat = intBitsToFloat((int) right);
-        if (Float.isNaN(leftFloat) && Float.isNaN(rightFloat)) {
-            return false;
-        }
-        return notEqual(left, right);
     }
 
     @ScalarOperator(SATURATED_FLOOR_CAST)

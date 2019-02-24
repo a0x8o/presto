@@ -42,6 +42,31 @@ public class TestDictionaryBlock
     }
 
     @Test
+    public void testLogicalSizeInBytes()
+    {
+        // The 10 Slices in the array will be of lengths 0 to 9.
+        Slice[] expectedValues = createExpectedValues(10);
+
+        // The dictionary within the dictionary block is expected to be a VariableWidthBlock of size 95 bytes.
+        // 45 bytes for the expectedValues Slices (sum of seq(0,9)) and 50 bytes for the position and isNull array (total 10 positions).
+        DictionaryBlock dictionaryBlock = createDictionaryBlock(expectedValues, 100);
+        assertEquals(dictionaryBlock.getDictionary().getLogicalSizeInBytes(), 95);
+
+        // The 100 positions in the dictionary block index to 10 positions in the underlying dictionary (10 each).
+        // Logical size calculation accounts for 4 bytes of offset and 1 byte of isNull. Therefore the expected unoptimized
+        // size is 10 times the size of the underlying dictionary (VariableWidthBlock).
+        assertEquals(dictionaryBlock.getLogicalSizeInBytes(), 95 * 10);
+
+        // With alternating nulls, we have 21 positions, with the same size calculation as above.
+        dictionaryBlock = createDictionaryBlock(alternatingNullValues(expectedValues), 210);
+        assertEquals(dictionaryBlock.getDictionary().getPositionCount(), 21);
+        assertEquals(dictionaryBlock.getDictionary().getLogicalSizeInBytes(), 150);
+
+        // The null positions should be included in the logical size.
+        assertEquals(dictionaryBlock.getLogicalSizeInBytes(), 150 * 10);
+    }
+
+    @Test
     public void testCopyRegionCreatesCompactBlock()
     {
         Slice[] expectedValues = createExpectedValues(10);
@@ -251,6 +276,18 @@ public class TestDictionaryBlock
         // empty
         block = (DictionaryBlock) block.getPositions(new int[] {}, 0, 0);
         assertTrue(block.isCompact());
+    }
+
+    @Test
+    public void testEstimatedDataSizeForStats()
+    {
+        int positionCount = 10;
+        int dictionaryPositionCount = 100;
+        Slice[] expectedValues = createExpectedValues(positionCount);
+        DictionaryBlock dictionaryBlock = createDictionaryBlock(expectedValues, dictionaryPositionCount);
+        for (int position = 0; position < dictionaryPositionCount; position++) {
+            assertEquals(dictionaryBlock.getEstimatedDataSizeForStats(position), expectedValues[position % positionCount].length());
+        }
     }
 
     private static DictionaryBlock createDictionaryBlockWithUnreferencedKeys(Slice[] expectedValues, int positionCount)

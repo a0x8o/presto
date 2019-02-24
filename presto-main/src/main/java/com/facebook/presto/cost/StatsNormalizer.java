@@ -30,8 +30,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Predicate;
 
-import static com.facebook.presto.cost.SymbolStatsEstimate.UNKNOWN_STATS;
-import static com.facebook.presto.cost.SymbolStatsEstimate.ZERO_STATS;
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Double.NaN;
 import static java.lang.Double.isNaN;
 import static java.lang.Math.floor;
@@ -55,6 +54,10 @@ public class StatsNormalizer
 
     private PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Optional<Collection<Symbol>> outputSymbols, TypeProvider types)
     {
+        if (stats.isOutputRowCountUnknown()) {
+            return PlanNodeStatsEstimate.unknown();
+        }
+
         PlanNodeStatsEstimate.Builder normalized = PlanNodeStatsEstimate.buildFrom(stats);
 
         Predicate<Symbol> symbolFilter = outputSymbols
@@ -69,8 +72,8 @@ public class StatsNormalizer
             }
 
             SymbolStatsEstimate symbolStats = stats.getSymbolStatistics(symbol);
-            SymbolStatsEstimate normalizedSymbolStats = normalizeSymbolStats(symbol, symbolStats, stats, types);
-            if (UNKNOWN_STATS.equals(normalizedSymbolStats)) {
+            SymbolStatsEstimate normalizedSymbolStats = stats.getOutputRowCount() == 0 ? SymbolStatsEstimate.zero() : normalizeSymbolStats(symbol, symbolStats, stats, types);
+            if (normalizedSymbolStats.isUnknown()) {
                 normalized.removeSymbolStatistics(symbol);
                 continue;
             }
@@ -87,16 +90,17 @@ public class StatsNormalizer
      */
     private SymbolStatsEstimate normalizeSymbolStats(Symbol symbol, SymbolStatsEstimate symbolStats, PlanNodeStatsEstimate stats, TypeProvider types)
     {
-        if (UNKNOWN_STATS.equals(symbolStats)) {
-            return UNKNOWN_STATS;
+        if (symbolStats.isUnknown()) {
+            return SymbolStatsEstimate.unknown();
         }
 
         double outputRowCount = stats.getOutputRowCount();
+        checkArgument(outputRowCount > 0, "outputRowCount must be greater than zero: %s", outputRowCount);
         double distinctValuesCount = symbolStats.getDistinctValuesCount();
         double nullsFraction = symbolStats.getNullsFraction();
 
         if (!isNaN(distinctValuesCount)) {
-            Type type = requireNonNull(types.get(symbol), () -> "No stats for symbol " + symbol);
+            Type type = requireNonNull(types.get(symbol), () -> "type is missing for symbol " + symbol);
             double maxDistinctValuesByLowHigh = maxDistinctValuesByLowHigh(symbolStats, type);
             if (distinctValuesCount > maxDistinctValuesByLowHigh) {
                 distinctValuesCount = maxDistinctValuesByLowHigh;
@@ -116,7 +120,7 @@ public class StatsNormalizer
         }
 
         if (distinctValuesCount == 0.0) {
-            return ZERO_STATS;
+            return SymbolStatsEstimate.zero();
         }
 
         return SymbolStatsEstimate.buildFrom(symbolStats)

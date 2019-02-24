@@ -13,11 +13,14 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.operator.aggregation.state.BooleanDistinctState;
 import com.facebook.presto.operator.aggregation.state.HyperLogLogState;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.AggregationFunction;
 import com.facebook.presto.spi.function.AggregationState;
+import com.facebook.presto.spi.function.BlockIndex;
+import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.CombineFunction;
 import com.facebook.presto.spi.function.InputFunction;
 import com.facebook.presto.spi.function.OperatorDependency;
@@ -118,6 +121,12 @@ public final class ApproximateCountDistinctAggregation
         state.addMemoryUsage(hll.estimatedInMemorySize());
     }
 
+    @InputFunction
+    public static void input(BooleanDistinctState state, @SqlType(StandardTypes.BOOLEAN) boolean value, @SqlType(StandardTypes.DOUBLE) double maxStandardError)
+    {
+        state.setByte((byte) (state.getByte() | (value ? 1 : 2)));
+    }
+
     private static HyperLogLog getOrCreateHyperLogLog(HyperLogLogState state, double maxStandardError)
     {
         HyperLogLog hll = state.getHyperLogLog();
@@ -160,6 +169,12 @@ public final class ApproximateCountDistinctAggregation
         }
     }
 
+    @CombineFunction
+    public static void combineState(BooleanDistinctState state, BooleanDistinctState otherState)
+    {
+        state.setByte((byte) (state.getByte() | otherState.getByte()));
+    }
+
     @OutputFunction(StandardTypes.BIGINT)
     public static void evaluateFinal(@AggregationState HyperLogLogState state, BlockBuilder out)
     {
@@ -170,5 +185,11 @@ public final class ApproximateCountDistinctAggregation
         else {
             BIGINT.writeLong(out, hyperLogLog.cardinality());
         }
+    }
+
+    @OutputFunction(StandardTypes.BIGINT)
+    public static void evaluateFinal(BooleanDistinctState state, BlockBuilder out)
+    {
+        BIGINT.writeLong(out, Integer.bitCount(state.getByte()));
     }
 }

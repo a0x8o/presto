@@ -15,7 +15,7 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
@@ -28,10 +28,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.List;
 
 import static com.facebook.presto.metadata.Signature.typeVariable;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static java.lang.invoke.MethodHandles.catchException;
 import static java.lang.invoke.MethodHandles.constant;
 import static java.lang.invoke.MethodHandles.dropArguments;
@@ -73,7 +70,7 @@ public class TryCastFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type fromType = boundVariables.getTypeVariable("F");
         Type toType = boundVariables.getTypeVariable("T");
@@ -82,21 +79,15 @@ public class TryCastFunction
         List<ArgumentProperty> argumentProperties;
         MethodHandle tryCastHandle;
 
-        if (fromType.equals(UNKNOWN)) {
-            argumentProperties = ImmutableList.of(valueTypeArgumentProperty(USE_BOXED_TYPE));
-            tryCastHandle = dropArguments(constant(returnType, null), 0, Void.class);
-        }
-        else {
-            // the resulting method needs to return a boxed type
-            Signature signature = functionRegistry.getCoercion(fromType, toType);
-            ScalarFunctionImplementation implementation = functionRegistry.getScalarFunctionImplementation(signature);
-            argumentProperties = ImmutableList.of(implementation.getArgumentProperty(0));
-            MethodHandle coercion = implementation.getMethodHandle();
-            coercion = coercion.asType(methodType(returnType, coercion.type()));
+        // the resulting method needs to return a boxed type
+        Signature signature = functionManager.getCoercion(fromType, toType);
+        ScalarFunctionImplementation implementation = functionManager.getScalarFunctionImplementation(signature);
+        argumentProperties = ImmutableList.of(implementation.getArgumentProperty(0));
+        MethodHandle coercion = implementation.getMethodHandle();
+        coercion = coercion.asType(methodType(returnType, coercion.type()));
 
-            MethodHandle exceptionHandler = dropArguments(constant(returnType, null), 0, RuntimeException.class);
-            tryCastHandle = catchException(coercion, RuntimeException.class, exceptionHandler);
-        }
+        MethodHandle exceptionHandler = dropArguments(constant(returnType, null), 0, RuntimeException.class);
+        tryCastHandle = catchException(coercion, RuntimeException.class, exceptionHandler);
 
         return new ScalarFunctionImplementation(true, argumentProperties, tryCastHandle, isDeterministic());
     }

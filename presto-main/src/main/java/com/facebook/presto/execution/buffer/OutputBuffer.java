@@ -13,9 +13,8 @@
  */
 package com.facebook.presto.execution.buffer;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
 
@@ -47,6 +46,9 @@ public interface OutputBuffer
 
     /**
      * Add a listener which fires anytime the buffer state changes.
+     * Listener is always notified asynchronously using a dedicated notification thread pool so, care should
+     * be taken to avoid leaking {@code this} when adding a listener in a constructor. Additionally, it is
+     * possible notifications are observed out of order due to the asynchronous execution.
      */
     void addStateChangeListener(StateChangeListener<BufferState> stateChangeListener);
 
@@ -112,9 +114,4 @@ public interface OutputBuffer
      * @return the peak memory usage of this output buffer.
      */
     long getPeakMemoryUsage();
-
-    /**
-     * Force free the memory allocated by this output buffer.
-     */
-    void forceFreeMemory();
 }

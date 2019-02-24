@@ -59,6 +59,7 @@ public class TestBasicQueryInfo
                                 Duration.valueOf("8m"),
                                 Duration.valueOf("7m"),
                                 Duration.valueOf("34m"),
+                                Duration.valueOf("44m"),
                                 Duration.valueOf("9m"),
                                 Duration.valueOf("10m"),
                                 Duration.valueOf("11m"),
@@ -77,10 +78,10 @@ public class TestBasicQueryInfo
                                 DataSize.valueOf("23GB"),
                                 DataSize.valueOf("24GB"),
                                 DataSize.valueOf("25GB"),
+                                DataSize.valueOf("26GB"),
                                 true,
                                 Duration.valueOf("23m"),
                                 Duration.valueOf("24m"),
-                                Duration.valueOf("25m"),
                                 Duration.valueOf("26m"),
                                 true,
                                 ImmutableSet.of(BlockedReason.WAITING_FOR_MEMORY),
@@ -113,6 +114,7 @@ public class TestBasicQueryInfo
                         Optional.empty(),
                         null,
                         StandardErrorCode.ABANDONED_QUERY.toErrorCode(),
+                        ImmutableList.of(),
                         ImmutableSet.of(),
                         Optional.empty(),
                         false,
@@ -127,7 +129,7 @@ public class TestBasicQueryInfo
         assertEquals(basicInfo.getQueryStats().getCreateTime(), DateTime.parse("1991-09-06T05:00-05:30"));
         assertEquals(basicInfo.getQueryStats().getEndTime(), DateTime.parse("1991-09-06T06:00-05:30"));
         assertEquals(basicInfo.getQueryStats().getElapsedTime(), Duration.valueOf("8m"));
-        assertEquals(basicInfo.getQueryStats().getExecutionTime(), Duration.valueOf("1m"));
+        assertEquals(basicInfo.getQueryStats().getExecutionTime(), Duration.valueOf("44m"));
 
         assertEquals(basicInfo.getQueryStats().getTotalDrivers(), 16);
         assertEquals(basicInfo.getQueryStats().getQueuedDrivers(), 17);

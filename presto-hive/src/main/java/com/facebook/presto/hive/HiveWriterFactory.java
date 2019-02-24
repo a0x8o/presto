@@ -38,6 +38,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import io.airlift.event.client.EventClient;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -69,7 +70,6 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_SCHEMA_MISMA
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_OPEN_ERROR;
-import static com.facebook.presto.hive.HiveSessionProperties.getWriterSortBufferSize;
 import static com.facebook.presto.hive.HiveType.toHiveTypes;
 import static com.facebook.presto.hive.HiveWriteUtils.createPartitionValues;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_EXISTING_DIRECTORY;
@@ -120,7 +120,8 @@ public class HiveWriterFactory
     private final JobConf conf;
 
     private final Table table;
-    private final int maxSortFilesPerBucket;
+    private final DataSize sortBufferSize;
+    private final int maxOpenSortFiles;
     private final boolean immutablePartitions;
     private final InsertExistingPartitionsBehavior insertExistingPartitionsBehavior;
 
@@ -133,6 +134,8 @@ public class HiveWriterFactory
     private final Map<String, String> sessionProperties;
 
     private final HiveWriterStats hiveWriterStats;
+
+    private final OrcFileWriterFactory orcFileWriterFactory;
 
     public HiveWriterFactory(
             Set<HiveFileWriterFactory> fileWriterFactories,
@@ -151,13 +154,15 @@ public class HiveWriterFactory
             TypeManager typeManager,
             HdfsEnvironment hdfsEnvironment,
             PageSorter pageSorter,
-            int maxSortFilesPerBucket,
+            DataSize sortBufferSize,
+            int maxOpenSortFiles,
             boolean immutablePartitions,
             ConnectorSession session,
             NodeManager nodeManager,
             EventClient eventClient,
             HiveSessionProperties hiveSessionProperties,
-            HiveWriterStats hiveWriterStats)
+            HiveWriterStats hiveWriterStats,
+            OrcFileWriterFactory orcFileWriterFactory)
     {
         this.fileWriterFactories = ImmutableSet.copyOf(requireNonNull(fileWriterFactories, "fileWriterFactories is null"));
         this.schemaName = requireNonNull(schemaName, "schemaName is null");
@@ -175,7 +180,8 @@ public class HiveWriterFactory
 
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.pageSorter = requireNonNull(pageSorter, "pageSorter is null");
-        this.maxSortFilesPerBucket = maxSortFilesPerBucket;
+        this.sortBufferSize = requireNonNull(sortBufferSize, "sortBufferSize is null");
+        this.maxOpenSortFiles = maxOpenSortFiles;
         this.immutablePartitions = immutablePartitions;
         this.insertExistingPartitionsBehavior = HiveSessionProperties.getInsertExistingPartitionsBehavior(session);
         if (immutablePartitions) {
@@ -245,6 +251,8 @@ public class HiveWriterFactory
         }
 
         this.hiveWriterStats = requireNonNull(hiveWriterStats, "hiveWriterStats is null");
+
+        this.orcFileWriterFactory = requireNonNull(orcFileWriterFactory, "orcFileWriterFactory is null");
     }
 
     public HiveWriter createWriter(Page partitionColumns, int position, OptionalInt bucketNumber)
@@ -446,7 +454,8 @@ public class HiveWriterFactory
                     schema,
                     partitionStorageFormat.getEstimatedWriterSystemMemoryUsage(),
                     conf,
-                    typeManager);
+                    typeManager,
+                    session);
         }
 
         String writerImplementation = hiveFileWriter.getClass().getName();
@@ -511,12 +520,13 @@ public class HiveWriterFactory
                     fileSystem,
                     new Path(path.getParent(), ".tmp-sort." + path.getName()),
                     hiveFileWriter,
-                    getWriterSortBufferSize(session),
-                    maxSortFilesPerBucket,
+                    sortBufferSize,
+                    maxOpenSortFiles,
                     types,
                     sortFields,
                     sortOrders,
-                    pageSorter);
+                    pageSorter,
+                    (fs, p) -> orcFileWriterFactory.createOrcDataSink(session, fs, p));
         }
 
         return new HiveWriter(

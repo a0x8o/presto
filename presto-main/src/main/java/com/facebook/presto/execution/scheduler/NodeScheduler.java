@@ -20,7 +20,6 @@ import com.facebook.presto.metadata.InternalNodeManager;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Node;
-import com.facebook.presto.sql.planner.NodePartitionMap;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.HashMultimap;
@@ -90,7 +89,7 @@ public class NodeScheduler
         this.maxSplitsPerNode = config.getMaxSplitsPerNode();
         this.maxPendingSplitsPerTask = config.getMaxPendingSplitsPerTask();
         this.nodeTaskMap = requireNonNull(nodeTaskMap, "nodeTaskMap is null");
-        checkArgument(maxSplitsPerNode > maxPendingSplitsPerTask, "maxSplitsPerNode must be > maxPendingSplitsPerTask");
+        checkArgument(maxSplitsPerNode >= maxPendingSplitsPerTask, "maxSplitsPerNode must be > maxPendingSplitsPerTask");
         this.useNetworkTopology = !config.getNetworkTopology().equals(NetworkTopologyType.LEGACY);
 
         ImmutableList.Builder<CounterStat> builder = ImmutableList.builder();
@@ -266,15 +265,15 @@ public class NodeScheduler
             int maxPendingSplitsPerTask,
             Set<Split> splits,
             List<RemoteTask> existingTasks,
-            NodePartitionMap partitioning)
+            BucketNodeMap bucketNodeMap)
     {
         Multimap<Node, Split> assignments = HashMultimap.create();
         NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
 
         Set<Node> blockedNodes = new HashSet<>();
         for (Split split : splits) {
-            // node placement is forced by the partitioning
-            Node node = partitioning.getNode(split);
+            // node placement is forced by the bucket to node map
+            Node node = bucketNodeMap.getAssignedNode(split).get();
 
             // if node is full, don't schedule now, which will push back on the scheduling of splits
             if (assignmentStats.getTotalSplitCount(node) < maxSplitsPerNode ||

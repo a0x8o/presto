@@ -32,15 +32,19 @@ import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.HiveColumnStatistics;
 import com.facebook.presto.hive.metastore.HivePrivilegeInfo;
 import com.facebook.presto.hive.metastore.Partition;
+import com.facebook.presto.hive.metastore.PartitionWithStatistics;
 import com.facebook.presto.hive.metastore.PrincipalPrivileges;
 import com.facebook.presto.hive.metastore.PrincipalType;
 import com.facebook.presto.hive.metastore.Table;
+import com.facebook.presto.hive.metastore.thrift.ThriftMetastoreUtil;
 import com.facebook.presto.spi.ColumnNotFoundException;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.statistics.ColumnStatisticType;
+import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -75,7 +79,7 @@ import java.util.function.Function;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_DROPPED_DURING_QUERY;
-import static com.facebook.presto.hive.HivePartitionManager.extractPartitionKeyValues;
+import static com.facebook.presto.hive.HivePartitionManager.extractPartitionValues;
 import static com.facebook.presto.hive.HiveUtil.toPartitionValues;
 import static com.facebook.presto.hive.metastore.Database.DEFAULT_DATABASE_NAME;
 import static com.facebook.presto.hive.metastore.HivePrivilegeInfo.HivePrivilege.OWNERSHIP;
@@ -276,9 +280,9 @@ public class FileHiveMetastore
     }
 
     @Override
-    public boolean supportsColumnStatistics()
+    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
-        return true;
+        return ThriftMetastoreUtil.getSupportedColumnStatistics(type);
     }
 
     @Override
@@ -298,7 +302,7 @@ public class FileHiveMetastore
         Table table = getRequiredTable(databaseName, tableName);
         ImmutableMap.Builder<String, PartitionStatistics> statistics = ImmutableMap.builder();
         for (String partitionName : partitionNames) {
-            List<String> partitionValues = extractPartitionKeyValues(partitionName);
+            List<String> partitionValues = extractPartitionValues(partitionName);
             Path partitionDirectory = getPartitionMetadataDirectory(table, ImmutableList.copyOf(partitionValues));
             PartitionMetadata partitionMetadata = readSchemaFile("partition", partitionDirectory, partitionCodec)
                     .orElseThrow(() -> new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partitionValues));
@@ -348,7 +352,7 @@ public class FileHiveMetastore
         PartitionStatistics updatedStatistics = update.apply(originalStatistics);
 
         Table table = getRequiredTable(databaseName, tableName);
-        List<String> partitionValues = extractPartitionKeyValues(partitionName);
+        List<String> partitionValues = extractPartitionValues(partitionName);
         Path partitionDirectory = getPartitionMetadataDirectory(table, partitionValues);
         PartitionMetadata partitionMetadata = readSchemaFile("partition", partitionDirectory, partitionCodec)
                 .orElseThrow(() -> new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partitionValues));
@@ -467,24 +471,6 @@ public class FileHiveMetastore
     }
 
     @Override
-    public synchronized void updateTableParameters(String databaseName, String tableName, Function<Map<String, String>, Map<String, String>> update)
-    {
-        requireNonNull(databaseName, "databaseName is null");
-        requireNonNull(tableName, "tableName is null");
-        requireNonNull(update, "update is null");
-
-        Path tableMetadataDirectory = getTableMetadataDirectory(databaseName, tableName);
-        TableMetadata table = readSchemaFile("table", tableMetadataDirectory, tableCodec)
-                .orElseThrow(() -> new TableNotFoundException(new SchemaTableName(databaseName, tableName)));
-
-        Map<String, String> parameters = table.getParameters();
-        Map<String, String> updatedParameters = requireNonNull(update.apply(parameters), "updatedParameters is null");
-        if (!parameters.equals(updatedParameters)) {
-            writeSchemaFile("table", tableMetadataDirectory, tableCodec, table.withParameters(updatedParameters), true);
-        }
-    }
-
-    @Override
     public synchronized void addColumn(String databaseName, String tableName, String columnName, HiveType columnType, String columnComment)
     {
         alterTable(databaseName, tableName, oldTable -> {
@@ -569,7 +555,7 @@ public class FileHiveMetastore
     }
 
     @Override
-    public synchronized void addPartitions(String databaseName, String tableName, List<Partition> partitions)
+    public synchronized void addPartitions(String databaseName, String tableName, List<PartitionWithStatistics> partitions)
     {
         requireNonNull(databaseName, "databaseName is null");
         requireNonNull(tableName, "tableName is null");
@@ -582,14 +568,15 @@ public class FileHiveMetastore
 
         try {
             Map<Path, byte[]> schemaFiles = new LinkedHashMap<>();
-            for (Partition partition : partitions) {
+            for (PartitionWithStatistics partitionWithStatistics : partitions) {
+                Partition partition = partitionWithStatistics.getPartition();
                 verifiedPartition(table, partition);
                 Path partitionMetadataDirectory = getPartitionMetadataDirectory(table, partition.getValues());
                 Path schemaPath = new Path(partitionMetadataDirectory, PRESTO_SCHEMA_FILE_NAME);
                 if (metadataFileSystem.exists(schemaPath)) {
                     throw new PrestoException(HIVE_METASTORE_ERROR, "Partition already exists");
                 }
-                byte[] schemaJson = partitionCodec.toJsonBytes(new PartitionMetadata(table, partition));
+                byte[] schemaJson = partitionCodec.toJsonBytes(new PartitionMetadata(table, partitionWithStatistics));
                 schemaFiles.put(schemaPath, schemaJson);
             }
 
@@ -673,34 +660,15 @@ public class FileHiveMetastore
     }
 
     @Override
-    public synchronized void alterPartition(String databaseName, String tableName, Partition partition)
+    public synchronized void alterPartition(String databaseName, String tableName, PartitionWithStatistics partitionWithStatistics)
     {
         Table table = getRequiredTable(databaseName, tableName);
 
+        Partition partition = partitionWithStatistics.getPartition();
         verifiedPartition(table, partition);
 
         Path partitionMetadataDirectory = getPartitionMetadataDirectory(table, partition.getValues());
-        writeSchemaFile("partition", partitionMetadataDirectory, partitionCodec, new PartitionMetadata(table, partition), true);
-    }
-
-    @Override
-    public synchronized void updatePartitionParameters(String databaseName, String tableName, List<String> partitionValues, Function<Map<String, String>, Map<String, String>> update)
-    {
-        requireNonNull(databaseName, "databaseName is null");
-        requireNonNull(tableName, "tableName is null");
-        requireNonNull(partitionValues, "partitionValues is null");
-        requireNonNull(update, "update is null");
-
-        Table table = getRequiredTable(databaseName, tableName);
-        Path partitionDirectory = getPartitionMetadataDirectory(table, partitionValues);
-        PartitionMetadata partition = readSchemaFile("partition", partitionDirectory, partitionCodec)
-                .orElseThrow(() -> new PartitionNotFoundException(new SchemaTableName(databaseName, tableName), partitionValues));
-
-        Map<String, String> parameters = partition.getParameters();
-        Map<String, String> updatedParameters = requireNonNull(update.apply(parameters), "updatedParameters is null");
-        if (!parameters.equals(updatedParameters)) {
-            writeSchemaFile("partition", partitionDirectory, partitionCodec, partition.withParameters(updatedParameters), true);
-        }
+        writeSchemaFile("partition", partitionMetadataDirectory, partitionCodec, new PartitionMetadata(table, partitionWithStatistics), true);
     }
 
     @Override

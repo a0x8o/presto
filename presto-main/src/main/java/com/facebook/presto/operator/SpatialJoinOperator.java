@@ -18,22 +18,24 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.Optional;
 
-import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
-import static com.facebook.presto.sql.planner.plan.JoinNode.Type.LEFT;
+import static com.facebook.presto.sql.planner.plan.SpatialJoinNode.Type.INNER;
+import static com.facebook.presto.sql.planner.plan.SpatialJoinNode.Type.LEFT;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static io.airlift.concurrent.MoreFutures.getDone;
 import static io.airlift.slice.SizeOf.sizeOf;
+import static java.util.Objects.requireNonNull;
 
 public class SpatialJoinOperator
         implements Operator
@@ -43,10 +45,11 @@ public class SpatialJoinOperator
     {
         private final int operatorId;
         private final PlanNodeId planNodeId;
-        private final JoinNode.Type joinType;
+        private final SpatialJoinNode.Type joinType;
         private final List<Type> probeTypes;
         private final List<Integer> probeOutputChannels;
         private final int probeGeometryChannel;
+        private final Optional<Integer> partitionChannel;
         private final PagesSpatialIndexFactory pagesSpatialIndexFactory;
 
         private boolean closed;
@@ -54,10 +57,11 @@ public class SpatialJoinOperator
         public SpatialJoinOperatorFactory(
                 int operatorId,
                 PlanNodeId planNodeId,
-                JoinNode.Type joinType,
+                SpatialJoinNode.Type joinType,
                 List<Type> probeTypes,
                 List<Integer> probeOutputChannels,
                 int probeGeometryChannel,
+                Optional<Integer> partitionChannel,
                 PagesSpatialIndexFactory pagesSpatialIndexFactory)
         {
             checkArgument(joinType == INNER || joinType == LEFT, "unsupported join type: %s", joinType);
@@ -67,6 +71,7 @@ public class SpatialJoinOperator
             this.probeTypes = ImmutableList.copyOf(probeTypes);
             this.probeOutputChannels = ImmutableList.copyOf(probeOutputChannels);
             this.probeGeometryChannel = probeGeometryChannel;
+            this.partitionChannel = requireNonNull(partitionChannel, "partitionChannel is null");
             this.pagesSpatialIndexFactory = pagesSpatialIndexFactory;
         }
 
@@ -84,6 +89,7 @@ public class SpatialJoinOperator
                     probeTypes,
                     probeOutputChannels,
                     probeGeometryChannel,
+                    partitionChannel,
                     pagesSpatialIndexFactory);
         }
 
@@ -101,16 +107,17 @@ public class SpatialJoinOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new SpatialJoinOperatorFactory(operatorId, planNodeId, joinType, probeTypes, probeOutputChannels, probeGeometryChannel, pagesSpatialIndexFactory);
+            return new SpatialJoinOperatorFactory(operatorId, planNodeId, joinType, probeTypes, probeOutputChannels, probeGeometryChannel, partitionChannel, pagesSpatialIndexFactory);
         }
     }
 
     private final OperatorContext operatorContext;
     private final LocalMemoryContext localUserMemoryContext;
-    private final JoinNode.Type joinType;
+    private final SpatialJoinNode.Type joinType;
     private final List<Type> probeTypes;
     private final List<Integer> probeOutputChannels;
     private final int probeGeometryChannel;
+    private final Optional<Integer> partitionChannel;
     private final PagesSpatialIndexFactory pagesSpatialIndexFactory;
 
     private ListenableFuture<PagesSpatialIndex> pagesSpatialIndexFuture;
@@ -131,10 +138,11 @@ public class SpatialJoinOperator
 
     public SpatialJoinOperator(
             OperatorContext operatorContext,
-            JoinNode.Type joinType,
+            SpatialJoinNode.Type joinType,
             List<Type> probeTypes,
             List<Integer> probeOutputChannels,
             int probeGeometryChannel,
+            Optional<Integer> partitionChannel,
             PagesSpatialIndexFactory pagesSpatialIndexFactory)
     {
         this.operatorContext = operatorContext;
@@ -143,6 +151,7 @@ public class SpatialJoinOperator
         this.probeTypes = ImmutableList.copyOf(probeTypes);
         this.probeOutputChannels = ImmutableList.copyOf(probeOutputChannels);
         this.probeGeometryChannel = probeGeometryChannel;
+        this.partitionChannel = requireNonNull(partitionChannel, "partitionChannel is null");
         this.pagesSpatialIndexFactory = pagesSpatialIndexFactory;
         this.pagesSpatialIndexFuture = pagesSpatialIndexFactory.createPagesSpatialIndex();
         this.pageBuilder = new PageBuilder(ImmutableList.<Type>builder()
@@ -212,7 +221,7 @@ public class SpatialJoinOperator
         DriverYieldSignal yieldSignal = operatorContext.getDriverContext().getYieldSignal();
         while (probePosition < probe.getPositionCount()) {
             if (joinPositions == null) {
-                joinPositions = pagesSpatialIndex.findJoinPositions(probePosition, probe, probeGeometryChannel);
+                joinPositions = pagesSpatialIndex.findJoinPositions(probePosition, probe, probeGeometryChannel, partitionChannel);
                 localUserMemoryContext.setBytes(sizeOf(joinPositions));
                 nextJoinPositionIndex = 0;
                 matchFound = false;

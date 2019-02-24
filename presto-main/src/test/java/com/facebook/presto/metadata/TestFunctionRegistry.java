@@ -35,9 +35,8 @@ import java.lang.invoke.MethodHandles;
 import java.util.List;
 
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
-import static com.facebook.presto.metadata.FunctionRegistry.getMagicLiteralFunctionSignature;
-import static com.facebook.presto.metadata.FunctionRegistry.mangleOperatorName;
-import static com.facebook.presto.metadata.FunctionRegistry.unmangleOperator;
+import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
+import static com.facebook.presto.metadata.OperatorSignatureUtils.unmangleOperator;
 import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
@@ -45,6 +44,7 @@ import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
+import static com.facebook.presto.sql.planner.LiteralEncoder.getMagicLiteralFunctionSignature;
 import static com.facebook.presto.type.TypeUtils.resolveTypes;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Lists.transform;
@@ -62,7 +62,7 @@ public class TestFunctionRegistry
     public void testIdentityCast()
     {
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         Signature exactOperator = registry.getCoercion(HYPER_LOG_LOG, HYPER_LOG_LOG);
         assertEquals(exactOperator.getName(), mangleOperatorName(OperatorType.CAST.name()));
         assertEquals(transform(exactOperator.getArgumentTypes(), Functions.toStringFunction()), ImmutableList.of(StandardTypes.HYPER_LOG_LOG));
@@ -73,7 +73,7 @@ public class TestFunctionRegistry
     public void testExactMatchBeforeCoercion()
     {
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         boolean foundOperator = false;
         for (SqlFunction function : registry.listOperators()) {
             OperatorType operatorType = unmangleOperator(function.getSignature().getName());
@@ -102,7 +102,7 @@ public class TestFunctionRegistry
         assertEquals(signature.getReturnType().getBase(), StandardTypes.TIMESTAMP_WITH_TIME_ZONE);
 
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         Signature function = registry.resolveFunction(QualifiedName.of(signature.getName()), fromTypeSignatures(signature.getArgumentTypes()));
         assertEquals(function.getArgumentTypes(), ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT)));
         assertEquals(signature.getReturnType().getBase(), StandardTypes.TIMESTAMP_WITH_TIME_ZONE);
@@ -119,7 +119,7 @@ public class TestFunctionRegistry
                 .collect(toImmutableList());
 
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         registry.addFunctions(functions);
         registry.addFunctions(functions);
     }
@@ -132,7 +132,7 @@ public class TestFunctionRegistry
                 .getFunctions();
 
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         registry.addFunctions(functions);
     }
 
@@ -140,7 +140,7 @@ public class TestFunctionRegistry
     public void testListingHiddenFunctions()
     {
         TypeRegistry typeManager = new TypeRegistry();
-        FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        FunctionRegistry registry = createFunctionRegistry(typeManager);
         List<SqlFunction> functions = registry.list();
         List<String> names = transform(functions, input -> input.getSignature().getName());
 
@@ -148,6 +148,8 @@ public class TestFunctionRegistry
         assertTrue(names.contains("stddev"), "Expected function names " + names + " to contain 'stddev'");
         assertTrue(names.contains("rank"), "Expected function names " + names + " to contain 'rank'");
         assertFalse(names.contains("like"), "Expected function names " + names + " not to contain 'like'");
+        assertFalse(names.contains("$internal$sum_data_size_for_stats"), "Expected function names " + names + " not to contain '$internal$sum_data_size_for_stats'");
+        assertFalse(names.contains("$internal$max_data_size_for_stats"), "Expected function names " + names + " not to contain '$internal$max_data_size_for_stats'");
     }
 
     @Test
@@ -273,7 +275,7 @@ public class TestFunctionRegistry
                 .forParameters("unknown", "bigint")
                 .returns(functionSignature("bigint", "bigint"));
 
-        // when coercion between the types doesn't exist, but the return type is the same, so the random function must be choosen
+        // when coercion between the types doesn't exist, but the return type is the same, so the random function must be chosen
         assertThatResolveFunction()
                 .among(
                         functionSignature(ImmutableList.of("JoniRegExp"), "boolean"),
@@ -289,6 +291,14 @@ public class TestFunctionRegistry
                         functionSignature(ImmutableList.of("integer"), "integer"))
                 .forParameters("unknown")
                 .failsWithMessage("Could not choose a best candidate operator. Explicit type casts must be added.");
+    }
+
+    private FunctionRegistry createFunctionRegistry(TypeRegistry typeManager)
+    {
+        BlockEncodingManager blockEncodingManager = new BlockEncodingManager(typeManager);
+        FeaturesConfig featuresConfig = new FeaturesConfig();
+        FunctionManager functionManager = new FunctionManager(typeManager, blockEncodingManager, featuresConfig);
+        return new FunctionRegistry(typeManager, blockEncodingManager, featuresConfig, functionManager);
     }
 
     private SignatureBuilder functionSignature(String... argumentTypes)
@@ -368,9 +378,11 @@ public class TestFunctionRegistry
 
         private Signature resolveSignature()
         {
-            FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, blockEncoding, new FeaturesConfig());
-            functionRegistry.addFunctions(createFunctionsFromSignatures());
-            return functionRegistry.resolveFunction(QualifiedName.of(TEST_FUNCTION_NAME), fromTypeSignatures(parameterTypes));
+            FeaturesConfig featuresConfig = new FeaturesConfig();
+            FunctionManager functionManager = new FunctionManager(typeRegistry, blockEncoding, featuresConfig);
+            FunctionRegistry registry = new FunctionRegistry(typeRegistry, blockEncoding, featuresConfig, functionManager);
+            registry.addFunctions(createFunctionsFromSignatures());
+            return registry.resolveFunction(QualifiedName.of(TEST_FUNCTION_NAME), fromTypeSignatures(parameterTypes));
         }
 
         private List<SqlFunction> createFunctionsFromSignatures()
@@ -385,7 +397,7 @@ public class TestFunctionRegistry
                             BoundVariables boundVariables,
                             int arity,
                             TypeManager typeManager,
-                            FunctionRegistry functionRegistry)
+                            FunctionManager functionManager)
                     {
                         return new ScalarFunctionImplementation(
                                 false,

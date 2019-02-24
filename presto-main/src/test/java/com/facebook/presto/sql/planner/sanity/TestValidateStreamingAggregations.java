@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.sanity;
 
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayoutHandle;
@@ -57,7 +58,7 @@ public class TestValidateStreamingAggregations
         ConnectorId connectorId = getCurrentConnectorId();
         nationTableHandle = new TableHandle(
                 connectorId,
-                new TpchTableHandle(connectorId.toString(), "nation", 1.0));
+                new TpchTableHandle("nation", 1.0));
 
         nationTableLayoutHandle = new TableLayoutHandle(connectorId,
                 TestingTransactionHandle.create(),
@@ -70,7 +71,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("nationkey"))
                                 .source(
                                         p.tableScan(
                                                 nationTableHandle,
@@ -81,7 +82,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("unique"), p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("unique"), p.symbol("nationkey"))
                                 .preGroupedSymbols(p.symbol("unique"), p.symbol("nationkey"))
                                 .source(
                                         p.assignUniqueId(p.symbol("unique"),
@@ -98,7 +99,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("nationkey"))
                                 .preGroupedSymbols(p.symbol("nationkey"))
                                 .source(
                                         p.tableScan(
@@ -117,7 +118,7 @@ public class TestValidateStreamingAggregations
         getQueryRunner().inTransaction(session -> {
             // metadata.getCatalogHandle() registers the catalog for the transaction
             session.getCatalog().ifPresent(catalog -> metadata.getCatalogHandle(session, catalog));
-            new ValidateStreamingAggregations().validate(planNode, session, metadata, sqlParser, types);
+            new ValidateStreamingAggregations().validate(planNode, session, metadata, sqlParser, types, WarningCollector.NOOP);
             return null;
         });
     }

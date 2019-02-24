@@ -92,6 +92,7 @@ import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -1237,6 +1238,27 @@ public class TestPrestoDriver
     }
 
     @Test
+    public void testGetMoreResultsClearsUpdateCount()
+            throws Exception
+    {
+        try (Connection connection = createConnection("blackhole", "default")) {
+            try (PrestoStatement statement = connection.createStatement().unwrap(PrestoStatement.class)) {
+                assertFalse(statement.execute("CREATE TABLE test_more_results_clears_update_count (id bigint)"));
+                assertEquals(statement.getUpdateCount(), 0);
+                assertEquals(statement.getUpdateType(), "CREATE TABLE");
+                assertFalse(statement.getMoreResults());
+                assertEquals(statement.getUpdateCount(), -1);
+                assertNull(statement.getUpdateType());
+            }
+            finally {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("DROP TABLE test_more_results_clears_update_count");
+                }
+            }
+        }
+    }
+
+    @Test
     public void testSetTimeZoneId()
             throws Exception
     {
@@ -1419,7 +1441,9 @@ public class TestPrestoDriver
 
         // make sure the query was aborted
         assertTrue(queryFinished.await(10, SECONDS));
-        assertNotNull(queryFailure.get());
+        assertThat(queryFailure.get())
+                .isInstanceOf(SQLException.class)
+                .hasMessage("ResultSet thread was interrupted");
         assertEquals(getQueryState(queryId.get()), FAILED);
     }
 

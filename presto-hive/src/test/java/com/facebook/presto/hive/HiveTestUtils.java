@@ -19,11 +19,10 @@ import com.facebook.presto.hive.authentication.NoHdfsAuthentication;
 import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
 import com.facebook.presto.hive.orc.OrcPageSourceFactory;
 import com.facebook.presto.hive.parquet.ParquetPageSourceFactory;
-import com.facebook.presto.hive.parquet.ParquetRecordCursorProvider;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.hive.s3.HiveS3Config;
 import com.facebook.presto.hive.s3.PrestoS3ConfigurationUpdater;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.PagesIndex;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
@@ -40,10 +39,13 @@ import com.facebook.presto.testing.TestingConnectorSession;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.slice.Slice;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 
+import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
 import static java.util.stream.Collectors.toList;
 
 public final class HiveTestUtils
@@ -53,13 +55,13 @@ public final class HiveTestUtils
     }
 
     public static final ConnectorSession SESSION = new TestingConnectorSession(
-            new HiveSessionProperties(new HiveClientConfig(), new OrcFileWriterConfig()).getSessionProperties());
+            new HiveSessionProperties(new HiveClientConfig(), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
 
     public static final TypeRegistry TYPE_MANAGER = new TypeRegistry();
 
     static {
-        // associate TYPE_MANAGER with a function registry
-        new FunctionRegistry(TYPE_MANAGER, new BlockEncodingManager(TYPE_MANAGER), new FeaturesConfig());
+        // associate TYPE_MANAGER with a function manager
+        new FunctionManager(TYPE_MANAGER, new BlockEncodingManager(TYPE_MANAGER), new FeaturesConfig());
     }
 
     public static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(new HiveClientConfig());
@@ -82,7 +84,6 @@ public final class HiveTestUtils
     {
         HdfsEnvironment testHdfsEnvironment = createTestHdfsEnvironment(hiveClientConfig);
         return ImmutableSet.<HiveRecordCursorProvider>builder()
-                .add(new ParquetRecordCursorProvider(testHdfsEnvironment, new FileFormatDataSourceStats()))
                 .add(new GenericHiveRecordCursorProvider(testHdfsEnvironment))
                 .build();
     }
@@ -92,14 +93,20 @@ public final class HiveTestUtils
         HdfsEnvironment testHdfsEnvironment = createTestHdfsEnvironment(hiveClientConfig);
         return ImmutableSet.<HiveFileWriterFactory>builder()
                 .add(new RcFileFileWriterFactory(testHdfsEnvironment, TYPE_MANAGER, new NodeVersion("test_version"), hiveClientConfig, new FileFormatDataSourceStats()))
-                .add(new OrcFileWriterFactory(
-                        testHdfsEnvironment,
-                        TYPE_MANAGER,
-                        new NodeVersion("test_version"),
-                        hiveClientConfig,
-                        new FileFormatDataSourceStats(),
-                        new OrcFileWriterConfig()))
+                .add(getDefaultOrcFileWriterFactory(hiveClientConfig))
                 .build();
+    }
+
+    public static OrcFileWriterFactory getDefaultOrcFileWriterFactory(HiveClientConfig hiveClientConfig)
+    {
+        HdfsEnvironment testHdfsEnvironment = createTestHdfsEnvironment(hiveClientConfig);
+        return new OrcFileWriterFactory(
+                testHdfsEnvironment,
+                TYPE_MANAGER,
+                new NodeVersion("test_version"),
+                hiveClientConfig,
+                new FileFormatDataSourceStats(),
+                new OrcFileWriterConfig());
     }
 
     public static List<Type> getTypes(List<? extends ColumnHandle> columnHandles)
@@ -138,5 +145,15 @@ public final class HiveTestUtils
                 ImmutableList.copyOf(elementTypeSignatures.stream()
                         .map(TypeSignatureParameter::of)
                         .collect(toList())));
+    }
+
+    public static Long shortDecimal(String value)
+    {
+        return new BigDecimal(value).unscaledValue().longValueExact();
+    }
+
+    public static Slice longDecimal(String value)
+    {
+        return encodeScaledValue(new BigDecimal(value));
     }
 }

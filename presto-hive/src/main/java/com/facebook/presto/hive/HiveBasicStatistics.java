@@ -13,13 +13,18 @@
  */
 package com.facebook.presto.hive;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+import javax.annotation.concurrent.Immutable;
+
 import java.util.Objects;
 import java.util.OptionalLong;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
+@Immutable
 public class HiveBasicStatistics
 {
     private final OptionalLong fileCount;
@@ -42,37 +47,38 @@ public class HiveBasicStatistics
         this(OptionalLong.of(fileCount), OptionalLong.of(rowCount), OptionalLong.of(inMemoryDataSizeInBytes), OptionalLong.of(onDiskDataSizeInBytes));
     }
 
+    @JsonCreator
     public HiveBasicStatistics(
-            OptionalLong fileCount,
-            OptionalLong rowCount,
-            OptionalLong inMemoryDataSizeInBytes,
-            OptionalLong onDiskDataSizeInBytes)
+            @JsonProperty("fileCount") OptionalLong fileCount,
+            @JsonProperty("rowCount") OptionalLong rowCount,
+            @JsonProperty("inMemoryDataSizeInBytes") OptionalLong inMemoryDataSizeInBytes,
+            @JsonProperty("onDiskDataSizeInBytes") OptionalLong onDiskDataSizeInBytes)
     {
         this.fileCount = requireNonNull(fileCount, "fileCount is null");
-        fileCount.ifPresent(count -> checkArgument(count >= 0, "fileCount is negative: %d", count));
         this.rowCount = requireNonNull(rowCount, "rowCount is null");
-        rowCount.ifPresent(count -> checkArgument(count >= 0, "rowCount is negative: %d", count));
         this.inMemoryDataSizeInBytes = requireNonNull(inMemoryDataSizeInBytes, "inMemoryDataSizeInBytes is null");
-        inMemoryDataSizeInBytes.ifPresent(size -> checkArgument(size >= 0, "inMemoryDataSizeInBytes is negative: %d", size));
         this.onDiskDataSizeInBytes = requireNonNull(onDiskDataSizeInBytes, "onDiskDataSizeInBytes is null");
-        onDiskDataSizeInBytes.ifPresent(size -> checkArgument(size >= 0, "onDiskDataSizeInBytes is negative: %d", size));
     }
 
+    @JsonProperty
     public OptionalLong getFileCount()
     {
         return fileCount;
     }
 
+    @JsonProperty
     public OptionalLong getRowCount()
     {
         return rowCount;
     }
 
+    @JsonProperty
     public OptionalLong getInMemoryDataSizeInBytes()
     {
         return inMemoryDataSizeInBytes;
     }
 
+    @JsonProperty
     public OptionalLong getOnDiskDataSizeInBytes()
     {
         return onDiskDataSizeInBytes;

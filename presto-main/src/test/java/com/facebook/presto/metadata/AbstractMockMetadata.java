@@ -26,10 +26,13 @@ import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.Privilege;
+import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
+import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.facebook.presto.sql.tree.QualifiedName;
 import io.airlift.slice.Slice;
 
@@ -97,6 +100,12 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
+    public Optional<TableHandle> getTableHandleForStatisticsCollection(Session session, QualifiedObjectName tableName, Map<String, Object> analyzeProperties)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Optional<SystemTable> getSystemTable(Session session, QualifiedObjectName tableName)
     {
         throw new UnsupportedOperationException();
@@ -110,6 +119,18 @@ public abstract class AbstractMockMetadata
 
     @Override
     public TableLayout getLayout(Session session, TableLayoutHandle handle)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<PartitioningHandle> getCommonPartitioning(Session session, PartitioningHandle left, PartitioningHandle right)
     {
         throw new UnsupportedOperationException();
     }
@@ -217,13 +238,37 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public Optional<NewTableLayout> getInsertLayout(Session session, TableHandle target)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(Session session, String catalogName, ConnectorTableMetadata tableMetadata)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public TableStatisticsMetadata getStatisticsCollectionMetadata(Session session, String catalogName, ConnectorTableMetadata tableMetadata)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public AnalyzeTableHandle beginStatisticsCollection(Session session, TableHandle tableHandle)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void finishStatisticsCollection(Session session, AnalyzeTableHandle tableHandle, Collection<ComputedStatistics> computedStatistics)
     {
         throw new UnsupportedOperationException();
     }
@@ -247,7 +292,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         throw new UnsupportedOperationException();
     }
@@ -349,7 +394,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public FunctionRegistry getFunctionRegistry()
+    public FunctionManager getFunctionManager()
     {
         throw new UnsupportedOperationException();
     }
@@ -386,6 +431,18 @@ public abstract class AbstractMockMetadata
 
     @Override
     public TablePropertyManager getTablePropertyManager()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ColumnPropertyManager getColumnPropertyManager()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public AnalyzePropertyManager getAnalyzePropertyManager()
     {
         throw new UnsupportedOperationException();
     }

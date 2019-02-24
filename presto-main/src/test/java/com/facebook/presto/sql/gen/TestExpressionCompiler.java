@@ -22,6 +22,7 @@ import com.facebook.presto.operator.scalar.JsonPath;
 import com.facebook.presto.operator.scalar.MathFunctions;
 import com.facebook.presto.operator.scalar.StringFunctions;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.SqlDecimal;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.SqlVarbinary;
@@ -74,7 +75,6 @@ import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
@@ -84,6 +84,7 @@ import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
+import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 import static com.facebook.presto.util.StructuralTestUtil.mapType;
 import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
@@ -93,7 +94,9 @@ import static io.airlift.testing.Closeables.closeAllRuntimeException;
 import static java.lang.Math.cos;
 import static java.lang.Runtime.getRuntime;
 import static java.lang.String.format;
+import static java.util.Collections.singletonList;
 import static java.util.concurrent.Executors.newFixedThreadPool;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.IntStream.range;
 import static org.joda.time.DateTimeZone.UTC;
@@ -823,7 +826,7 @@ public class TestExpressionCompiler
         assertExecute("try_cast('foo' as varchar)", VARCHAR, "foo");
         assertExecute("try_cast('foo' as bigint)", BIGINT, null);
         assertExecute("try_cast('foo' as integer)", INTEGER, null);
-        assertExecute("try_cast('2001-08-22' as timestamp)", TIMESTAMP, sqlTimestampOf(2001, 8, 22, 0, 0, 0, 0, UTC, UTC_KEY, TEST_SESSION));
+        assertExecute("try_cast('2001-08-22' as timestamp)", TIMESTAMP, sqlTimestampOf(2001, 8, 22, 0, 0, 0, 0, TEST_SESSION));
         assertExecute("try_cast(bound_string as bigint)", BIGINT, null);
         assertExecute("try_cast(cast(null as varchar) as bigint)", BIGINT, null);
         assertExecute("try_cast(bound_long / 13  as bigint)", BIGINT, 94L);
@@ -984,6 +987,10 @@ public class TestExpressionCompiler
             }
         }
 
+        assertExecute("case ARRAY[CAST(1 AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "matched");
+        assertExecute("case ARRAY[CAST(2 AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "not_matched");
+        assertExecute("case ARRAY[CAST(null AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "not_matched");
+
         Futures.allAsList(futures).get();
     }
 
@@ -1039,6 +1046,10 @@ public class TestExpressionCompiler
                 }
             }
         }
+
+        assertExecute("case when ARRAY[CAST(1 AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "matched");
+        assertExecute("case when ARRAY[CAST(2 AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "not_matched");
+        assertExecute("case when ARRAY[CAST(null AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", createVarcharType(11), "not_matched");
 
         Futures.allAsList(futures).get();
     }
@@ -1267,6 +1278,55 @@ public class TestExpressionCompiler
     }
 
     @Test
+    public void testInComplexTypes()
+    {
+        assertExecute("ARRAY[1] IN (ARRAY[1])", BOOLEAN, true);
+        assertExecute("ARRAY[1] IN (ARRAY[2])", BOOLEAN, false);
+        assertExecute("ARRAY[1] IN (ARRAY[2], ARRAY[1])", BOOLEAN, true);
+        assertExecute("ARRAY[1] IN (null)", BOOLEAN, null);
+        assertExecute("ARRAY[1] IN (null, ARRAY[1])", BOOLEAN, true);
+        assertExecute("ARRAY[1, 2, null] IN (ARRAY[2, null], ARRAY[1, null])", BOOLEAN, false);
+        assertExecute("ARRAY[1, null] IN (ARRAY[2, null], null)", BOOLEAN, null);
+        assertExecute("ARRAY[null] IN (ARRAY[null])", BOOLEAN, null);
+        assertExecute("ARRAY[1] IN (ARRAY[null])", BOOLEAN, null);
+        assertExecute("ARRAY[null] IN (ARRAY[1])", BOOLEAN, null);
+        assertExecute("ARRAY[1, null] IN (ARRAY[1, null])", BOOLEAN, null);
+        assertExecute("ARRAY[1, null] IN (ARRAY[2, null])", BOOLEAN, false);
+        assertExecute("ARRAY[1, null] IN (ARRAY[1, null], ARRAY[2, null])", BOOLEAN, null);
+        assertExecute("ARRAY[1, null] IN (ARRAY[1, null], ARRAY[2, null], ARRAY[1, null])", BOOLEAN, null);
+
+        assertExecute("ROW(1) IN (ROW(1))", BOOLEAN, true);
+        assertExecute("ROW(1) IN (ROW(2))", BOOLEAN, false);
+        assertExecute("ROW(1) IN (ROW(2), ROW(1), ROW(2))", BOOLEAN, true);
+        assertExecute("ROW(1) IN (null)", BOOLEAN, null);
+        assertExecute("ROW(1) IN (null, ROW(1))", BOOLEAN, true);
+        assertExecute("ROW(1, null) IN (ROW(2, null), null)", BOOLEAN, null);
+        assertExecute("ROW(null) IN (ROW(null))", BOOLEAN, null);
+        assertExecute("ROW(1) IN (ROW(null))", BOOLEAN, null);
+        assertExecute("ROW(null) IN (ROW(1))", BOOLEAN, null);
+        assertExecute("ROW(1, null) IN (ROW(1, null))", BOOLEAN, null);
+        assertExecute("ROW(1, null) IN (ROW(2, null))", BOOLEAN, false);
+        assertExecute("ROW(1, null) IN (ROW(1, null), ROW(2, null))", BOOLEAN, null);
+        assertExecute("ROW(1, null) IN (ROW(1, null), ROW(2, null), ROW(1, null))", BOOLEAN, null);
+
+        assertExecute("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1], ARRAY[1]))", BOOLEAN, true);
+        assertExecute("MAP(ARRAY[1], ARRAY[1]) IN (null)", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1], ARRAY[1]) IN (null, MAP(ARRAY[1], ARRAY[1]))", BOOLEAN, true);
+        assertExecute("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", BOOLEAN, false);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[2, null]), null)", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 3], ARRAY[1, null]))", BOOLEAN, false);
+        assertExecute("MAP(ARRAY[1], ARRAY[null]) IN (MAP(ARRAY[1], ARRAY[null]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1], ARRAY[null]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1], ARRAY[null]) IN (MAP(ARRAY[1], ARRAY[1]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 3], ARRAY[1, null]))", BOOLEAN, false);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[2, null]))", BOOLEAN, false);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]), MAP(ARRAY[1, 2], ARRAY[2, null]))", BOOLEAN, null);
+        assertExecute("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]), MAP(ARRAY[1, 2], ARRAY[2, null]), MAP(ARRAY[1, 2], ARRAY[1, null]))", BOOLEAN, null);
+    }
+
+    @Test
     public void testFunctionCall()
             throws Exception
     {
@@ -1402,7 +1462,14 @@ public class TestExpressionCompiler
                     millis = left.getMillis();
                     expected = callExtractFunction(TEST_SESSION.toConnectorSession(), millis, field);
                 }
-                assertExecute(generateExpression("extract(" + field.toString() + " from from_unixtime(%s / 1000.0E0, 0, 0))", millis), BIGINT, expected);
+                DateTimeZone zone = getDateTimeZone(TEST_SESSION.getTimeZoneKey());
+                long zoneOffsetMinutes = millis != null ? MILLISECONDS.toMinutes(zone.getOffset(millis)) : 0;
+                String expressionPattern = format(
+                        "extract(%s from from_unixtime(%%s / 1000.0E0, %s, %s))",
+                        field,
+                        zoneOffsetMinutes / 60,
+                        zoneOffsetMinutes % 60);
+                assertExecute(generateExpression(expressionPattern, millis), BIGINT, expected);
             }
         }
 
@@ -1519,6 +1586,9 @@ public class TestExpressionCompiler
         assertExecute("nullif(NULL, 2)", UNKNOWN, null);
         assertExecute("nullif(2, NULL)", INTEGER, 2);
         assertExecute("nullif(BIGINT '2', NULL)", BIGINT, 2L);
+        assertExecute("nullif(ARRAY[CAST(1 AS BIGINT)], ARRAY[CAST(1 AS BIGINT)])", new ArrayType(BIGINT), null);
+        assertExecute("nullif(ARRAY[CAST(1 AS BIGINT)], ARRAY[CAST(NULL AS BIGINT)])", new ArrayType(BIGINT), ImmutableList.of(1L));
+        assertExecute("nullif(ARRAY[CAST(NULL AS BIGINT)], ARRAY[CAST(NULL AS BIGINT)])", new ArrayType(BIGINT), singletonList(null));
 
         // Test coercion in which the CAST function takes ConnectorSession (e.g. MapToMapCast)
         assertExecute("nullif(" +

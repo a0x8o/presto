@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.TableHandle;
@@ -60,6 +61,7 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 
 @Test(singleThreaded = true)
 public class TestTypeValidator
@@ -101,7 +103,7 @@ public class TestTypeValidator
                 assignments,
                 Optional.empty(),
                 TupleDomain.all(),
-                null);
+                TupleDomain.all());
     }
 
     @Test
@@ -197,7 +199,7 @@ public class TestTypeValidator
                                 ImmutableList.of(DOUBLE.getTypeSignature()),
                                 false),
                         Optional.empty())),
-                ImmutableList.of(ImmutableList.of(columnA, columnB)),
+                singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
@@ -255,7 +257,7 @@ public class TestTypeValidator
                                 ImmutableList.of(DOUBLE.getTypeSignature()),
                                 false),
                         Optional.empty())),
-                ImmutableList.of(ImmutableList.of(columnA, columnB)),
+                singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
@@ -283,7 +285,7 @@ public class TestTypeValidator
                                 ImmutableList.of(DOUBLE.getTypeSignature()),
                                 false),
                         Optional.empty())),
-                ImmutableList.of(ImmutableList.of(columnA, columnB)),
+                singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
@@ -390,7 +392,7 @@ public class TestTypeValidator
 
     private void assertTypesValid(PlanNode node)
     {
-        TYPE_VALIDATOR.validate(node, TEST_SESSION, createTestMetadataManager(), SQL_PARSER, symbolAllocator.getTypes());
+        TYPE_VALIDATOR.validate(node, TEST_SESSION, createTestMetadataManager(), SQL_PARSER, symbolAllocator.getTypes(), WarningCollector.NOOP);
     }
 
     private static PlanNodeId newId()

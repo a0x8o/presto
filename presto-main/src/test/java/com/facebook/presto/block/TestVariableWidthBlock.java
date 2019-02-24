@@ -15,15 +15,19 @@ package com.facebook.presto.block;
 
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.VariableWidthBlock;
 import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.VarcharType;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
+import static io.airlift.slice.Slices.EMPTY_SLICE;
 import static java.lang.String.format;
 import static java.util.Arrays.copyOfRange;
 import static org.testng.Assert.assertEquals;
@@ -37,7 +41,7 @@ public class TestVariableWidthBlock
     {
         Slice[] expectedValues = createExpectedValues(100);
         assertVariableWithValues(expectedValues);
-        assertVariableWithValues((Slice[]) alternatingNullValues(expectedValues));
+        assertVariableWithValues(alternatingNullValues(expectedValues));
     }
 
     @Test
@@ -54,7 +58,7 @@ public class TestVariableWidthBlock
     @Test
     public void testCopyPositions()
     {
-        Slice[] expectedValues = (Slice[]) alternatingNullValues(createExpectedValues(100));
+        Slice[] expectedValues = alternatingNullValues(createExpectedValues(100));
         BlockBuilder blockBuilder = createBlockBuilderWithValues(expectedValues);
         assertBlockFilteredPositions(expectedValues, blockBuilder.build(), () -> blockBuilder.newBlockBuilderLike(null), 0, 2, 4, 6, 7, 9, 10, 16);
     }
@@ -102,6 +106,29 @@ public class TestVariableWidthBlock
         assertTrue(quarter3size > expectedQuarterSizeMin && quarter3size < expectedQuarterSizeMax, format("quarter3size is %s, should be between %s and %s", quarter3size, expectedQuarterSizeMin, expectedQuarterSizeMax));
         assertTrue(quarter4size > expectedQuarterSizeMin && quarter4size < expectedQuarterSizeMax, format("quarter4size is %s, should be between %s and %s", quarter4size, expectedQuarterSizeMin, expectedQuarterSizeMax));
         assertEquals(quarter1size + quarter2size + quarter3size + quarter4size, sizeInBytes);
+    }
+
+    @Test
+    public void testEstimatedDataSizeForStats()
+    {
+        Slice[] expectedValues = createExpectedValues(100);
+        assertEstimatedDataSizeForStats(createBlockBuilderWithValues(expectedValues), expectedValues);
+    }
+
+    @Test
+    public void testCompactBlock()
+    {
+        Slice compactSlice = Slices.copyOf(createExpectedValue(16));
+        Slice incompactSlice = Slices.copyOf(createExpectedValue(20)).slice(0, 16);
+        int[] offsets = {0, 1, 1, 2, 4, 8, 16};
+        boolean[] valueIsNull = {false, true, false, false, false, false};
+
+        testCompactBlock(new VariableWidthBlock(0, EMPTY_SLICE, new int[1], Optional.empty()));
+        testCompactBlock(new VariableWidthBlock(valueIsNull.length, compactSlice, offsets, Optional.of(valueIsNull)));
+
+        testIncompactBlock(new VariableWidthBlock(valueIsNull.length - 1, compactSlice, offsets, Optional.of(valueIsNull)));
+        // underlying slice is not compact
+        testIncompactBlock(new VariableWidthBlock(valueIsNull.length, incompactSlice, offsets, Optional.of(valueIsNull)));
     }
 
     private void assertVariableWithValues(Slice[] expectedValues)

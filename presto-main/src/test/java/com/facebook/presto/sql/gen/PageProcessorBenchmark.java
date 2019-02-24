@@ -15,6 +15,7 @@ package com.facebook.presto.sql.gen;
 
 import com.facebook.presto.SequencePageBuilder;
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.DriverYieldSignal;
@@ -59,6 +60,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.createExpression;
@@ -138,7 +140,12 @@ public class PageProcessorBenchmark
     @Benchmark
     public List<Optional<Page>> columnOriented()
     {
-        return ImmutableList.copyOf(pageProcessor.process(null, new DriverYieldSignal(), inputPage));
+        return ImmutableList.copyOf(
+                pageProcessor.process(
+                        null,
+                        new DriverYieldSignal(),
+                        newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
+                        inputPage));
     }
 
     private RowExpression getFilter(Type type)
@@ -181,8 +188,8 @@ public class PageProcessorBenchmark
         }
         Map<Integer, Type> types = builder.build();
 
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, METADATA, SQL_PARSER, types, inputReferenceExpression, emptyList());
-        return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, METADATA.getFunctionRegistry(), METADATA.getTypeManager(), TEST_SESSION, true);
+        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, METADATA, SQL_PARSER, types, inputReferenceExpression, emptyList(), WarningCollector.NOOP);
+        return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, METADATA.getFunctionManager(), METADATA.getTypeManager(), TEST_SESSION, true);
     }
 
     private static Page createPage(List<? extends Type> types, boolean dictionary)

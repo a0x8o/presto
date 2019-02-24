@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.type;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.CharType;
@@ -60,6 +60,7 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.P4HyperLogLogType.P4_HYPER_LOG_LOG;
+import static com.facebook.presto.spi.type.QuantileDigestParametricType.QDIGEST;
 import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.facebook.presto.spi.type.RowType.Field;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
@@ -100,7 +101,7 @@ public final class TypeRegistry
     private final ConcurrentMap<String, ParametricType> parametricTypes = new ConcurrentHashMap<>();
     private final FeaturesConfig featuresConfig;
 
-    private FunctionRegistry functionRegistry;
+    private FunctionManager functionManager;
 
     private final LoadingCache<TypeSignature, Type> parametricTypeCache;
 
@@ -153,6 +154,7 @@ public final class TypeRegistry
         addParametricType(ARRAY);
         addParametricType(MAP);
         addParametricType(FUNCTION);
+        addParametricType(QDIGEST);
 
         for (Type type : types) {
             addType(type);
@@ -162,10 +164,10 @@ public final class TypeRegistry
                 .build(CacheLoader.from(this::instantiateParametricType));
     }
 
-    public void setFunctionRegistry(FunctionRegistry functionRegistry)
+    public void setFunctionManager(FunctionManager functionManager)
     {
-        checkState(this.functionRegistry == null, "TypeRegistry can only be associated with a single FunctionRegistry");
-        this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
+        checkState(this.functionManager == null, "TypeRegistry can only be associated with a single FunctionManager");
+        this.functionManager = requireNonNull(functionManager, "functionManager is null");
     }
 
     @Override
@@ -659,8 +661,8 @@ public final class TypeRegistry
     @Override
     public MethodHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
     {
-        requireNonNull(functionRegistry, "functionRegistry is null");
-        return functionRegistry.getScalarFunctionImplementation(functionRegistry.resolveOperator(operatorType, argumentTypes)).getMethodHandle();
+        requireNonNull(functionManager, "functionManager is null");
+        return functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(operatorType, argumentTypes)).getMethodHandle();
     }
 
     public static class TypeCompatibility

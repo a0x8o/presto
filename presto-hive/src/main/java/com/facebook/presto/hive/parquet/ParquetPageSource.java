@@ -14,7 +14,9 @@
 package com.facebook.presto.hive.parquet;
 
 import com.facebook.presto.hive.HiveColumnHandle;
-import com.facebook.presto.hive.parquet.reader.ParquetReader;
+import com.facebook.presto.parquet.Field;
+import com.facebook.presto.parquet.ParquetCorruptionException;
+import com.facebook.presto.parquet.reader.ParquetReader;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
@@ -38,9 +40,9 @@ import java.util.Properties;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.getFieldIndex;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.getParquetType;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.lookupColumnByName;
+import static com.facebook.presto.hive.parquet.ParquetPageSourceFactory.getParquetType;
+import static com.facebook.presto.parquet.ParquetTypeUtils.getFieldIndex;
+import static com.facebook.presto.parquet.ParquetTypeUtils.lookupColumnByName;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 import static parquet.io.ColumnIOConverter.constructField;
@@ -62,7 +64,6 @@ public class ParquetPageSource
 
     private int batchId;
     private boolean closed;
-    private long readTimeNanos;
     private final boolean useParquetColumnNames;
 
     public ParquetPageSource(
@@ -123,7 +124,7 @@ public class ParquetPageSource
     @Override
     public long getReadTimeNanos()
     {
-        return readTimeNanos;
+        return parquetReader.getDataSource().getReadTimeNanos();
     }
 
     @Override
@@ -143,11 +144,7 @@ public class ParquetPageSource
     {
         try {
             batchId++;
-            long start = System.nanoTime();
-
             int batchSize = parquetReader.nextBatch();
-
-            readTimeNanos += System.nanoTime() - start;
 
             if (closed || batchSize <= 0) {
                 close();

@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.operator.index;
 
-import com.facebook.presto.ScheduledSplit;
-import com.facebook.presto.TaskSource;
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.ScheduledSplit;
+import com.facebook.presto.execution.TaskSource;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.Driver;
 import com.facebook.presto.operator.DriverFactory;
@@ -249,7 +249,7 @@ public class IndexLoader
         if (pipelineContext == null) {
             TaskContext taskContext = taskContextReference.get();
             checkState(taskContext != null, "Task context must be set before index can be built");
-            pipelineContext = taskContext.addPipelineContext(indexBuildDriverFactoryProvider.getPipelineId(), false, false);
+            pipelineContext = taskContext.addPipelineContext(indexBuildDriverFactoryProvider.getPipelineId(), true, true, false);
         }
         if (indexSnapshotLoader == null) {
             indexSnapshotLoader = new IndexSnapshotLoader(

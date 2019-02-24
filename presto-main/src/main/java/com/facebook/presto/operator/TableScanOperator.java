@@ -113,7 +113,7 @@ public class TableScanOperator
         this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
         this.pageSourceProvider = requireNonNull(pageSourceProvider, "pageSourceProvider is null");
         this.columns = ImmutableList.copyOf(requireNonNull(columns, "columns is null"));
-        this.systemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        this.systemMemoryContext = operatorContext.newLocalSystemMemoryContext(TableScanOperator.class.getSimpleName());
     }
 
     @Override
@@ -247,7 +247,8 @@ public class TableScanOperator
             // update operator stats
             long endCompletedBytes = source.getCompletedBytes();
             long endReadTimeNanos = source.getReadTimeNanos();
-            operatorContext.recordGeneratedInput(endCompletedBytes - completedBytes, page.getPositionCount(), endReadTimeNanos - readTimeNanos);
+            operatorContext.recordRawInputWithTiming(endCompletedBytes - completedBytes, endReadTimeNanos - readTimeNanos);
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
             completedBytes = endCompletedBytes;
             readTimeNanos = endReadTimeNanos;
         }

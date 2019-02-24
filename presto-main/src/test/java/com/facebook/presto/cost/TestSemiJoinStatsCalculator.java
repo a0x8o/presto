@@ -21,7 +21,6 @@ import org.testng.annotations.Test;
 import static com.facebook.presto.cost.PlanNodeStatsAssertion.assertThat;
 import static com.facebook.presto.cost.SemiJoinStatsCalculator.computeAntiJoin;
 import static com.facebook.presto.cost.SemiJoinStatsCalculator.computeSemiJoin;
-import static com.facebook.presto.cost.SymbolStatsEstimate.UNKNOWN_STATS;
 import static java.lang.Double.NEGATIVE_INFINITY;
 import static java.lang.Double.NaN;
 import static java.lang.Double.POSITIVE_INFINITY;
@@ -38,6 +37,7 @@ public class TestSemiJoinStatsCalculator
     private SymbolStatsEstimate rightOpenStats;
     private SymbolStatsEstimate unknownRangeStats;
     private SymbolStatsEstimate emptyRangeStats;
+    private SymbolStatsEstimate fractionalNdvStats;
 
     private Symbol u = new Symbol("u");
     private Symbol w = new Symbol("w");
@@ -49,6 +49,7 @@ public class TestSemiJoinStatsCalculator
     private Symbol unknownRange = new Symbol("unknownRange");
     private Symbol emptyRange = new Symbol("emptyRange");
     private Symbol unknown = new Symbol("unknown");
+    private Symbol fractionalNdv = new Symbol("fractionalNdv");
 
     @BeforeMethod
     public void setUp()
@@ -117,6 +118,11 @@ public class TestSemiJoinStatsCalculator
                 .setHighValue(NaN)
                 .setNullsFraction(NaN)
                 .build();
+        fractionalNdvStats = SymbolStatsEstimate.builder()
+                .setAverageRowSize(NaN)
+                .setDistinctValuesCount(0.1)
+                .setNullsFraction(0)
+                .build();
         inputStatistics = PlanNodeStatsEstimate.builder()
                 .addSymbolStatistics(u, uStats)
                 .addSymbolStatistics(w, wStats)
@@ -127,7 +133,8 @@ public class TestSemiJoinStatsCalculator
                 .addSymbolStatistics(rightOpen, rightOpenStats)
                 .addSymbolStatistics(unknownRange, unknownRangeStats)
                 .addSymbolStatistics(emptyRange, emptyRangeStats)
-                .addSymbolStatistics(unknown, UNKNOWN_STATS)
+                .addSymbolStatistics(unknown, SymbolStatsEstimate.unknown())
+                .addSymbolStatistics(fractionalNdv, fractionalNdvStats)
                 .setOutputRowCount(1000.0)
                 .build();
     }
@@ -177,6 +184,17 @@ public class TestSemiJoinStatsCalculator
                 .symbolStatsUnknown(unknown)
                 .symbolStats(z, stats -> stats.isEqualTo(zStats))
                 .outputRowsCountUnknown();
+
+        // zero distinct values
+        assertThat(computeSemiJoin(inputStatistics, inputStatistics, emptyRange, emptyRange))
+                .outputRowsCount(0);
+
+        // fractional distinct values
+        assertThat(computeSemiJoin(inputStatistics, inputStatistics, fractionalNdv, fractionalNdv))
+                .outputRowsCount(1000)
+                .symbolStats(fractionalNdv, stats -> stats
+                        .nullsFraction(0)
+                        .distinctValuesCount(0.1));
     }
 
     @Test
@@ -205,7 +223,7 @@ public class TestSemiJoinStatsCalculator
                 .outputRowsCount(inputStatistics.getOutputRowCount() * xStats.getValuesFraction() * 0.5);
 
         // source stats are unknown
-        assertThat(computeSemiJoin(inputStatistics, inputStatistics, unknown, u))
+        assertThat(computeAntiJoin(inputStatistics, inputStatistics, unknown, u))
                 .symbolStats(unknown, stats -> stats
                         .nullsFraction(0)
                         .distinctValuesCountUnknown()
@@ -215,7 +233,7 @@ public class TestSemiJoinStatsCalculator
                 .outputRowsCountUnknown();
 
         // filtering stats are unknown
-        assertThat(computeSemiJoin(inputStatistics, inputStatistics, x, unknown))
+        assertThat(computeAntiJoin(inputStatistics, inputStatistics, x, unknown))
                 .symbolStats(x, stats -> stats
                         .nullsFraction(0)
                         .lowValue(xStats.getLowValue())
@@ -224,5 +242,16 @@ public class TestSemiJoinStatsCalculator
                 .symbolStatsUnknown(unknown)
                 .symbolStats(z, stats -> stats.isEqualTo(zStats))
                 .outputRowsCountUnknown();
+
+        // zero distinct values
+        assertThat(computeAntiJoin(inputStatistics, inputStatistics, emptyRange, emptyRange))
+                .outputRowsCount(0);
+
+        // fractional distinct values
+        assertThat(computeAntiJoin(inputStatistics, inputStatistics, fractionalNdv, fractionalNdv))
+                .outputRowsCount(500)
+                .symbolStats(fractionalNdv, stats -> stats
+                        .nullsFraction(0)
+                        .distinctValuesCount(0.05));
     }
 }

@@ -62,6 +62,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return block.getPositionsSizeInBytes(positions);
+    }
+
+    @Override
     public Block copyRegion(int positionOffset, int length)
     {
         return block.copyRegion(positionOffset, length);
@@ -179,6 +185,12 @@ public class GroupByIdBlock
     public long getRetainedSizeInBytes()
     {
         return INSTANCE_SIZE + block.getRetainedSizeInBytes();
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return block.getEstimatedDataSizeForStats(position);
     }
 
     @Override

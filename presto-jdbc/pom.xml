@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.207-SNAPSHOT</version>
+        <version>0.218-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-jdbc</artifactId>
@@ -67,6 +67,12 @@
                     <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>jsr305</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- for testing -->
@@ -145,6 +151,28 @@
 
     <build>
         <plugins>
+            <!-- workaround for MSHADE-195 -->
+            <plugin>
+                <artifactId>maven-source-plugin</artifactId>
+                <executions>
+                    <!-- disable the default execution -->
+                    <execution>
+                        <id>attach-sources</id>
+                        <configuration>
+                            <skipSource>true</skipSource>
+                        </configuration>
+                    </execution>
+                    <!-- enable only the test jar; the sources jar is attached by the shade plugin -->
+                    <execution>
+                        <id>test-only</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>test-jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -182,6 +210,10 @@
                                 <relocation>
                                     <pattern>io.airlift</pattern>
                                     <shadedPattern>${shadeBase}.airlift</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>javax.annotation</pattern>
+                                    <shadedPattern>${shadeBase}.javax.annotation</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>javax.inject</pattern>

@@ -30,10 +30,9 @@ import javax.inject.Inject;
 
 import java.math.RoundingMode;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
-import static com.facebook.presto.tests.TestGroups.BASIC_SQL;
+import static com.facebook.presto.tests.TestGroups.HIVE_PARTITIONING;
 import static io.prestodb.tempto.Requirements.compose;
 import static io.prestodb.tempto.assertions.QueryAssert.Row.row;
 import static io.prestodb.tempto.assertions.QueryAssert.assertThat;
@@ -77,8 +76,8 @@ public class TestHivePartitionsTable
                 "PARTITIONED BY (part_col INT) " +
                 "STORED AS ORC";
 
-        HiveDataSource dataSource = createResourceDataSource(PARTITIONED_TABLE, String.valueOf(ThreadLocalRandom.current().nextLong(Long.MAX_VALUE)), "com/facebook/presto/tests/hive/data/single_int_column/data.orc");
-        HiveDataSource invalidData = createStringDataSource(PARTITIONED_TABLE, String.valueOf(ThreadLocalRandom.current().nextLong(Long.MAX_VALUE)), "INVALID DATA");
+        HiveDataSource dataSource = createResourceDataSource(PARTITIONED_TABLE, "com/facebook/presto/tests/hive/data/single_int_column/data.orc");
+        HiveDataSource invalidData = createStringDataSource(PARTITIONED_TABLE, "INVALID DATA");
         return HiveTableDefinition.builder(PARTITIONED_TABLE)
                 .setCreateTableDDLTemplate(createTableDdl)
                 .addPartition("part_col = 1", invalidData)
@@ -98,7 +97,7 @@ public class TestHivePartitionsTable
                 .build();
     }
 
-    @Test(groups = {BASIC_SQL})
+    @Test(groups = {HIVE_PARTITIONING})
     public void testShowPartitionsFromHiveTable()
     {
         String tableNameInDatabase = tablesState.get(PARTITIONED_TABLE).getNameInDatabase();
@@ -120,14 +119,14 @@ public class TestHivePartitionsTable
                 .failsWithMessage("Column 'col' cannot be resolved");
     }
 
-    @Test(groups = {BASIC_SQL})
+    @Test(groups = {HIVE_PARTITIONING})
     public void testShowPartitionsFromUnpartitionedTable()
     {
         assertThat(() -> query("SELECT * FROM \"nation$partitions\""))
                 .failsWithMessageMatching(".*Table hive.default.nation\\$partitions does not exist");
     }
 
-    @Test(groups = {BASIC_SQL})
+    @Test(groups = {HIVE_PARTITIONING})
     public void testShowPartitionsFromHiveTableWithTooManyPartitions()
     {
         String tableName = tablesState.get(PARTITIONED_TABLE_WITH_VARIABLE_PARTITIONS).getNameInDatabase();

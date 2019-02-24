@@ -55,7 +55,7 @@ public class HandTpchQuery6
     {
         super(localQueryRunner, "hand_tpch_query_6", 10, 100);
 
-        doubleSum = localQueryRunner.getMetadata().getFunctionRegistry().getAggregateFunctionImplementation(
+        doubleSum = localQueryRunner.getMetadata().getFunctionManager().getAggregateFunctionImplementation(
                 new Signature("sum", AGGREGATE, DOUBLE.getTypeSignature(), DOUBLE.getTypeSignature()));
     }
 
@@ -86,7 +86,8 @@ public class HandTpchQuery6
                 new PlanNodeId("test"),
                 Step.SINGLE,
                 ImmutableList.of(
-                        doubleSum.bind(ImmutableList.of(0), Optional.empty())));
+                        doubleSum.bind(ImmutableList.of(0), Optional.empty())),
+                false);
 
         return ImmutableList.of(tableScanOperator, tpchQuery6Operator, aggregationOperator);
     }

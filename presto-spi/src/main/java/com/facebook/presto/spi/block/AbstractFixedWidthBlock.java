@@ -18,6 +18,7 @@ import io.airlift.slice.Slices;
 import io.airlift.slice.XxHash64;
 
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
+import static com.facebook.presto.spi.block.BlockUtil.countUsedPositions;
 
 public abstract class AbstractFixedWidthBlock
         implements Block
@@ -166,6 +167,12 @@ public abstract class AbstractFixedWidthBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : fixedSize;
+    }
+
+    @Override
     public boolean isNull(int position)
     {
         checkReadablePosition(position);
@@ -178,6 +185,12 @@ public abstract class AbstractFixedWidthBlock
         int positionCount = getPositionCount();
         checkValidRegion(positionCount, positionOffset, length);
         return (fixedSize + Byte.BYTES) * (long) length;
+    }
+
+    @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return (fixedSize + Byte.BYTES) * (long) countUsedPositions(positions);
     }
 
     private int valueOffset(int position)

@@ -32,15 +32,18 @@ public final class SimpleLocalMemoryContext
     private static final ListenableFuture<?> NOT_BLOCKED = Futures.immediateFuture(null);
 
     private final AbstractAggregatedMemoryContext parentMemoryContext;
+    private final String allocationTag;
+
     @GuardedBy("this")
     private long usedBytes;
     @GuardedBy("this")
     private boolean closed;
 
-    public SimpleLocalMemoryContext(AggregatedMemoryContext parentMemoryContext)
+    public SimpleLocalMemoryContext(AggregatedMemoryContext parentMemoryContext, String allocationTag)
     {
         verify(parentMemoryContext instanceof AbstractAggregatedMemoryContext);
         this.parentMemoryContext = (AbstractAggregatedMemoryContext) requireNonNull(parentMemoryContext, "parentMemoryContext is null");
+        this.allocationTag = requireNonNull(allocationTag, "allocationTag is null");
     }
 
     @Override
@@ -60,7 +63,7 @@ public final class SimpleLocalMemoryContext
         }
 
         // update the parent first as it may throw a runtime exception (e.g., ExceededMemoryLimitException)
-        ListenableFuture<?> future = parentMemoryContext.updateBytes(bytes - usedBytes);
+        ListenableFuture<?> future = parentMemoryContext.updateBytes(allocationTag, bytes - usedBytes);
         usedBytes = bytes;
         return future;
     }
@@ -71,7 +74,7 @@ public final class SimpleLocalMemoryContext
         checkState(!closed, "SimpleLocalMemoryContext is already closed");
         checkArgument(bytes >= 0, "bytes cannot be negative");
         long delta = bytes - usedBytes;
-        if (parentMemoryContext.tryUpdateBytes(delta)) {
+        if (parentMemoryContext.tryUpdateBytes(allocationTag, delta)) {
             usedBytes = bytes;
             return true;
         }
@@ -85,7 +88,7 @@ public final class SimpleLocalMemoryContext
             return;
         }
         closed = true;
-        parentMemoryContext.updateBytes(-usedBytes);
+        parentMemoryContext.updateBytes(allocationTag, -usedBytes);
         usedBytes = 0;
     }
 
@@ -93,6 +96,7 @@ public final class SimpleLocalMemoryContext
     public synchronized String toString()
     {
         return toStringHelper(this)
+                .add("allocationTag", allocationTag)
                 .add("usedBytes", usedBytes)
                 .toString();
     }

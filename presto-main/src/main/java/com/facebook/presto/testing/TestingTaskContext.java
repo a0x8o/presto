@@ -16,8 +16,8 @@ package com.facebook.presto.testing;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
-import com.facebook.presto.memory.DefaultQueryContext;
 import com.facebook.presto.memory.MemoryPool;
+import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
@@ -59,12 +59,12 @@ public final class TestingTaskContext
                 .build();
     }
 
-    public static TaskContext createTaskContext(DefaultQueryContext queryContext, Executor executor, Session session)
+    public static TaskContext createTaskContext(QueryContext queryContext, Executor executor, Session session)
     {
         return createTaskContext(queryContext, session, new TaskStateMachine(new TaskId("query", 0, 0), executor));
     }
 
-    private static TaskContext createTaskContext(DefaultQueryContext queryContext, Session session, TaskStateMachine taskStateMachine)
+    private static TaskContext createTaskContext(QueryContext queryContext, Session session, TaskStateMachine taskStateMachine)
     {
         return queryContext.addTaskContext(
                 taskStateMachine,
@@ -87,7 +87,7 @@ public final class TestingTaskContext
         private QueryId queryId = new QueryId("test_query");
         private TaskStateMachine taskStateMachine;
         private DataSize queryMaxMemory = new DataSize(256, MEGABYTE);
-        private DataSize queryMaxTotalMemory = new DataSize(512, MEGABYTE);
+        private final DataSize queryMaxTotalMemory = new DataSize(512, MEGABYTE);
         private DataSize memoryPoolSize = new DataSize(1, GIGABYTE);
         private DataSize maxSpillSize = new DataSize(1, GIGABYTE);
         private DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
@@ -140,7 +140,7 @@ public final class TestingTaskContext
         {
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), memoryPoolSize);
             SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(maxSpillSize);
-            DefaultQueryContext queryContext = new DefaultQueryContext(
+            QueryContext queryContext = new QueryContext(
                     queryId,
                     queryMaxMemory,
                     queryMaxTotalMemory,

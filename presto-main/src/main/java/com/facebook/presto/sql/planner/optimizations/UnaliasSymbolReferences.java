@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.sql.planner.DeterminismEvaluator;
@@ -52,6 +53,8 @@ import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SetOperationNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
+import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
@@ -105,7 +108,7 @@ public class UnaliasSymbolReferences
         implements PlanOptimizer
 {
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
@@ -223,18 +226,7 @@ public class UnaliasSymbolReferences
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<Void> context)
         {
-            Expression originalConstraint = null;
-            if (node.getOriginalConstraint() != null) {
-                originalConstraint = canonicalize(node.getOriginalConstraint());
-            }
-            return new TableScanNode(
-                    node.getId(),
-                    node.getTable(),
-                    node.getOutputSymbols(),
-                    node.getAssignments(),
-                    node.getLayout(),
-                    node.getCurrentConstraint(),
-                    originalConstraint);
+            return node;
         }
 
         @Override
@@ -328,7 +320,8 @@ public class UnaliasSymbolReferences
                     node.getId(),
                     node.getSourceFragmentIds(),
                     canonicalizeAndDistinct(node.getOutputSymbols()),
-                    node.getOrderingScheme().map(this::canonicalizeAndDistinct));
+                    node.getOrderingScheme().map(this::canonicalizeAndDistinct),
+                    node.getExchangeType());
         }
 
         @Override
@@ -370,9 +363,19 @@ public class UnaliasSymbolReferences
         }
 
         @Override
+        public PlanNode visitStatisticsWriterNode(StatisticsWriterNode node, RewriteContext<Void> context)
+        {
+            PlanNode source = context.rewrite(node.getSource());
+            SymbolMapper mapper = new SymbolMapper(mapping);
+            return mapper.map(node, source);
+        }
+
+        @Override
         public PlanNode visitTableFinish(TableFinishNode node, RewriteContext<Void> context)
         {
-            return context.defaultRewrite(node);
+            PlanNode source = context.rewrite(node.getSource());
+            SymbolMapper mapper = new SymbolMapper(mapping);
+            return mapper.map(node, source);
         }
 
         @Override
@@ -511,6 +514,15 @@ public class UnaliasSymbolReferences
         }
 
         @Override
+        public PlanNode visitSpatialJoin(SpatialJoinNode node, RewriteContext<Void> context)
+        {
+            PlanNode left = context.rewrite(node.getLeft());
+            PlanNode right = context.rewrite(node.getRight());
+
+            return new SpatialJoinNode(node.getId(), node.getType(), left, right, canonicalizeAndDistinct(node.getOutputSymbols()), canonicalize(node.getFilter()), canonicalize(node.getLeftPartitionSymbol()), canonicalize(node.getRightPartitionSymbol()), node.getKdbTree());
+        }
+
+        @Override
         public PlanNode visitIndexSource(IndexSourceNode node, RewriteContext<Void> context)
         {
             return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), node.getLayout(), canonicalize(node.getLookupSymbols()), node.getOutputSymbols(), node.getAssignments(), node.getCurrentConstraint());
@@ -556,20 +568,8 @@ public class UnaliasSymbolReferences
         public PlanNode visitTableWriter(TableWriterNode node, RewriteContext<Void> context)
         {
             PlanNode source = context.rewrite(node.getSource());
-
-            // Intentionally does not use canonicalizeAndDistinct as that would remove columns
-            ImmutableList<Symbol> columns = node.getColumns().stream()
-                    .map(this::canonicalize)
-                    .collect(toImmutableList());
-
-            return new TableWriterNode(
-                    node.getId(),
-                    source,
-                    node.getTarget(),
-                    columns,
-                    node.getColumnNames(),
-                    node.getOutputSymbols(),
-                    node.getPartitioningScheme().map(partitioningScheme -> canonicalizePartitionFunctionBinding(partitioningScheme, source)));
+            SymbolMapper mapper = new SymbolMapper(mapping);
+            return mapper.map(node, source);
         }
 
         @Override
@@ -730,25 +730,6 @@ public class UnaliasSymbolReferences
                 }
             }
             return builder.build();
-        }
-
-        private PartitioningScheme canonicalizePartitionFunctionBinding(PartitioningScheme scheme, PlanNode source)
-        {
-            Set<Symbol> addedOutputs = new HashSet<>();
-            ImmutableList.Builder<Symbol> outputs = ImmutableList.builder();
-            for (Symbol symbol : source.getOutputSymbols()) {
-                Symbol canonicalOutput = canonicalize(symbol);
-                if (addedOutputs.add(canonicalOutput)) {
-                    outputs.add(canonicalOutput);
-                }
-            }
-
-            return new PartitioningScheme(
-                    scheme.getPartitioning().translate(this::canonicalize),
-                    outputs.build(),
-                    canonicalize(scheme.getHashColumn()),
-                    scheme.isReplicateNullsAndAny(),
-                    scheme.getBucketToPartition());
         }
     }
 }

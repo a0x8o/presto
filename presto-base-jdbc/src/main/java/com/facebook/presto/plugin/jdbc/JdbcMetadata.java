@@ -31,6 +31,8 @@ import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
+import com.facebook.presto.spi.statistics.ComputedStatistics;
+import com.facebook.presto.spi.statistics.TableStatistics;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
@@ -173,7 +175,7 @@ public class JdbcMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         JdbcOutputTableHandle handle = (JdbcOutputTableHandle) tableHandle;
         jdbcClient.commitCreateTable(handle);
@@ -199,14 +201,23 @@ public class JdbcMetadata
     @Override
     public ConnectorInsertTableHandle beginInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        return jdbcClient.beginInsertTable(getTableMetadata(session, tableHandle));
+        JdbcOutputTableHandle handle = jdbcClient.beginInsertTable(getTableMetadata(session, tableHandle));
+        setRollback(() -> jdbcClient.rollbackCreateTable(handle));
+        return handle;
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishInsert(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishInsert(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         JdbcOutputTableHandle jdbcInsertHandle = (JdbcOutputTableHandle) tableHandle;
         jdbcClient.finishInsertTable(jdbcInsertHandle);
         return Optional.empty();
+    }
+
+    @Override
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint<ColumnHandle> constraint)
+    {
+        JdbcTableHandle handle = (JdbcTableHandle) tableHandle;
+        return jdbcClient.getTableStatistics(session, handle, constraint.getSummary());
     }
 }

@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.operator.index;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.function.OperatorType;
@@ -31,6 +31,7 @@ import java.util.Set;
 import static com.facebook.presto.metadata.Signature.internalOperator;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfUnchecked;
+import static java.lang.Boolean.TRUE;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -42,9 +43,9 @@ public class FieldSetFilteringRecordSet
     private final RecordSet delegate;
     private final List<Set<Field>> fieldSets;
 
-    public FieldSetFilteringRecordSet(FunctionRegistry functionRegistry, RecordSet delegate, List<Set<Integer>> fieldSets)
+    public FieldSetFilteringRecordSet(FunctionManager functionManager, RecordSet delegate, List<Set<Integer>> fieldSets)
     {
-        requireNonNull(functionRegistry, "functionRegistry is null");
+        requireNonNull(functionManager, "functionManager is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
 
         ImmutableList.Builder<Set<Field>> fieldSetsBuilder = ImmutableList.builder();
@@ -54,7 +55,7 @@ public class FieldSetFilteringRecordSet
             for (int field : fieldSet) {
                 fieldSetBuilder.add(new Field(
                         field,
-                        functionRegistry.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
+                        functionManager.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
             }
             fieldSetsBuilder.add(fieldSetBuilder.build());
         }
@@ -172,19 +173,19 @@ public class FieldSetFilteringRecordSet
             Class<?> javaType = cursor.getType(field1.getField()).getJavaType();
             try {
                 if (javaType == long.class) {
-                    return (boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getLong(field1.getField()), cursor.getLong(field2.getField()));
+                    return TRUE.equals((Boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getLong(field1.getField()), cursor.getLong(field2.getField())));
                 }
                 else if (javaType == double.class) {
-                    return (boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getDouble(field1.getField()), cursor.getDouble(field2.getField()));
+                    return TRUE.equals((Boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getDouble(field1.getField()), cursor.getDouble(field2.getField())));
                 }
                 else if (javaType == boolean.class) {
-                    return (boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getBoolean(field1.getField()), cursor.getBoolean(field2.getField()));
+                    return TRUE.equals((Boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getBoolean(field1.getField()), cursor.getBoolean(field2.getField())));
                 }
                 else if (javaType == Slice.class) {
-                    return (boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getSlice(field1.getField()), cursor.getSlice(field2.getField()));
+                    return TRUE.equals((Boolean) field1.getEqualsMethodHandle().invokeExact(cursor.getSlice(field1.getField()), cursor.getSlice(field2.getField())));
                 }
                 else {
-                    return (boolean) field1.getEqualsMethodHandle().invoke(cursor.getObject(field1.getField()), cursor.getObject(field2.getField()));
+                    return TRUE.equals((Boolean) field1.getEqualsMethodHandle().invoke(cursor.getObject(field1.getField()), cursor.getObject(field2.getField())));
                 }
             }
             catch (Throwable t) {

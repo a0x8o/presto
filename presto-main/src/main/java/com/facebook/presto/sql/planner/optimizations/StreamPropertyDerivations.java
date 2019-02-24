@@ -46,6 +46,8 @@ import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
+import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
@@ -202,6 +204,20 @@ public final class StreamPropertyDerivations
         }
 
         @Override
+        public StreamProperties visitSpatialJoin(SpatialJoinNode node, List<StreamProperties> inputProperties)
+        {
+            StreamProperties leftProperties = inputProperties.get(0);
+
+            switch (node.getType()) {
+                case INNER:
+                case LEFT:
+                    return leftProperties.translate(column -> PropertyDerivations.filterIfMissing(node.getOutputSymbols(), column));
+                default:
+                    throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
+            }
+        }
+
+        @Override
         public StreamProperties visitIndexJoin(IndexJoinNode node, List<StreamProperties> inputProperties)
         {
             StreamProperties probeProperties = inputProperties.get(0);
@@ -298,7 +314,7 @@ public final class StreamPropertyDerivations
                     return new StreamProperties(
                             FIXED,
                             Optional.of(node.getPartitioningScheme().getPartitioning().getArguments().stream()
-                                    .map(ArgumentBinding::getColumn)
+                                    .map(ArgumentBinding::getSymbol)
                                     .collect(toImmutableList())), false);
                 case REPLICATE:
                     return new StreamProperties(MULTIPLE, Optional.empty(), false);
@@ -360,6 +376,14 @@ public final class StreamPropertyDerivations
 
             // Only grouped symbols projected symbols are passed through
             return properties.translate(symbol -> node.getGroupingKeys().contains(symbol) ? Optional.of(symbol) : Optional.empty());
+        }
+
+        @Override
+        public StreamProperties visitStatisticsWriterNode(StatisticsWriterNode node, List<StreamProperties> inputProperties)
+        {
+            StreamProperties properties = Iterables.getOnlyElement(inputProperties);
+            // analyze finish only outputs row count
+            return properties.withUnspecifiedPartitioning();
         }
 
         @Override

@@ -42,7 +42,7 @@ public class HashAggregationBenchmark
     {
         super(localQueryRunner, "hash_agg", 5, 25);
 
-        doubleSum = localQueryRunner.getMetadata().getFunctionRegistry().getAggregateFunctionImplementation(
+        doubleSum = localQueryRunner.getMetadata().getFunctionManager().getAggregateFunctionImplementation(
                 new Signature("sum", AGGREGATE, DOUBLE.getTypeSignature(), DOUBLE.getTypeSignature()));
     }
 
@@ -62,8 +62,9 @@ public class HashAggregationBenchmark
                 Optional.empty(),
                 Optional.empty(),
                 100_000,
-                new DataSize(16, MEGABYTE),
-                JOIN_COMPILER);
+                Optional.of(new DataSize(16, MEGABYTE)),
+                JOIN_COMPILER,
+                false);
         return ImmutableList.of(tableScanOperator, aggregationOperator);
     }
 

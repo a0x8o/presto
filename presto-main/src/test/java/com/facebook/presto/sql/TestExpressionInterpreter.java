@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql;
 
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.scalar.FunctionAssertions;
@@ -71,6 +72,7 @@ import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionT
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.expressionInterpreter;
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.expressionOptimizer;
 import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
+import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.String.format;
 import static java.util.Collections.emptyList;
@@ -100,6 +102,7 @@ public class TestExpressionInterpreter
             .put(new Symbol("unbound_integer"), INTEGER)
             .put(new Symbol("unbound_long"), BIGINT)
             .put(new Symbol("unbound_long2"), BIGINT)
+            .put(new Symbol("unbound_long3"), BIGINT)
             .put(new Symbol("unbound_string"), VARCHAR)
             .put(new Symbol("unbound_double"), DOUBLE)
             .put(new Symbol("unbound_boolean"), BOOLEAN)
@@ -276,6 +279,9 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("nullif(9876543210.9874561203, 9876543210.9874561203)", "null");
         assertOptimizedEquals("nullif(bound_decimal_short, 123.45)", "null");
         assertOptimizedEquals("nullif(bound_decimal_long, 12345678901234567890.123)", "null");
+        assertOptimizedEquals("nullif(ARRAY[CAST(1 AS BIGINT)], ARRAY[CAST(1 AS BIGINT)]) IS NULL", "true");
+        assertOptimizedEquals("nullif(ARRAY[CAST(1 AS BIGINT)], ARRAY[CAST(NULL AS BIGINT)]) IS NULL", "false");
+        assertOptimizedEquals("nullif(ARRAY[CAST(NULL AS BIGINT)], ARRAY[CAST(NULL AS BIGINT)]) IS NULL", "false");
     }
 
     @Test
@@ -370,7 +376,7 @@ public class TestExpressionInterpreter
     @Test
     public void testExtract()
     {
-        DateTime dateTime = new DateTime(2001, 8, 22, 3, 4, 5, 321, DateTimeZone.UTC);
+        DateTime dateTime = new DateTime(2001, 8, 22, 3, 4, 5, 321, getDateTimeZone(TEST_SESSION.getTimeZoneKey()));
         double seconds = dateTime.getMillis() / 1000.0;
 
         assertOptimizedEquals("extract (YEAR from from_unixtime(" + seconds + "))", "2001");
@@ -390,10 +396,10 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("extract (QUARTER from bound_timestamp)", "3");
         assertOptimizedEquals("extract (MONTH from bound_timestamp)", "8");
         assertOptimizedEquals("extract (WEEK from bound_timestamp)", "34");
-        assertOptimizedEquals("extract (DOW from bound_timestamp)", "3");
-        assertOptimizedEquals("extract (DOY from bound_timestamp)", "234");
-        assertOptimizedEquals("extract (DAY from bound_timestamp)", "22");
-        assertOptimizedEquals("extract (HOUR from bound_timestamp)", "3");
+        assertOptimizedEquals("extract (DOW from bound_timestamp)", "2");
+        assertOptimizedEquals("extract (DOY from bound_timestamp)", "233");
+        assertOptimizedEquals("extract (DAY from bound_timestamp)", "21");
+        assertOptimizedEquals("extract (HOUR from bound_timestamp)", "16");
         assertOptimizedEquals("extract (MINUTE from bound_timestamp)", "4");
         assertOptimizedEquals("extract (SECOND from bound_timestamp)", "5");
         // todo reenable when cast as timestamp with time zone is implemented
@@ -447,6 +453,56 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("bound_decimal_short in (123.455, 123.46, 123.45)", "true");
         assertOptimizedEquals("bound_decimal_long in (12345678901234567890.123, 9876543210.9874561204, 9876543210.98745612035)", "true");
         assertOptimizedEquals("bound_decimal_long in (9876543210.9874561204, null, 9876543210.98745612035)", "null");
+    }
+
+    @Test
+    public void testInComplexTypes()
+    {
+        assertEvaluatedEquals("ARRAY[1] IN (ARRAY[1])", "true");
+        assertEvaluatedEquals("ARRAY[1] IN (ARRAY[2])", "false");
+        assertEvaluatedEquals("ARRAY[1] IN (ARRAY[2], ARRAY[1])", "true");
+        assertEvaluatedEquals("ARRAY[1] IN (null)", "null");
+        assertEvaluatedEquals("ARRAY[1] IN (null, ARRAY[1])", "true");
+        assertEvaluatedEquals("ARRAY[1, 2, null] IN (ARRAY[2, null], ARRAY[1, null])", "false");
+        assertEvaluatedEquals("ARRAY[1, null] IN (ARRAY[2, null], null)", "null");
+        assertEvaluatedEquals("ARRAY[null] IN (ARRAY[null])", "null");
+        assertEvaluatedEquals("ARRAY[1] IN (ARRAY[null])", "null");
+        assertEvaluatedEquals("ARRAY[null] IN (ARRAY[1])", "null");
+        assertEvaluatedEquals("ARRAY[1, null] IN (ARRAY[1, null])", "null");
+        assertEvaluatedEquals("ARRAY[1, null] IN (ARRAY[2, null])", "false");
+        assertEvaluatedEquals("ARRAY[1, null] IN (ARRAY[1, null], ARRAY[2, null])", "null");
+        assertEvaluatedEquals("ARRAY[1, null] IN (ARRAY[1, null], ARRAY[2, null], ARRAY[1, null])", "null");
+        assertEvaluatedEquals("ARRAY[ARRAY[1, 2], ARRAY[3, 4]] in (ARRAY[ARRAY[1, 2], ARRAY[3, NULL]])", "null");
+
+        assertEvaluatedEquals("ROW(1) IN (ROW(1))", "true");
+        assertEvaluatedEquals("ROW(1) IN (ROW(2))", "false");
+        assertEvaluatedEquals("ROW(1) IN (ROW(2), ROW(1), ROW(2))", "true");
+        assertEvaluatedEquals("ROW(1) IN (null)", "null");
+        assertEvaluatedEquals("ROW(1) IN (null, ROW(1))", "true");
+        assertEvaluatedEquals("ROW(1, null) IN (ROW(2, null), null)", "null");
+        assertEvaluatedEquals("ROW(null) IN (ROW(null))", "null");
+        assertEvaluatedEquals("ROW(1) IN (ROW(null))", "null");
+        assertEvaluatedEquals("ROW(null) IN (ROW(1))", "null");
+        assertEvaluatedEquals("ROW(1, null) IN (ROW(1, null))", "null");
+        assertEvaluatedEquals("ROW(1, null) IN (ROW(2, null))", "false");
+        assertEvaluatedEquals("ROW(1, null) IN (ROW(1, null), ROW(2, null))", "null");
+        assertEvaluatedEquals("ROW(1, null) IN (ROW(1, null), ROW(2, null), ROW(1, null))", "null");
+
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1], ARRAY[1]))", "true");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[1]) IN (null)", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[1]) IN (null, MAP(ARRAY[1], ARRAY[1]))", "true");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", "false");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[2, null]), null)", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 3], ARRAY[1, null]))", "false");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[null]) IN (MAP(ARRAY[1], ARRAY[null]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[1]) IN (MAP(ARRAY[1], ARRAY[null]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1], ARRAY[null]) IN (MAP(ARRAY[1], ARRAY[1]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 3], ARRAY[1, null]))", "false");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[2, null]))", "false");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]), MAP(ARRAY[1, 2], ARRAY[2, null]))", "null");
+        assertEvaluatedEquals("MAP(ARRAY[1, 2], ARRAY[1, null]) IN (MAP(ARRAY[1, 2], ARRAY[1, null]), MAP(ARRAY[1, 2], ARRAY[2, null]), MAP(ARRAY[1, 2], ARRAY[1, null]))", "null");
     }
 
     @Test
@@ -829,6 +885,10 @@ public class TestExpressionInterpreter
                         "when true then 2.2 " +
                         "end",
                 "2.2");
+
+        assertOptimizedEquals("case when ARRAY[CAST(1 AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'matched'");
+        assertOptimizedEquals("case when ARRAY[CAST(2 AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'not_matched'");
+        assertOptimizedEquals("case when ARRAY[CAST(null AS BIGINT)] = ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'not_matched'");
     }
 
     @Test
@@ -1061,6 +1121,10 @@ public class TestExpressionInterpreter
                         "when true then 2.2 " +
                         "end",
                 "2.2");
+
+        assertOptimizedEquals("case ARRAY[CAST(1 AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'matched'");
+        assertOptimizedEquals("case ARRAY[CAST(2 AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'not_matched'");
+        assertOptimizedEquals("case ARRAY[CAST(null AS BIGINT)] when ARRAY[CAST(1 AS BIGINT)] then 'matched' else 'not_matched' end", "'not_matched'");
     }
 
     @Test
@@ -1073,7 +1137,24 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("coalesce(2 * 3 * unbound_integer, 1.0E0/2.0E0, null)", "coalesce(6 * unbound_integer, 0.5E0)");
         assertOptimizedEquals("coalesce(unbound_integer, 2, 1.0E0/2.0E0, 12.34E0, null)", "coalesce(unbound_integer, 2.0E0, 0.5E0, 12.34E0)");
         assertOptimizedMatches("coalesce(0 / 0 > 1, unbound_boolean, 0 / 0 = 0)",
-                "coalesce(cast(fail() as boolean), unbound_boolean, cast(fail() as boolean))");
+                "coalesce(cast(fail() as boolean), unbound_boolean)");
+        assertOptimizedMatches("coalesce(unbound_long, unbound_long)", "unbound_long");
+        assertOptimizedMatches("coalesce(2 * unbound_long, 2 * unbound_long)", "BIGINT '2' * unbound_long");
+        assertOptimizedMatches("coalesce(unbound_long, unbound_long2, unbound_long)", "coalesce(unbound_long, unbound_long2)");
+        assertOptimizedMatches("coalesce(unbound_long, unbound_long2, unbound_long, unbound_long3)", "coalesce(unbound_long, unbound_long2, unbound_long3)");
+        assertOptimizedEquals("coalesce(6, unbound_long2, unbound_long, unbound_long3)", "6");
+        assertOptimizedEquals("coalesce(2 * 3, unbound_long2, unbound_long, unbound_long3)", "6");
+        assertOptimizedMatches("coalesce(unbound_long, coalesce(unbound_long, 1))", "coalesce(unbound_long, BIGINT '1')");
+        assertOptimizedMatches("coalesce(coalesce(unbound_long, coalesce(unbound_long, 1)), unbound_long2)", "coalesce(unbound_long, BIGINT '1')");
+        assertOptimizedMatches("coalesce(unbound_long, 2, coalesce(unbound_long, 1))", "coalesce(unbound_long, BIGINT '2')");
+        assertOptimizedMatches("coalesce(coalesce(unbound_long, coalesce(unbound_long2, unbound_long3)), 1)", "coalesce(unbound_long, unbound_long2, unbound_long3, BIGINT '1')");
+        assertOptimizedMatches("coalesce(unbound_double, coalesce(random(), unbound_double))", "coalesce(unbound_double, random())");
+        assertOptimizedMatches("coalesce(random(), random(), 5)", "coalesce(random(), random(), 5E0)");
+        assertOptimizedMatches("coalesce(unbound_long, coalesce(unbound_long, 1))", "coalesce(unbound_long, BIGINT '1')");
+        assertOptimizedMatches("coalesce(coalesce(unbound_long, coalesce(unbound_long, 1)), unbound_long2)", "coalesce(unbound_long, BIGINT '1')");
+        assertOptimizedMatches("coalesce(unbound_long, 2, coalesce(unbound_long, 1))", "coalesce(unbound_long, BIGINT '2')");
+        assertOptimizedMatches("coalesce(coalesce(unbound_long, coalesce(unbound_long2, unbound_long3)), 1)", "coalesce(unbound_long, unbound_long2, unbound_long3, BIGINT '1')");
+        assertOptimizedMatches("coalesce(unbound_double, coalesce(random(), unbound_double))", "coalesce(unbound_double, random())");
     }
 
     @Test
@@ -1378,7 +1459,7 @@ public class TestExpressionInterpreter
 
         Expression parsedExpression = FunctionAssertions.createExpression(expression, METADATA, SYMBOL_TYPES);
 
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(TEST_SESSION, METADATA, SQL_PARSER, SYMBOL_TYPES, parsedExpression, emptyList());
+        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(TEST_SESSION, METADATA, SQL_PARSER, SYMBOL_TYPES, parsedExpression, emptyList(), WarningCollector.NOOP);
         ExpressionInterpreter interpreter = expressionOptimizer(parsedExpression, METADATA, TEST_SESSION, expressionTypes);
         return interpreter.optimize(symbol -> {
             switch (symbol.getName().toLowerCase(ENGLISH)) {
@@ -1412,6 +1493,11 @@ public class TestExpressionInterpreter
         });
     }
 
+    private static void assertEvaluatedEquals(@Language("SQL") String actual, @Language("SQL") String expected)
+    {
+        assertEquals(evaluate(actual), evaluate(expected));
+    }
+
     private static Object evaluate(String expression)
     {
         assertRoundTrip(expression);
@@ -1430,7 +1516,7 @@ public class TestExpressionInterpreter
 
     private static Object evaluate(Expression expression)
     {
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(TEST_SESSION, METADATA, SQL_PARSER, SYMBOL_TYPES, expression, emptyList());
+        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(TEST_SESSION, METADATA, SQL_PARSER, SYMBOL_TYPES, expression, emptyList(), WarningCollector.NOOP);
         ExpressionInterpreter interpreter = expressionInterpreter(expression, METADATA, TEST_SESSION, expressionTypes);
 
         return interpreter.evaluate();

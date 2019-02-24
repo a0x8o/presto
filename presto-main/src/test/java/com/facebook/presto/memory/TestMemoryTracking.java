@@ -64,7 +64,7 @@ public class TestMemoryTracking
     private static final DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
     private static final SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(maxSpillSize);
 
-    private DefaultQueryContext queryContext;
+    private QueryContext queryContext;
     private TaskContext taskContext;
     private PipelineContext pipelineContext;
     private DriverContext driverContext;
@@ -97,7 +97,7 @@ public class TestMemoryTracking
     public void setUpTest()
     {
         memoryPool = new MemoryPool(new MemoryPoolId("test"), memoryPoolSize);
-        queryContext = new DefaultQueryContext(
+        queryContext = new QueryContext(
                 new QueryId("test_query"),
                 queryMaxMemory,
                 queryMaxTotalMemory,
@@ -113,7 +113,7 @@ public class TestMemoryTracking
                 true,
                 true,
                 OptionalInt.empty());
-        pipelineContext = taskContext.addPipelineContext(0, true, true);
+        pipelineContext = taskContext.addPipelineContext(0, true, true, false);
         driverContext = pipelineContext.addDriverContext();
         operatorContext = driverContext.addOperatorContext(1, new PlanNodeId("a"), "test-operator");
     }
@@ -122,7 +122,7 @@ public class TestMemoryTracking
     public void testOperatorAllocations()
     {
         MemoryTrackingContext operatorMemoryContext = operatorContext.getOperatorMemoryContext();
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         LocalMemoryContext revocableMemory = operatorContext.localRevocableMemoryContext();
         userMemory.setBytes(100);
@@ -145,17 +145,17 @@ public class TestMemoryTracking
     @Test
     public void testLocalTotalMemoryLimitExceeded()
     {
-        LocalMemoryContext systemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemoryContext = operatorContext.newLocalSystemMemoryContext("test");
         systemMemoryContext.setBytes(100);
         assertOperatorMemoryAllocations(operatorContext.getOperatorMemoryContext(), 0, 100, 0);
         systemMemoryContext.setBytes(queryMaxTotalMemory.toBytes());
         assertOperatorMemoryAllocations(operatorContext.getOperatorMemoryContext(), 0, queryMaxTotalMemory.toBytes(), 0);
         try {
             systemMemoryContext.setBytes(queryMaxTotalMemory.toBytes() + 1);
-            fail("allocation should hit the local total memory limit");
+            fail("allocation should hit the per-node total memory limit");
         }
         catch (ExceededMemoryLimitException e) {
-            assertEquals(e.getMessage(), format("Query exceeded local total memory limit of %s", queryMaxTotalMemory));
+            assertEquals(e.getMessage(), format("Query exceeded per-node total memory limit of %1$s [Allocated: %1$s, Delta: 1B, Top Consumers: {test=%1$s}]", queryMaxTotalMemory));
         }
     }
 
@@ -197,7 +197,7 @@ public class TestMemoryTracking
     @Test
     public void testStats()
     {
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         userMemory.setBytes(100_000_000);
         systemMemory.setBytes(200_000_000);
@@ -257,7 +257,7 @@ public class TestMemoryTracking
     @Test
     public void testRevocableMemoryAllocations()
     {
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         LocalMemoryContext revocableMemory = operatorContext.localRevocableMemoryContext();
         revocableMemory.setBytes(100_000_000);
@@ -329,9 +329,19 @@ public class TestMemoryTracking
     }
 
     @Test
+    public void testTrySetZeroBytesFullPool()
+    {
+        LocalMemoryContext localMemoryContext = operatorContext.localUserMemoryContext();
+        // fill up the pool
+        memoryPool.reserve(new QueryId("test_query"), "test", memoryPool.getFreeBytes());
+        // try to reserve 0 bytes in the full pool
+        assertTrue(localMemoryContext.trySetBytes(localMemoryContext.getBytes()));
+    }
+
+    @Test
     public void testDestroy()
     {
-        LocalMemoryContext newLocalSystemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext newLocalSystemMemoryContext = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext newLocalUserMemoryContext = operatorContext.localUserMemoryContext();
         LocalMemoryContext newLocalRevocableMemoryContext = operatorContext.localRevocableMemoryContext();
         newLocalSystemMemoryContext.setBytes(100_000);

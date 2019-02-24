@@ -16,6 +16,8 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.cost.CostComparator;
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
 import com.facebook.presto.cost.SymbolStatsEstimate;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.RuleAssert;
@@ -36,11 +38,10 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
+import static com.facebook.presto.SystemSessionProperties.JOIN_MAX_BROADCAST_TABLE_SIZE;
 import static com.facebook.presto.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.AUTOMATIC;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.BROADCAST;
-import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.REPARTITIONED;
-import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.COST_BASED;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
@@ -64,8 +65,8 @@ public class TestReorderJoins
         tester = new RuleTester(
                 ImmutableList.of(),
                 ImmutableMap.of(
-                        JOIN_DISTRIBUTION_TYPE, AUTOMATIC.name(),
-                        JOIN_REORDERING_STRATEGY, COST_BASED.name()),
+                        JOIN_DISTRIBUTION_TYPE, JoinDistributionType.AUTOMATIC.name(),
+                        JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.AUTOMATIC.name()),
                 Optional.of(4));
     }
 
@@ -149,7 +150,7 @@ public class TestReorderJoins
                                 ImmutableList.of(new EquiJoinClause(p.symbol("A1"), p.symbol("B1"))),
                                 ImmutableList.of(p.symbol("A1"), p.symbol("B1")),
                                 Optional.empty()))
-                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, REPARTITIONED.name())
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.PARTITIONED.name())
                 .overrideStats("valuesA", PlanNodeStatsEstimate.builder()
                         .setOutputRowCount(100)
                         .addSymbolStatistics(ImmutableMap.of(new Symbol("A1"), new SymbolStatsEstimate(0, 100, 0, 6400, 100)))
@@ -197,7 +198,7 @@ public class TestReorderJoins
     }
 
     @Test
-    public void testReplicatesWhenRequiredBySession()
+    public void testReplicatesUnrestrictedWhenRequiredBySession()
     {
         assertReorderJoins()
                 .on(p ->
@@ -208,6 +209,7 @@ public class TestReorderJoins
                                 ImmutableList.of(new EquiJoinClause(p.symbol("A1"), p.symbol("B1"))),
                                 ImmutableList.of(p.symbol("A1"), p.symbol("B1")),
                                 Optional.empty()))
+                .setSystemProperty(JOIN_MAX_BROADCAST_TABLE_SIZE, "1kB")
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, BROADCAST.name())
                 .overrideStats("valuesA", PlanNodeStatsEstimate.builder()
                         .setOutputRowCount(10000)
@@ -247,7 +249,7 @@ public class TestReorderJoins
                 .build();
 
         assertReorderJoins()
-                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, REPARTITIONED.name())
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.PARTITIONED.name())
                 .on(p ->
                         p.join(
                                 INNER,
@@ -261,7 +263,7 @@ public class TestReorderJoins
                 .matches(expectedPlan);
 
         assertReorderJoins()
-                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, REPARTITIONED.name())
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.PARTITIONED.name())
                 .on(p ->
                         p.join(
                                 INNER,
@@ -310,7 +312,7 @@ public class TestReorderJoins
                                 ImmutableList.of(new EquiJoinClause(p.symbol("A1"), p.symbol("B1"))),
                                 ImmutableList.of(p.symbol("A1")),
                                 Optional.empty()))
-                .overrideStats("valuesA", PlanNodeStatsEstimate.UNKNOWN_STATS)
+                .overrideStats("valuesA", PlanNodeStatsEstimate.unknown())
                 .doesNotFire();
     }
 
@@ -417,6 +419,75 @@ public class TestReorderJoins
                                         ImmutableList.of(equiJoinClause("C1", "B2")),
                                         values("C1"),
                                         values("B1", "B2"))));
+    }
+
+    @Test
+    public void testReplicatesWhenNotRestricted()
+    {
+        int aRows = 10_000;
+        int bRows = 10;
+
+        PlanNodeStatsEstimate probeSideStatsEstimate = PlanNodeStatsEstimate.builder()
+                .setOutputRowCount(aRows)
+                .addSymbolStatistics(ImmutableMap.of(new Symbol("A1"), new SymbolStatsEstimate(0, 100, 0, 640000, 10)))
+                .build();
+        PlanNodeStatsEstimate buildSideStatsEstimate = PlanNodeStatsEstimate.builder()
+                .setOutputRowCount(bRows)
+                .addSymbolStatistics(ImmutableMap.of(new Symbol("B1"), new SymbolStatsEstimate(0, 100, 0, 640000, 10)))
+                .build();
+
+        // B table is small enough to be replicated in AUTOMATIC_RESTRICTED mode
+        assertReorderJoins()
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, AUTOMATIC.name())
+                .setSystemProperty(JOIN_MAX_BROADCAST_TABLE_SIZE, "100MB")
+                .on(p ->
+                        p.join(
+                                INNER,
+                                p.values(new PlanNodeId("valuesA"), aRows, p.symbol("A1")),
+                                p.values(new PlanNodeId("valuesB"), bRows, p.symbol("B1")),
+                                ImmutableList.of(new EquiJoinClause(p.symbol("A1"), p.symbol("B1"))),
+                                ImmutableList.of(p.symbol("A1"), p.symbol("B1")),
+                                Optional.empty()))
+                .overrideStats("valuesA", probeSideStatsEstimate)
+                .overrideStats("valuesB", buildSideStatsEstimate)
+                .matches(join(
+                        INNER,
+                        ImmutableList.of(equiJoinClause("A1", "B1")),
+                        Optional.empty(),
+                        Optional.of(REPLICATED),
+                        values(ImmutableMap.of("A1", 0)),
+                        values(ImmutableMap.of("B1", 0))));
+
+        probeSideStatsEstimate = PlanNodeStatsEstimate.builder()
+                .setOutputRowCount(aRows)
+                .addSymbolStatistics(ImmutableMap.of(new Symbol("A1"), new SymbolStatsEstimate(0, 100, 0, 640000d * 10000, 10)))
+                .build();
+        buildSideStatsEstimate = PlanNodeStatsEstimate.builder()
+                .setOutputRowCount(bRows)
+                .addSymbolStatistics(ImmutableMap.of(new Symbol("B1"), new SymbolStatsEstimate(0, 100, 0, 640000d * 10000, 10)))
+                .build();
+
+        // B table exceeds AUTOMATIC_RESTRICTED limit therefore it is partitioned
+        assertReorderJoins()
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, AUTOMATIC.name())
+                .setSystemProperty(JOIN_MAX_BROADCAST_TABLE_SIZE, "100MB")
+                .on(p ->
+                        p.join(
+                                INNER,
+                                p.values(new PlanNodeId("valuesA"), aRows, p.symbol("A1")),
+                                p.values(new PlanNodeId("valuesB"), bRows, p.symbol("B1")),
+                                ImmutableList.of(new EquiJoinClause(p.symbol("A1"), p.symbol("B1"))),
+                                ImmutableList.of(p.symbol("A1"), p.symbol("B1")),
+                                Optional.empty()))
+                .overrideStats("valuesA", probeSideStatsEstimate)
+                .overrideStats("valuesB", buildSideStatsEstimate)
+                .matches(join(
+                        INNER,
+                        ImmutableList.of(equiJoinClause("A1", "B1")),
+                        Optional.empty(),
+                        Optional.of(PARTITIONED),
+                        values(ImmutableMap.of("A1", 0)),
+                        values(ImmutableMap.of("B1", 0))));
     }
 
     private RuleAssert assertReorderJoins()

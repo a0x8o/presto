@@ -13,10 +13,9 @@
  */
 package com.facebook.presto.execution.scheduler;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
 import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.BasicStageStats;
 import com.facebook.presto.execution.LocationFactory;
 import com.facebook.presto.execution.NodeTaskMap;
 import com.facebook.presto.execution.QueryState;
@@ -28,6 +27,8 @@ import com.facebook.presto.execution.StageId;
 import com.facebook.presto.execution.StageInfo;
 import com.facebook.presto.execution.StageState;
 import com.facebook.presto.execution.TaskStatus;
+import com.facebook.presto.execution.buffer.OutputBuffers;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.failureDetector.FailureDetector;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.PrestoException;
@@ -53,13 +54,13 @@ import io.airlift.units.Duration;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -72,14 +73,15 @@ import java.util.function.Supplier;
 import static com.facebook.presto.SystemSessionProperties.getConcurrentLifespansPerNode;
 import static com.facebook.presto.SystemSessionProperties.getWriterMinSize;
 import static com.facebook.presto.connector.ConnectorId.isInternalSystemConnector;
+import static com.facebook.presto.execution.BasicStageStats.aggregateBasicStageStats;
+import static com.facebook.presto.execution.SqlStageExecution.createSqlStageExecution;
 import static com.facebook.presto.execution.StageState.ABORTED;
 import static com.facebook.presto.execution.StageState.CANCELED;
 import static com.facebook.presto.execution.StageState.FAILED;
 import static com.facebook.presto.execution.StageState.FINISHED;
 import static com.facebook.presto.execution.StageState.RUNNING;
 import static com.facebook.presto.execution.StageState.SCHEDULED;
-import static com.facebook.presto.execution.scheduler.SourcePartitionedScheduler.simpleSourcePartitionedScheduler;
-import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
+import static com.facebook.presto.execution.scheduler.SourcePartitionedScheduler.newSourcePartitionedSchedulerAsStageScheduler;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
@@ -89,6 +91,7 @@ import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DI
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
@@ -97,7 +100,6 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static io.airlift.concurrent.MoreFutures.whenAnyComplete;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
-import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -119,7 +121,47 @@ public class SqlQueryScheduler
     private final boolean summarizeTaskInfo;
     private final AtomicBoolean started = new AtomicBoolean();
 
-    public SqlQueryScheduler(QueryStateMachine queryStateMachine,
+    public static SqlQueryScheduler createSqlQueryScheduler(
+            QueryStateMachine queryStateMachine,
+            LocationFactory locationFactory,
+            StageExecutionPlan plan,
+            NodePartitioningManager nodePartitioningManager,
+            NodeScheduler nodeScheduler,
+            RemoteTaskFactory remoteTaskFactory,
+            Session session,
+            boolean summarizeTaskInfo,
+            int splitBatchSize,
+            ExecutorService queryExecutor,
+            ScheduledExecutorService schedulerExecutor,
+            FailureDetector failureDetector,
+            OutputBuffers rootOutputBuffers,
+            NodeTaskMap nodeTaskMap,
+            ExecutionPolicy executionPolicy,
+            SplitSchedulerStats schedulerStats)
+    {
+        SqlQueryScheduler sqlQueryScheduler = new SqlQueryScheduler(
+                queryStateMachine,
+                locationFactory,
+                plan,
+                nodePartitioningManager,
+                nodeScheduler,
+                remoteTaskFactory,
+                session,
+                summarizeTaskInfo,
+                splitBatchSize,
+                queryExecutor,
+                schedulerExecutor,
+                failureDetector,
+                rootOutputBuffers,
+                nodeTaskMap,
+                executionPolicy,
+                schedulerStats);
+        sqlQueryScheduler.initialize();
+        return sqlQueryScheduler;
+    }
+
+    private SqlQueryScheduler(
+            QueryStateMachine queryStateMachine,
             LocationFactory locationFactory,
             StageExecutionPlan plan,
             NodePartitioningManager nodePartitioningManager,
@@ -178,7 +220,12 @@ public class SqlQueryScheduler
         this.stageLinkages = stageLinkages.build();
 
         this.executor = queryExecutor;
+    }
 
+    // this is a separate method to ensure that the `this` reference is not leaked during construction
+    private void initialize()
+    {
+        SqlStageExecution rootStage = stages.get(rootStageId);
         rootStage.addStateChangeListener(state -> {
             if (state == FINISHED) {
                 queryStateMachine.transitionToFinishing();
@@ -189,7 +236,7 @@ public class SqlQueryScheduler
             }
         });
 
-        for (SqlStageExecution stage : stages) {
+        for (SqlStageExecution stage : stages.values()) {
             stage.addStateChangeListener(state -> {
                 if (queryStateMachine.isDone()) {
                     return;
@@ -208,6 +255,16 @@ public class SqlQueryScheduler
                     }
                 }
             });
+        }
+
+        // when query is done or any time a stage completes, attempt to transition query to "final query info ready"
+        queryStateMachine.addStateChangeListener(newState -> {
+            if (newState.isDone()) {
+                queryStateMachine.updateQueryInfo(Optional.ofNullable(getStageInfo()));
+            }
+        });
+        for (SqlStageExecution stage : stages.values()) {
+            stage.addFinalStageInfoListener(status -> queryStateMachine.updateQueryInfo(Optional.ofNullable(getStageInfo())));
         }
     }
 
@@ -241,7 +298,7 @@ public class SqlQueryScheduler
         ImmutableList.Builder<SqlStageExecution> stages = ImmutableList.builder();
 
         StageId stageId = new StageId(queryStateMachine.getQueryId(), nextStageId.getAndIncrement());
-        SqlStageExecution stage = new SqlStageExecution(
+        SqlStageExecution stage = createSqlStageExecution(
                 stageId,
                 locationFactory.createStageLocation(stageId),
                 plan.getFragment(),
@@ -269,49 +326,73 @@ public class SqlQueryScheduler
             NodeSelector nodeSelector = nodeScheduler.createNodeSelector(connectorId);
             SplitPlacementPolicy placementPolicy = new DynamicSplitPlacementPolicy(nodeSelector, stage::getAllTasks);
 
-            checkArgument(plan.getFragment().getPipelineExecutionStrategy() == UNGROUPED_EXECUTION);
-            stageSchedulers.put(stageId, simpleSourcePartitionedScheduler(stage, planNodeId, splitSource, placementPolicy, splitBatchSize));
+            checkArgument(!plan.getFragment().getStageExecutionDescriptor().isStageGroupedExecution());
+            stageSchedulers.put(stageId, newSourcePartitionedSchedulerAsStageScheduler(stage, planNodeId, splitSource, placementPolicy, splitBatchSize));
             bucketToPartition = Optional.of(new int[1]);
         }
         else if (partitioningHandle.equals(SCALED_WRITER_DISTRIBUTION)) {
             bucketToPartition = Optional.of(new int[1]);
         }
         else {
-            // nodes are pre determined by the nodePartitionMap
-            NodePartitionMap nodePartitionMap = partitioningCache.apply(plan.getFragment().getPartitioning());
-            long nodeCount = nodePartitionMap.getPartitionToNode().values().stream().distinct().count();
-            OptionalInt concurrentLifespansPerTask = getConcurrentLifespansPerNode(session);
-
             Map<PlanNodeId, SplitSource> splitSources = plan.getSplitSources();
             if (!splitSources.isEmpty()) {
+                // contains local source
                 List<PlanNodeId> schedulingOrder = plan.getFragment().getPartitionedSources();
+                ConnectorId connectorId = partitioningHandle.getConnectorId().orElseThrow(IllegalStateException::new);
                 List<ConnectorPartitionHandle> connectorPartitionHandles;
-                switch (plan.getFragment().getPipelineExecutionStrategy()) {
-                    case GROUPED_EXECUTION:
-                        connectorPartitionHandles = nodePartitioningManager.listPartitionHandles(session, partitioningHandle);
-                        checkState(connectorPartitionHandles.size() == nodePartitionMap.getBucketToPartition().length);
-                        checkState(!ImmutableList.of(NOT_PARTITIONED).equals(connectorPartitionHandles));
-                        break;
-                    case UNGROUPED_EXECUTION:
-                        connectorPartitionHandles = ImmutableList.of(NOT_PARTITIONED);
-                        break;
-                    default:
-                        throw new UnsupportedOperationException();
+                boolean groupedExecutionForStage = plan.getFragment().getStageExecutionDescriptor().isStageGroupedExecution();
+                if (groupedExecutionForStage) {
+                    connectorPartitionHandles = nodePartitioningManager.listPartitionHandles(session, partitioningHandle);
+                    checkState(!ImmutableList.of(NOT_PARTITIONED).equals(connectorPartitionHandles));
                 }
+                else {
+                    connectorPartitionHandles = ImmutableList.of(NOT_PARTITIONED);
+                }
+
+                BucketNodeMap bucketNodeMap;
+                List<Node> stageNodeList;
+                if (plan.getSubStages().isEmpty()) {
+                    // no remote source
+                    boolean dynamicLifespanSchedule = plan.getFragment().getStageExecutionDescriptor().isDynamicLifespanSchedule();
+                    bucketNodeMap = nodePartitioningManager.getBucketNodeMap(session, partitioningHandle, dynamicLifespanSchedule);
+
+                    // verify execution is consistent with planner's decision on dynamic lifespan schedule
+                    verify(bucketNodeMap.isDynamic() == dynamicLifespanSchedule);
+
+                    stageNodeList = new ArrayList<>(nodeScheduler.createNodeSelector(connectorId).allNodes());
+                    Collections.shuffle(stageNodeList);
+                    bucketToPartition = Optional.empty();
+                }
+                else {
+                    // cannot use dynamic lifespan schedule
+                    verify(!plan.getFragment().getStageExecutionDescriptor().isDynamicLifespanSchedule());
+
+                    // remote source requires nodePartitionMap
+                    NodePartitionMap nodePartitionMap = partitioningCache.apply(plan.getFragment().getPartitioning());
+                    if (groupedExecutionForStage) {
+                        checkState(connectorPartitionHandles.size() == nodePartitionMap.getBucketToPartition().length);
+                    }
+                    stageNodeList = nodePartitionMap.getPartitionToNode();
+                    bucketNodeMap = nodePartitionMap.asBucketNodeMap();
+                    bucketToPartition = Optional.of(nodePartitionMap.getBucketToPartition());
+                }
+
                 stageSchedulers.put(stageId, new FixedSourcePartitionedScheduler(
                         stage,
                         splitSources,
-                        plan.getFragment().getPipelineExecutionStrategy(),
+                        plan.getFragment().getStageExecutionDescriptor(),
                         schedulingOrder,
-                        nodePartitionMap,
+                        stageNodeList,
+                        bucketNodeMap,
                         splitBatchSize,
-                        concurrentLifespansPerTask.isPresent() ? OptionalInt.of(toIntExact(concurrentLifespansPerTask.getAsInt() * nodeCount)) : OptionalInt.empty(),
-                        nodeScheduler.createNodeSelector(null),
+                        getConcurrentLifespansPerNode(session),
+                        nodeScheduler.createNodeSelector(connectorId),
                         connectorPartitionHandles));
-                bucketToPartition = Optional.of(nodePartitionMap.getBucketToPartition());
             }
             else {
-                Map<Integer, Node> partitionToNode = nodePartitionMap.getPartitionToNode();
+                // all sources are remote
+                NodePartitionMap nodePartitionMap = partitioningCache.apply(plan.getFragment().getPartitioning());
+                List<Node> partitionToNode = nodePartitionMap.getPartitionToNode();
                 // todo this should asynchronously wait a standard timeout period before failing
                 checkCondition(!partitionToNode.isEmpty(), NO_NODES_AVAILABLE, "No worker nodes available");
                 stageSchedulers.put(stageId, new FixedCountScheduler(stage, partitionToNode));
@@ -376,6 +457,15 @@ public class SqlQueryScheduler
         }
 
         return stages.build();
+    }
+
+    public BasicStageStats getBasicStageStats()
+    {
+        List<BasicStageStats> stageStats = stages.values().stream()
+                .map(SqlStageExecution::getBasicStageStats)
+                .collect(toImmutableList());
+
+        return aggregateBasicStageStats(stageStats);
     }
 
     public StageInfo getStageInfo()

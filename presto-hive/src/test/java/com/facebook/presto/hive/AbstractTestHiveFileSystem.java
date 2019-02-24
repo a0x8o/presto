@@ -86,6 +86,7 @@ import static com.facebook.presto.hive.HiveTestUtils.TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveDataStreamFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveFileWriterFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveRecordCursorProvider;
+import static com.facebook.presto.hive.HiveTestUtils.getDefaultOrcFileWriterFactory;
 import static com.facebook.presto.hive.HiveTestUtils.getTypes;
 import static com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.UNGROUPED_SCHEDULING;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -120,6 +121,7 @@ public abstract class AbstractTestHiveFileSystem
     protected ConnectorPageSourceProvider pageSourceProvider;
 
     private ExecutorService executor;
+    private HiveClientConfig config;
 
     @BeforeClass
     public void setUp()
@@ -138,7 +140,7 @@ public abstract class AbstractTestHiveFileSystem
 
     protected abstract Path getBasePath();
 
-    protected void setup(String host, int port, String databaseName, Function<HiveClientConfig, HdfsConfiguration> hdfsConfigurationProvider)
+    protected void setup(String host, int port, String databaseName, Function<HiveClientConfig, HdfsConfiguration> hdfsConfigurationProvider, boolean s3SelectPushdownEnabled)
     {
         database = databaseName;
         table = new SchemaTableName(database, "presto_test_external_fs");
@@ -146,7 +148,8 @@ public abstract class AbstractTestHiveFileSystem
         String random = UUID.randomUUID().toString().toLowerCase(ENGLISH).replace("-", "");
         temporaryCreateTable = new SchemaTableName(database, "tmp_presto_test_create_" + random);
 
-        HiveClientConfig config = new HiveClientConfig();
+        config = new HiveClientConfig().setS3SelectPushdownEnabled(s3SelectPushdownEnabled);
+
         String proxy = System.getProperty("hive.metastore.thrift.client.socks-proxy");
         if (proxy != null) {
             config.setMetastoreSocksProxy(HostAndPort.fromString(proxy));
@@ -202,24 +205,25 @@ public abstract class AbstractTestHiveFileSystem
                 metastoreClient,
                 new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig())),
                 TYPE_MANAGER,
-                new HiveClientConfig(),
+                config,
                 locationService,
                 partitionUpdateCodec,
                 new TestingNodeManager("fake-environment"),
                 new HiveEventClient(),
-                new HiveSessionProperties(config, new OrcFileWriterConfig()),
-                new HiveWriterStats());
+                new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()),
+                new HiveWriterStats(),
+                getDefaultOrcFileWriterFactory(config));
         pageSourceProvider = new HivePageSourceProvider(config, hdfsEnvironment, getDefaultHiveRecordCursorProvider(config), getDefaultHiveDataStreamFactories(config), TYPE_MANAGER);
     }
 
     protected ConnectorSession newSession()
     {
-        return new TestingConnectorSession(new HiveSessionProperties(new HiveClientConfig(), new OrcFileWriterConfig()).getSessionProperties());
+        return new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     }
 
     protected Transaction newTransaction()
     {
-        return new HiveTransaction(transactionManager, metadataFactory.create());
+        return new HiveTransaction(transactionManager, metadataFactory.get());
     }
 
     @Test
@@ -250,7 +254,9 @@ public abstract class AbstractTestHiveFileSystem
                     }
                 }
             }
-            assertEquals(sum, 78300);
+            // The test table is made up of multiple S3 objects with same data and different compression codec
+            // formats: uncompressed | .gz | .lz4 | .bz2
+            assertEquals(sum, 78300 * 4);
         }
     }
 
@@ -371,7 +377,7 @@ public abstract class AbstractTestHiveFileSystem
             Collection<Slice> fragments = getFutureValue(sink.finish());
 
             // commit the table
-            metadata.finishCreateTable(session, outputHandle, fragments);
+            metadata.finishCreateTable(session, outputHandle, fragments, ImmutableList.of());
 
             transaction.commit();
 

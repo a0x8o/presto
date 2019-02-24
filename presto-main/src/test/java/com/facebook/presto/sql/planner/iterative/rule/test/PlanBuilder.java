@@ -53,9 +53,12 @@ import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
+import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
+import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
@@ -90,6 +93,7 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
+import static com.facebook.presto.util.MoreLists.nElements;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -161,7 +165,20 @@ public class PlanBuilder
 
     public ValuesNode values(PlanNodeId id, Symbol... columns)
     {
-        return values(id, ImmutableList.copyOf(columns), ImmutableList.of());
+        return values(id, 0, columns);
+    }
+
+    public ValuesNode values(int rows, Symbol... columns)
+    {
+        return values(idAllocator.getNextId(), rows, columns);
+    }
+
+    public ValuesNode values(PlanNodeId id, int rows, Symbol... columns)
+    {
+        return values(
+                id,
+                ImmutableList.copyOf(columns),
+                nElements(rows, row -> nElements(columns.length, cell -> (Expression) new NullLiteral())));
     }
 
     public ValuesNode values(List<Symbol> columns, List<List<Expression>> rows)
@@ -232,7 +249,7 @@ public class PlanBuilder
     {
         private PlanNode source;
         private Map<Symbol, Aggregation> assignments = new HashMap<>();
-        private List<List<Symbol>> groupingSets = new ArrayList<>();
+        private AggregationNode.GroupingSetDescriptor groupingSets;
         private List<Symbol> preGroupedSymbols = new ArrayList<>();
         private Step step = Step.SINGLE;
         private Optional<Symbol> hashSymbol = Optional.empty();
@@ -258,7 +275,7 @@ public class PlanBuilder
         {
             checkArgument(expression instanceof FunctionCall);
             FunctionCall aggregation = (FunctionCall) expression;
-            Signature signature = metadata.getFunctionRegistry().resolveFunction(aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
+            Signature signature = metadata.getFunctionManager().resolveFunction(aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
             return addAggregation(output, new Aggregation(aggregation, signature, mask));
         }
 
@@ -270,24 +287,20 @@ public class PlanBuilder
 
         public AggregationBuilder globalGrouping()
         {
-            return groupingSets(ImmutableList.of(ImmutableList.of()));
-        }
-
-        public AggregationBuilder groupingSets(List<List<Symbol>> groupingSets)
-        {
-            checkState(this.groupingSets.isEmpty(), "groupingSets already defined");
-            this.groupingSets.addAll(groupingSets);
+            groupingSets(AggregationNode.singleGroupingSet(ImmutableList.of()));
             return this;
         }
 
-        public AggregationBuilder addGroupingSet(Symbol... symbols)
+        public AggregationBuilder singleGroupingSet(Symbol... symbols)
         {
-            return addGroupingSet(ImmutableList.copyOf(symbols));
+            groupingSets(AggregationNode.singleGroupingSet(ImmutableList.copyOf(symbols)));
+            return this;
         }
 
-        public AggregationBuilder addGroupingSet(List<Symbol> symbols)
+        public AggregationBuilder groupingSets(AggregationNode.GroupingSetDescriptor groupingSets)
         {
-            groupingSets.add(ImmutableList.copyOf(symbols));
+            checkState(this.groupingSets == null, "groupingSets already defined");
+            this.groupingSets = groupingSets;
             return this;
         }
 
@@ -318,7 +331,7 @@ public class PlanBuilder
 
         protected AggregationNode build()
         {
-            checkState(!groupingSets.isEmpty(), "No grouping sets defined; use globalGrouping/addGroupingSet/addEmptyGroupingSet method");
+            checkState(groupingSets != null, "No grouping sets defined; use globalGrouping/groupingKeys method");
             return new AggregationNode(
                     idAllocator.getNextId(),
                     source,
@@ -350,13 +363,8 @@ public class PlanBuilder
 
     public TableScanNode tableScan(List<Symbol> symbols, Map<Symbol, ColumnHandle> assignments)
     {
-        return tableScan(symbols, assignments, null);
-    }
-
-    public TableScanNode tableScan(List<Symbol> symbols, Map<Symbol, ColumnHandle> assignments, Expression originalConstraint)
-    {
         TableHandle tableHandle = new TableHandle(new ConnectorId("testConnector"), new TestingTableHandle());
-        return tableScan(tableHandle, symbols, assignments, Optional.empty(), TupleDomain.all(), originalConstraint);
+        return tableScan(tableHandle, symbols, assignments, Optional.empty(), TupleDomain.all(), TupleDomain.all());
     }
 
     public TableScanNode tableScan(TableHandle tableHandle, List<Symbol> symbols, Map<Symbol, ColumnHandle> assignments)
@@ -370,7 +378,7 @@ public class PlanBuilder
             Map<Symbol, ColumnHandle> assignments,
             Optional<TableLayoutHandle> tableLayout)
     {
-        return tableScan(tableHandle, symbols, assignments, tableLayout, TupleDomain.all());
+        return tableScan(tableHandle, symbols, assignments, tableLayout, TupleDomain.all(), TupleDomain.all());
     }
 
     public TableScanNode tableScan(
@@ -378,18 +386,8 @@ public class PlanBuilder
             List<Symbol> symbols,
             Map<Symbol, ColumnHandle> assignments,
             Optional<TableLayoutHandle> tableLayout,
-            TupleDomain<ColumnHandle> tupleDomain)
-    {
-        return tableScan(tableHandle, symbols, assignments, tableLayout, tupleDomain, null);
-    }
-
-    public TableScanNode tableScan(
-            TableHandle tableHandle,
-            List<Symbol> symbols,
-            Map<Symbol, ColumnHandle> assignments,
-            Optional<TableLayoutHandle> tableLayout,
-            TupleDomain<ColumnHandle> tupleDomain,
-            Expression originalConstraint)
+            TupleDomain<ColumnHandle> currentConstraint,
+            TupleDomain<ColumnHandle> enforcedConstraint)
     {
         return new TableScanNode(
                 idAllocator.getNextId(),
@@ -397,8 +395,8 @@ public class PlanBuilder
                 symbols,
                 assignments,
                 tableLayout,
-                tupleDomain,
-                originalConstraint);
+                currentConstraint,
+                enforcedConstraint);
     }
 
     public TableFinishNode tableDelete(SchemaTableName schemaTableName, PlanNode deleteSource, Symbol deleteRowId)
@@ -420,7 +418,9 @@ public class PlanBuilder
                         .addInputsSet(deleteRowId)
                         .singleDistributionPartitioningScheme(deleteRowId)),
                 deleteHandle,
-                ImmutableList.of(deleteRowId));
+                deleteRowId,
+                Optional.empty(),
+                Optional.empty());
     }
 
     public ExchangeNode gatheringExchange(ExchangeNode.Scope scope, PlanNode child)
@@ -667,9 +667,12 @@ public class PlanBuilder
                 idAllocator.getNextId(),
                 source,
                 new TestingWriterTarget(),
+                symbol("partialrows", BIGINT),
+                symbol("fragment", VARBINARY),
                 columns,
                 columnNames,
-                ImmutableList.of(symbol("partialrows", BIGINT), symbol("fragment", VARBINARY)),
+                Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -716,6 +719,22 @@ public class PlanBuilder
                 Optional.of(hashSymbol),
                 ImmutableSet.of(),
                 0);
+    }
+
+    public RowNumberNode rowNumber(List<Symbol> partitionBy, Optional<Integer> maxRowCountPerPartition, Symbol rowNumberSymbol, PlanNode source)
+    {
+        return new RowNumberNode(
+                idAllocator.getNextId(),
+                source,
+                partitionBy,
+                rowNumberSymbol,
+                maxRowCountPerPartition,
+                Optional.empty());
+    }
+
+    public RemoteSourceNode remoteSourceNode(List<PlanFragmentId> fragmentIds, List<Symbol> symbols, ExchangeNode.Type exchangeType)
+    {
+        return new RemoteSourceNode(idAllocator.getNextId(), fragmentIds, symbols, Optional.empty(), exchangeType);
     }
 
     public static Expression expression(String sql)

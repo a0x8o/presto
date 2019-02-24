@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.execution;
 
+import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.scheduler.SplitSchedulerStats;
+import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanFragment;
@@ -30,10 +32,10 @@ import org.testng.annotations.Test;
 import java.io.IOException;
 import java.net.URI;
 import java.sql.SQLException;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
@@ -291,7 +293,7 @@ public class TestStageStateMachine
         assertEquals(stateMachine.getLocation(), LOCATION);
         assertSame(stateMachine.getSession(), TEST_SESSION);
 
-        StageInfo stageInfo = stateMachine.getStageInfo(ImmutableList::of, ImmutableList::of);
+        StageInfo stageInfo = stateMachine.getStageInfo(ImmutableList::of);
         assertEquals(stageInfo.getStageId(), STAGE_ID);
         assertEquals(stageInfo.getSelf(), LOCATION);
         assertEquals(stageInfo.getSubStages(), ImmutableList.of());
@@ -330,7 +332,9 @@ public class TestStageStateMachine
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(valuesNodeId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
-                UNGROUPED_EXECUTION);
+                StageExecutionDescriptor.ungroupedExecution(),
+                StatsAndCosts.empty(),
+                Optional.empty());
 
         return planFragment;
     }

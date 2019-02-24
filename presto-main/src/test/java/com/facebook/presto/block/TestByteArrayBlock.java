@@ -14,10 +14,13 @@
 package com.facebook.presto.block;
 
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.ByteArrayBlock;
 import com.facebook.presto.spi.block.ByteArrayBlockBuilder;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
+
+import java.util.Optional;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
@@ -30,13 +33,13 @@ public class TestByteArrayBlock
     {
         Slice[] expectedValues = createTestValue(17);
         assertFixedWithValues(expectedValues);
-        assertFixedWithValues((Slice[]) alternatingNullValues(expectedValues));
+        assertFixedWithValues(alternatingNullValues(expectedValues));
     }
 
     @Test
     public void testCopyPositions()
     {
-        Slice[] expectedValues = (Slice[]) alternatingNullValues(createTestValue(17));
+        Slice[] expectedValues = alternatingNullValues(createTestValue(17));
         BlockBuilder blockBuilder = createBlockBuilderWithValues(expectedValues);
         assertBlockFilteredPositions(expectedValues, blockBuilder.build(), () -> blockBuilder.newBlockBuilderLike(null), 0, 2, 4, 6, 7, 9, 10, 16);
     }
@@ -58,6 +61,24 @@ public class TestByteArrayBlock
         blockBuilder = blockBuilder.newBlockBuilderLike(null);
         assertEquals(blockBuilder.getSizeInBytes(), emptyBlockBuilder.getSizeInBytes());
         assertEquals(blockBuilder.getRetainedSizeInBytes(), emptyBlockBuilder.getRetainedSizeInBytes());
+    }
+
+    @Test
+    public void testEstimatedDataSizeForStats()
+    {
+        Slice[] expectedValues = createTestValue(100);
+        assertEstimatedDataSizeForStats(createBlockBuilderWithValues(expectedValues), expectedValues);
+    }
+
+    @Test
+    public void testCompactBlock()
+    {
+        byte[] byteArray = {(byte) 0, (byte) 0, (byte) 1, (byte) 2, (byte) 3, (byte) 4};
+        boolean[] valueIsNull = {false, true, false, false, false, false};
+
+        testCompactBlock(new ByteArrayBlock(0, Optional.empty(), new byte[0]));
+        testCompactBlock(new ByteArrayBlock(byteArray.length, Optional.of(valueIsNull), byteArray));
+        testIncompactBlock(new ByteArrayBlock(byteArray.length - 1, Optional.of(valueIsNull), byteArray));
     }
 
     private void assertFixedWithValues(Slice[] expectedValues)

@@ -14,8 +14,9 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
@@ -32,35 +33,48 @@ import org.testng.annotations.Test;
 
 import java.util.List;
 
+import static com.facebook.presto.metadata.FunctionExtractor.extractFunctions;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.assertAggregation;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 
 public abstract class AbstractTestAggregationFunction
 {
     protected TypeRegistry typeRegistry;
-    protected FunctionRegistry functionRegistry;
+    protected FunctionManager functionManager;
 
     @BeforeClass
     public final void initTestAggregationFunction()
     {
         typeRegistry = new TypeRegistry();
-        functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+        functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
     }
 
     @AfterClass(alwaysRun = true)
     public final void destroyTestAggregationFunction()
     {
-        functionRegistry = null;
+        functionManager = null;
         typeRegistry = null;
     }
 
     public abstract Block[] getSequenceBlocks(int start, int length);
 
+    protected void registerFunctions(Plugin plugin)
+    {
+        functionManager.addFunctions(extractFunctions(plugin.getFunctions()));
+    }
+
+    protected void registerTypes(Plugin plugin)
+    {
+        for (Type type : plugin.getTypes()) {
+            typeRegistry.addType(type);
+        }
+    }
+
     protected final InternalAggregationFunction getFunction()
     {
         List<TypeSignatureProvider> parameterTypes = fromTypeSignatures(Lists.transform(getFunctionParameterTypes(), TypeSignature::parseTypeSignature));
-        Signature signature = functionRegistry.resolveFunction(QualifiedName.of(getFunctionName()), parameterTypes);
-        return functionRegistry.getAggregateFunctionImplementation(signature);
+        Signature signature = functionManager.resolveFunction(QualifiedName.of(getFunctionName()), parameterTypes);
+        return functionManager.getAggregateFunctionImplementation(signature);
     }
 
     protected abstract String getFunctionName();

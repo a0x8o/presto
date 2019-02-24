@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.ResolvedIndex;
 import com.facebook.presto.spi.ColumnHandle;
@@ -76,11 +77,10 @@ public class IndexJoinOptimizer
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider type, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
-        requireNonNull(types, "types is null");
         requireNonNull(symbolAllocator, "symbolAllocator is null");
         requireNonNull(idAllocator, "idAllocator is null");
 
@@ -278,7 +278,7 @@ public class IndexJoinOptimizer
 
             TupleDomain<ColumnHandle> simplifiedConstraint = decomposedPredicate.getTupleDomain()
                     .transform(node.getAssignments()::get)
-                    .intersect(node.getCurrentConstraint());
+                    .intersect(node.getEnforcedConstraint());
 
             checkState(node.getOutputSymbols().containsAll(context.getLookupSymbols()));
 
@@ -351,7 +351,7 @@ public class IndexJoinOptimizer
         {
             if (!node.getWindowFunctions().values().stream()
                     .map(function -> function.getFunctionCall().getName())
-                    .allMatch(metadata.getFunctionRegistry()::isAggregationFunction)) {
+                    .allMatch(metadata.getFunctionManager()::isAggregationFunction)) {
                 return node;
             }
 

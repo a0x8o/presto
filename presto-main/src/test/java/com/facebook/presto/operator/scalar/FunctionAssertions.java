@@ -15,6 +15,7 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Split;
@@ -32,7 +33,6 @@ import com.facebook.presto.operator.project.InterpretedPageFilter;
 import com.facebook.presto.operator.project.InterpretedPageProjection;
 import com.facebook.presto.operator.project.PageFilter;
 import com.facebook.presto.operator.project.PageProcessor;
-import com.facebook.presto.operator.project.PageProcessorOutput;
 import com.facebook.presto.operator.project.PageProjection;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
@@ -92,6 +92,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -108,6 +109,7 @@ import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
 import static com.facebook.presto.block.BlockAssertions.createSlicesBlock;
 import static com.facebook.presto.block.BlockAssertions.createStringsBlock;
 import static com.facebook.presto.block.BlockAssertions.createTimestampsWithTimezoneBlock;
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
@@ -476,7 +478,11 @@ public final class FunctionAssertions
         long maxRetainedSize = 0;
         int maxIterationCount = 0;
         for (int iterationCount = 0; iterationCount < Math.max(1000, maxIterationCount * 4); iterationCount++) {
-            PageProcessorOutput output = processor.process(session.toConnectorSession(), new DriverYieldSignal(), SOURCE_PAGE);
+            Iterator<Optional<Page>> output = processor.process(
+                    session.toConnectorSession(),
+                    new DriverYieldSignal(),
+                    newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
+                    SOURCE_PAGE);
             // consume the iterator
             Iterators.getOnlyElement(output);
 
@@ -631,7 +637,8 @@ public final class FunctionAssertions
                 SQL_PARSER,
                 INPUT_TYPES,
                 ImmutableList.of(translatedProjection),
-                ImmutableList.of());
+                ImmutableList.of(),
+                WarningCollector.NOOP);
         return toRowExpression(translatedProjection, expressionTypes);
     }
 
@@ -749,6 +756,7 @@ public final class FunctionAssertions
                 symbolTypes,
                 ImmutableList.of(parsedExpression),
                 ImmutableList.of(),
+                WarningCollector.NOOP,
                 false);
 
         Expression rewrittenExpression = ExpressionTreeRewriter.rewriteWith(new ExpressionRewriter<Void>()
@@ -949,7 +957,7 @@ public final class FunctionAssertions
 
     private RowExpression toRowExpression(Expression projection, Map<NodeRef<Expression>, Type> expressionTypes)
     {
-        return translate(projection, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
+        return translate(projection, SCALAR, expressionTypes, metadata.getFunctionManager(), metadata.getTypeManager(), session, false);
     }
 
     private static Page getAtMostOnePage(Operator operator, Page sourcePage)
@@ -983,7 +991,7 @@ public final class FunctionAssertions
     private static DriverContext createDriverContext(Session session)
     {
         return createTaskContext(EXECUTOR, SCHEDULED_EXECUTOR, session)
-                .addPipelineContext(0, true, true)
+                .addPipelineContext(0, true, true, false)
                 .addDriverContext();
     }
 

@@ -13,14 +13,13 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
-import com.facebook.presto.TaskSource;
 import com.facebook.presto.execution.buffer.BufferResult;
 import com.facebook.presto.execution.buffer.BufferState;
+import com.facebook.presto.execution.buffer.OutputBuffers;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.executor.TaskExecutor;
-import com.facebook.presto.memory.DefaultQueryContext;
 import com.facebook.presto.memory.MemoryPool;
+import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
@@ -30,6 +29,7 @@ import com.google.common.base.Ticker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.stats.CounterStat;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import org.testng.annotations.AfterClass;
@@ -42,16 +42,18 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.facebook.presto.OutputBuffers.BufferType.PARTITIONED;
-import static com.facebook.presto.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.execution.SqlTask.createSqlTask;
 import static com.facebook.presto.execution.TaskTestUtils.EMPTY_SOURCES;
 import static com.facebook.presto.execution.TaskTestUtils.PLAN_FRAGMENT;
 import static com.facebook.presto.execution.TaskTestUtils.SPLIT;
 import static com.facebook.presto.execution.TaskTestUtils.TABLE_SCAN_NODE_ID;
-import static com.facebook.presto.execution.TaskTestUtils.createTestQueryMonitor;
+import static com.facebook.presto.execution.TaskTestUtils.createTestSplitMonitor;
 import static com.facebook.presto.execution.TaskTestUtils.createTestingPlanner;
 import static com.facebook.presto.execution.TaskTestUtils.updateTask;
+import static com.facebook.presto.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
+import static com.facebook.presto.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -89,7 +91,7 @@ public class TestSqlTask
                 taskNotificationExecutor,
                 taskExecutor,
                 planner,
-                createTestQueryMonitor(),
+                createTestSplitMonitor(),
                 new TaskManagerConfig());
     }
 
@@ -299,22 +301,27 @@ public class TestSqlTask
         TaskId taskId = new TaskId("query", 0, nextTaskId.incrementAndGet());
         URI location = URI.create("fake://task/" + taskId);
 
-        return new SqlTask(
+        QueryContext queryContext = new QueryContext(new QueryId("query"),
+                new DataSize(1, MEGABYTE),
+                new DataSize(2, MEGABYTE),
+                new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE)),
+                new TestingGcMonitor(),
+                taskNotificationExecutor,
+                driverYieldExecutor,
+                new DataSize(1, MEGABYTE),
+                new SpillSpaceTracker(new DataSize(1, GIGABYTE)));
+
+        queryContext.addTaskContext(new TaskStateMachine(taskId, taskNotificationExecutor), testSessionBuilder().build(), false, false, OptionalInt.empty());
+
+        return createSqlTask(
                 taskId,
                 location,
                 "fake",
-                new DefaultQueryContext(new QueryId("query"),
-                        new DataSize(1, MEGABYTE),
-                        new DataSize(2, MEGABYTE),
-                        new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE)),
-                        new TestingGcMonitor(),
-                        taskNotificationExecutor,
-                        driverYieldExecutor,
-                        new DataSize(1, MEGABYTE),
-                        new SpillSpaceTracker(new DataSize(1, GIGABYTE))),
+                queryContext,
                 sqlTaskExecutionFactory,
                 taskNotificationExecutor,
                 Functions.identity(),
-                new DataSize(32, MEGABYTE));
+                new DataSize(32, MEGABYTE),
+                new CounterStat());
     }
 }

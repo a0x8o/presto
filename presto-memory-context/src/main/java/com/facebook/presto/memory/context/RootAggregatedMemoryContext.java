@@ -15,6 +15,7 @@ package com.facebook.presto.memory.context;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
 class RootAggregatedMemoryContext
@@ -30,9 +31,10 @@ class RootAggregatedMemoryContext
     }
 
     @Override
-    synchronized ListenableFuture<?> updateBytes(long bytes)
+    synchronized ListenableFuture<?> updateBytes(String allocationTag, long bytes)
     {
-        ListenableFuture<?> future = reservationHandler.reserveMemory(bytes);
+        checkState(!isClosed(), "RootAggregatedMemoryContext is already closed");
+        ListenableFuture<?> future = reservationHandler.reserveMemory(allocationTag, bytes);
         addBytes(bytes);
         // make sure we never block queries below guaranteedMemory
         if (getBytes() < guaranteedMemory) {
@@ -42,9 +44,9 @@ class RootAggregatedMemoryContext
     }
 
     @Override
-    synchronized boolean tryUpdateBytes(long delta)
+    synchronized boolean tryUpdateBytes(String allocationTag, long delta)
     {
-        if (reservationHandler.tryReserveMemory(delta)) {
+        if (reservationHandler.tryReserveMemory(allocationTag, delta)) {
             addBytes(delta);
             return true;
         }
@@ -60,6 +62,6 @@ class RootAggregatedMemoryContext
     @Override
     void closeContext()
     {
-        reservationHandler.reserveMemory(-getBytes());
+        reservationHandler.reserveMemory(FORCE_FREE_TAG, -getBytes());
     }
 }

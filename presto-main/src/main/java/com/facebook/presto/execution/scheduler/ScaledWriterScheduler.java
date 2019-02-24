@@ -24,6 +24,7 @@ import io.airlift.units.DataSize;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
@@ -39,12 +40,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 public class ScaledWriterScheduler
         implements StageScheduler
 {
-    private interface TaskScheduler
-    {
-        RemoteTask scheduleTask(Node node, int partition, OptionalInt totalPartitions);
-    }
-
-    private final TaskScheduler taskScheduler;
+    private final SqlStageExecution stage;
     private final Supplier<Collection<TaskStatus>> sourceTasksProvider;
     private final Supplier<Collection<TaskStatus>> writerTasksProvider;
     private final NodeSelector nodeSelector;
@@ -62,8 +58,7 @@ public class ScaledWriterScheduler
             ScheduledExecutorService executor,
             DataSize writerMinSize)
     {
-        requireNonNull(stage, "stage is null");
-        this.taskScheduler = stage::scheduleTask;
+        this.stage = requireNonNull(stage, "stage is null");
         this.sourceTasksProvider = requireNonNull(sourceTasksProvider, "sourceTasksProvider is null");
         this.writerTasksProvider = requireNonNull(writerTasksProvider, "writerTasksProvider is null");
         this.nodeSelector = requireNonNull(nodeSelector, "nodeSelector is null");
@@ -125,8 +120,11 @@ public class ScaledWriterScheduler
 
         ImmutableList.Builder<RemoteTask> tasks = ImmutableList.builder();
         for (Node node : nodes) {
-            tasks.add(taskScheduler.scheduleTask(node, scheduledNodes.size(), OptionalInt.empty()));
-            scheduledNodes.add(node);
+            Optional<RemoteTask> remoteTask = stage.scheduleTask(node, scheduledNodes.size(), OptionalInt.empty());
+            remoteTask.ifPresent(task -> {
+                tasks.add(task);
+                scheduledNodes.add(node);
+            });
         }
 
         return tasks.build();

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.orc.reader;
 
+import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
@@ -23,13 +24,16 @@ import com.facebook.presto.orc.stream.LongInputStream;
 import com.facebook.presto.spi.block.ArrayBlock;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
+import com.google.common.io.Closer;
 import org.joda.time.DateTimeZone;
+import org.openjdk.jol.info.ClassLayout;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Optional;
 
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
@@ -42,6 +46,8 @@ import static java.util.Objects.requireNonNull;
 public class ListStreamReader
         implements StreamReader
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ListStreamReader.class).instanceSize();
+
     private final StreamDescriptor streamDescriptor;
 
     private final StreamReader elementStreamReader;
@@ -49,22 +55,20 @@ public class ListStreamReader
     private int readOffset;
     private int nextBatchSize;
 
-    @Nonnull
     private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
     @Nullable
     private BooleanInputStream presentStream;
 
-    @Nonnull
     private InputStreamSource<LongInputStream> lengthStreamSource = missingStreamSource(LongInputStream.class);
     @Nullable
     private LongInputStream lengthStream;
 
     private boolean rowGroupOpen;
 
-    public ListStreamReader(StreamDescriptor streamDescriptor, DateTimeZone hiveStorageTimeZone)
+    public ListStreamReader(StreamDescriptor streamDescriptor, DateTimeZone hiveStorageTimeZone, AggregatedMemoryContext systemMemoryContext)
     {
         this.streamDescriptor = requireNonNull(streamDescriptor, "stream is null");
-        this.elementStreamReader = createStreamReader(streamDescriptor.getNestedStreams().get(0), hiveStorageTimeZone);
+        this.elementStreamReader = createStreamReader(streamDescriptor.getNestedStreams().get(0), hiveStorageTimeZone, systemMemoryContext);
     }
 
     @Override
@@ -100,7 +104,7 @@ public class ListStreamReader
         // We will use the offsetVector as the buffer to read the length values from lengthStream,
         // and the length values will be converted in-place to an offset vector.
         int[] offsetVector = new int[nextBatchSize + 1];
-        boolean[] nullVector = new boolean[nextBatchSize];
+        boolean[] nullVector = null;
         if (presentStream == null) {
             if (lengthStream == null) {
                 throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
@@ -108,6 +112,7 @@ public class ListStreamReader
             lengthStream.nextIntVector(nextBatchSize, offsetVector, 0);
         }
         else {
+            nullVector = new boolean[nextBatchSize];
             int nullValues = presentStream.getUnsetBits(nextBatchSize, nullVector);
             if (nullValues != nextBatchSize) {
                 if (lengthStream == null) {
@@ -137,7 +142,7 @@ public class ListStreamReader
         else {
             elements = elementType.createBlockBuilder(null, 0).build();
         }
-        Block arrayBlock = ArrayBlock.fromElementBlock(nextBatchSize, nullVector, offsetVector, elements);
+        Block arrayBlock = ArrayBlock.fromElementBlock(nextBatchSize, Optional.ofNullable(nullVector), offsetVector, elements);
 
         readOffset = 0;
         nextBatchSize = 0;
@@ -196,5 +201,22 @@ public class ListStreamReader
         return toStringHelper(this)
                 .addValue(streamDescriptor)
                 .toString();
+    }
+
+    @Override
+    public void close()
+    {
+        try (Closer closer = Closer.create()) {
+            closer.register(() -> elementStreamReader.close());
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public long getRetainedSizeInBytes()
+    {
+        return INSTANCE_SIZE + elementStreamReader.getRetainedSizeInBytes();
     }
 }

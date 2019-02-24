@@ -18,9 +18,6 @@ import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.security.AllowAllAccessControl;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.QueryId;
-import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
-import com.facebook.presto.spi.session.SessionPropertyConfigurationManagerFactory;
-import com.facebook.presto.spi.session.TestingSessionPropertyConfigurationManagerFactory;
 import com.facebook.presto.sql.SqlEnvironmentConfig;
 import com.facebook.presto.sql.SqlPath;
 import com.facebook.presto.sql.SqlPathElement;
@@ -30,7 +27,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.node.NodeInfo;
 import org.testng.annotations.Test;
 
 import javax.servlet.http.HttpServletRequest;
@@ -55,7 +51,7 @@ import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_TIME_ZONE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_USER;
 import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKey;
-import static com.facebook.presto.transaction.TransactionManager.createTestTransactionManager;
+import static com.facebook.presto.transaction.InMemoryTransactionManager.createTestTransactionManager;
 import static org.testng.Assert.assertEquals;
 
 public class TestQuerySessionSupplier
@@ -72,24 +68,21 @@ public class TestQuerySessionSupplier
                     .put(PRESTO_CLIENT_INFO, "client-info")
                     .put(PRESTO_CLIENT_TAGS, "tag1,tag2 ,tag3, tag2")
                     .put(PRESTO_SESSION, QUERY_MAX_MEMORY + "=1GB")
-                    .put(PRESTO_SESSION, JOIN_DISTRIBUTION_TYPE + "=repartitioned," + HASH_PARTITION_COUNT + " = 43")
+                    .put(PRESTO_SESSION, JOIN_DISTRIBUTION_TYPE + "=partitioned," + HASH_PARTITION_COUNT + " = 43")
                     .put(PRESTO_PREPARED_STATEMENT, "query1=select * from foo,query2=select * from bar")
                     .build(),
             "testRemote");
-    private static final ResourceGroupId TEST_RESOURCE_GROUP_ID = new ResourceGroupId("test");
-    private static final NodeInfo TEST_NODE_INFO = new NodeInfo("test");
 
     @Test
     public void testCreateSession()
     {
         HttpRequestSessionContext context = new HttpRequestSessionContext(TEST_REQUEST);
         QuerySessionSupplier sessionSupplier = new QuerySessionSupplier(
-                TEST_NODE_INFO,
                 createTestTransactionManager(),
                 new AllowAllAccessControl(),
                 new SessionPropertyManager(),
                 new SqlEnvironmentConfig());
-        Session session = sessionSupplier.createSession(new QueryId("test_query_id"), context, Optional.empty(), TEST_RESOURCE_GROUP_ID);
+        Session session = sessionSupplier.createSession(new QueryId("test_query_id"), context);
 
         assertEquals(session.getQueryId(), new QueryId("test_query_id"));
         assertEquals(session.getUser(), "testUser");
@@ -104,39 +97,13 @@ public class TestQuerySessionSupplier
         assertEquals(session.getClientTags(), ImmutableSet.of("tag1", "tag2", "tag3"));
         assertEquals(session.getSystemProperties(), ImmutableMap.<String, String>builder()
                 .put(QUERY_MAX_MEMORY, "1GB")
-                .put(JOIN_DISTRIBUTION_TYPE, "repartitioned")
+                .put(JOIN_DISTRIBUTION_TYPE, "partitioned")
                 .put(HASH_PARTITION_COUNT, "43")
                 .build());
         assertEquals(session.getPreparedStatements(), ImmutableMap.<String, String>builder()
                 .put("query1", "select * from foo")
                 .put("query2", "select * from bar")
                 .build());
-    }
-
-    @Test
-    public void testApplySessionPropertyConfigurationManager()
-    {
-        HttpRequestSessionContext context = new HttpRequestSessionContext(TEST_REQUEST);
-        QuerySessionSupplier sessionSupplier = new QuerySessionSupplier(
-                TEST_NODE_INFO,
-                createTestTransactionManager(),
-                new AllowAllAccessControl(),
-                new SessionPropertyManager(),
-                new SqlEnvironmentConfig());
-        SessionPropertyConfigurationManagerFactory factory = new TestingSessionPropertyConfigurationManagerFactory(
-                ImmutableMap.of(QUERY_MAX_MEMORY, "10GB", "key2", "20", "key3", "3"),
-                ImmutableMap.of("testCatalog", ImmutableMap.of("key1", "10")));
-        sessionSupplier.addConfigurationManager(factory);
-        sessionSupplier.setConfigurationManager(factory.getName(), ImmutableMap.of());
-        Session session = sessionSupplier.createSession(new QueryId("test_query_id"), context, Optional.empty(), TEST_RESOURCE_GROUP_ID);
-        assertEquals(session.getSystemProperties(), ImmutableMap.<String, String>builder()
-                .put(QUERY_MAX_MEMORY, "1GB")
-                .put(JOIN_DISTRIBUTION_TYPE, "repartitioned")
-                .put(HASH_PARTITION_COUNT, "43")
-                .put("key2", "20")
-                .put("key3", "3")
-                .build());
-        assertEquals(session.getUnprocessedCatalogProperties(), ImmutableMap.of("testCatalog", ImmutableMap.of("key1", "10")));
     }
 
     @Test
@@ -192,12 +159,11 @@ public class TestQuerySessionSupplier
                 "testRemote");
         HttpRequestSessionContext context = new HttpRequestSessionContext(request);
         QuerySessionSupplier sessionSupplier = new QuerySessionSupplier(
-                TEST_NODE_INFO,
                 createTestTransactionManager(),
                 new AllowAllAccessControl(),
                 new SessionPropertyManager(),
                 new SqlEnvironmentConfig());
-        sessionSupplier.createSession(new QueryId("test_query_id"), context, Optional.empty(), TEST_RESOURCE_GROUP_ID);
+        sessionSupplier.createSession(new QueryId("test_query_id"), context);
     }
 
     @Test

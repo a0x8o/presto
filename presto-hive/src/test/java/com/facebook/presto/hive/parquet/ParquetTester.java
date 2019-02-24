@@ -18,6 +18,7 @@ import com.facebook.presto.hive.HiveClientConfig;
 import com.facebook.presto.hive.HiveSessionProperties;
 import com.facebook.presto.hive.HiveStorageFormat;
 import com.facebook.presto.hive.OrcFileWriterConfig;
+import com.facebook.presto.hive.ParquetFileWriterConfig;
 import com.facebook.presto.hive.benchmark.FileFormat;
 import com.facebook.presto.hive.parquet.write.MapKeyValuesSchemaConverter;
 import com.facebook.presto.hive.parquet.write.SingleLevelArrayMapKeyValuesSchemaConverter;
@@ -109,12 +110,12 @@ import static parquet.hadoop.metadata.CompressionCodecName.UNCOMPRESSED;
 
 public class ParquetTester
 {
-    public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("Asia/Katmandu");
+    public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
     private static final boolean OPTIMIZED = true;
     private static final HiveClientConfig HIVE_CLIENT_CONFIG = createHiveClientConfig(false);
     private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(HIVE_CLIENT_CONFIG);
-    private static final TestingConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(HIVE_CLIENT_CONFIG, new OrcFileWriterConfig()).getSessionProperties());
-    private static final TestingConnectorSession SESSION_USE_NAME = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true), new OrcFileWriterConfig()).getSessionProperties());
+    private static final TestingConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(HIVE_CLIENT_CONFIG, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
+    private static final TestingConnectorSession SESSION_USE_NAME = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     private static final List<String> TEST_COLUMN = singletonList("test");
 
     private Set<CompressionCodecName> compressions = ImmutableSet.of();
@@ -410,8 +411,6 @@ public class ParquetTester
     {
         HiveClientConfig config = new HiveClientConfig();
         config.setHiveStorageFormat(HiveStorageFormat.PARQUET)
-                .setParquetOptimizedReaderEnabled(OPTIMIZED)
-                .setParquetPredicatePushdownEnabled(OPTIMIZED)
                 .setUseParquetColumnNames(useParquetColumnNames);
         return config;
     }

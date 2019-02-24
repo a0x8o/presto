@@ -15,7 +15,7 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
@@ -102,7 +102,7 @@ public final class ArrayConstructor
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Map<String, Type> types = boundVariables.getTypeVariables();
         checkArgument(types.size() == 1, "Can only construct arrays from exactly matching types");
@@ -167,17 +167,12 @@ public final class ArrayConstructor
         body.append(createBlockBuilder);
 
         for (int i = 0; i < stackTypes.size(); i++) {
-            if (elementType.getJavaType() == void.class) {
-                body.append(blockBuilderVariable.invoke("appendNull", BlockBuilder.class));
-            }
-            else {
-                Variable argument = scope.getVariable("arg" + i);
-                IfStatement ifStatement = new IfStatement()
-                        .condition(equal(argument, constantNull(stackTypes.get(i))))
-                        .ifTrue(blockBuilderVariable.invoke("appendNull", BlockBuilder.class).pop())
-                        .ifFalse(constantType(binder, elementType).writeValue(blockBuilderVariable, argument.cast(elementType.getJavaType())));
-                body.append(ifStatement);
-            }
+            Variable argument = scope.getVariable("arg" + i);
+            IfStatement ifStatement = new IfStatement()
+                    .condition(equal(argument, constantNull(stackTypes.get(i))))
+                    .ifTrue(blockBuilderVariable.invoke("appendNull", BlockBuilder.class).pop())
+                    .ifFalse(constantType(binder, elementType).writeValue(blockBuilderVariable, argument.cast(elementType.getJavaType())));
+            body.append(ifStatement);
         }
 
         body.append(blockBuilderVariable.invoke("build", Block.class).ret());

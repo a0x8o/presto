@@ -28,8 +28,8 @@ import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
+import org.openjdk.jol.info.ClassLayout;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
@@ -40,8 +40,10 @@ import static com.facebook.presto.orc.metadata.Stream.StreamKind.DATA;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.reader.SliceStreamReader.computeTruncatedLength;
+import static com.facebook.presto.orc.reader.SliceStreamReader.getMaxCodePointCount;
 import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static com.facebook.presto.spi.type.Chars.isCharType;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -54,6 +56,7 @@ import static java.util.Objects.requireNonNull;
 public class SliceDirectStreamReader
         implements StreamReader
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SliceDirectStreamReader.class).instanceSize();
     private static final int ONE_GIGABYTE = toIntExact(new DataSize(1, GIGABYTE).toBytes());
 
     private final StreamDescriptor streamDescriptor;
@@ -61,17 +64,14 @@ public class SliceDirectStreamReader
     private int readOffset;
     private int nextBatchSize;
 
-    @Nonnull
     private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
     @Nullable
     private BooleanInputStream presentStream;
 
-    @Nonnull
     private InputStreamSource<LongInputStream> lengthStreamSource = missingStreamSource(LongInputStream.class);
     @Nullable
     private LongInputStream lengthStream;
 
-    @Nonnull
     private InputStreamSource<ByteArrayInputStream> dataByteSource = missingStreamSource(ByteArrayInputStream.class);
     @Nullable
     private ByteArrayInputStream dataStream;
@@ -180,6 +180,8 @@ public class SliceDirectStreamReader
         // * convert original length values in offsetVector into truncated offset values
         int currentLength = offsetVector[0];
         offsetVector[0] = 0;
+        int maxCodePointCount = getMaxCodePointCount(type);
+        boolean isCharType = isCharType(type);
         for (int i = 1; i <= currentBatchSize; i++) {
             int nextLength = offsetVector[i];
             if (isNullVector != null && isNullVector[i - 1]) {
@@ -194,7 +196,7 @@ public class SliceDirectStreamReader
             dataStream.next(data, offset, offset + currentLength);
 
             // adjust offsetVector with truncated length
-            int truncatedLength = computeTruncatedLength(slice, offset, currentLength, type);
+            int truncatedLength = computeTruncatedLength(slice, offset, currentLength, maxCodePointCount, isCharType);
             verify(truncatedLength >= 0);
             offsetVector[i] = offset + truncatedLength;
 
@@ -255,5 +257,16 @@ public class SliceDirectStreamReader
         return toStringHelper(this)
                 .addValue(streamDescriptor)
                 .toString();
+    }
+
+    @Override
+    public void close()
+    {
+    }
+
+    @Override
+    public long getRetainedSizeInBytes()
+    {
+        return INSTANCE_SIZE;
     }
 }

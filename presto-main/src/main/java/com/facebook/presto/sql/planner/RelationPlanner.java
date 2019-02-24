@@ -14,12 +14,13 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.MapType;
+import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.analyzer.Analysis;
@@ -86,6 +87,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.sql.analyzer.SemanticExceptions.notSupportedException;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.sql.tree.Join.Type.INNER;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -125,7 +127,7 @@ class RelationPlanner
         this.lambdaDeclarationToSymbolMap = lambdaDeclarationToSymbolMap;
         this.metadata = metadata;
         this.session = session;
-        this.subqueryPlanner = new SubqueryPlanner(analysis, symbolAllocator, idAllocator, lambdaDeclarationToSymbolMap, metadata, session, analysis.getParameters());
+        this.subqueryPlanner = new SubqueryPlanner(analysis, symbolAllocator, idAllocator, lambdaDeclarationToSymbolMap, metadata, session);
     }
 
     @Override
@@ -156,7 +158,7 @@ class RelationPlanner
         }
 
         List<Symbol> outputSymbols = outputSymbolsBuilder.build();
-        PlanNode root = new TableScanNode(idAllocator.getNextId(), handle, outputSymbols, columns.build(), Optional.empty(), TupleDomain.all(), null);
+        PlanNode root = new TableScanNode(idAllocator.getNextId(), handle, outputSymbols, columns.build());
         return new RelationPlan(root, scope, outputSymbols);
     }
 
@@ -165,7 +167,28 @@ class RelationPlanner
     {
         RelationPlan subPlan = process(node.getRelation(), context);
 
-        return new RelationPlan(subPlan.getRoot(), analysis.getScope(node), subPlan.getFieldMappings());
+        PlanNode root = subPlan.getRoot();
+        List<Symbol> mappings = subPlan.getFieldMappings();
+
+        if (node.getColumnNames() != null) {
+            ImmutableList.Builder<Symbol> newMappings = ImmutableList.<Symbol>builder();
+            Assignments.Builder assignments = Assignments.builder();
+
+            // project only the visible columns from the underlying relation
+            for (int i = 0; i < subPlan.getDescriptor().getAllFieldCount(); i++) {
+                Field field = subPlan.getDescriptor().getFieldByIndex(i);
+                if (!field.isHidden()) {
+                    Symbol aliasedColumn = symbolAllocator.newSymbol(field);
+                    assignments.put(aliasedColumn, subPlan.getFieldMappings().get(i).toSymbolReference());
+                    newMappings.add(aliasedColumn);
+                }
+            }
+
+            root = new ProjectNode(idAllocator.getNextId(), subPlan.getRoot(), assignments.build());
+            mappings = newMappings.build();
+        }
+
+        return new RelationPlan(root, analysis.getScope(node), mappings);
     }
 
     @Override
@@ -549,7 +572,17 @@ class RelationPlanner
             Type type = analysis.getType(expression);
             Symbol inputSymbol = translations.get(expression);
             if (type instanceof ArrayType) {
-                unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next()));
+                Type elementType = ((ArrayType) type).getElementType();
+                if (!SystemSessionProperties.isLegacyUnnest(session) && elementType instanceof RowType) {
+                    ImmutableList.Builder<Symbol> unnestSymbolBuilder = ImmutableList.builder();
+                    for (int i = 0; i < ((RowType) elementType).getFields().size(); i++) {
+                        unnestSymbolBuilder.add(unnestedSymbolsIterator.next());
+                    }
+                    unnestSymbols.put(inputSymbol, unnestSymbolBuilder.build());
+                }
+                else {
+                    unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next()));
+                }
             }
             else if (type instanceof MapType) {
                 unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next(), unnestedSymbolsIterator.next()));
@@ -640,7 +673,17 @@ class RelationPlanner
             Symbol inputSymbol = symbolAllocator.newSymbol(rewritten, type);
             argumentSymbols.add(inputSymbol);
             if (type instanceof ArrayType) {
-                unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next()));
+                Type elementType = ((ArrayType) type).getElementType();
+                if (!SystemSessionProperties.isLegacyUnnest(session) && elementType instanceof RowType) {
+                    ImmutableList.Builder<Symbol> unnestSymbolBuilder = ImmutableList.builder();
+                    for (int i = 0; i < ((RowType) elementType).getFields().size(); i++) {
+                        unnestSymbolBuilder.add(unnestedSymbolsIterator.next());
+                    }
+                    unnestSymbols.put(inputSymbol, unnestSymbolBuilder.build());
+                }
+                else {
+                    unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next()));
+                }
             }
             else if (type instanceof MapType) {
                 unnestSymbols.put(inputSymbol, ImmutableList.of(unnestedSymbolsIterator.next(), unnestedSymbolsIterator.next()));
@@ -701,6 +744,7 @@ class RelationPlanner
                     targetColumnTypes[i],
                     oldField.isHidden(),
                     oldField.getOriginTable(),
+                    oldField.getOriginColumnName(),
                     oldField.isAliased());
         }
         ProjectNode projectNode = new ProjectNode(idAllocator.getNextId(), plan.getRoot(), assignments.build());
@@ -802,7 +846,7 @@ class RelationPlanner
         return new AggregationNode(idAllocator.getNextId(),
                 node,
                 ImmutableMap.of(),
-                ImmutableList.of(node.getOutputSymbols()),
+                singleGroupingSet(node.getOutputSymbols()),
                 ImmutableList.of(),
                 AggregationNode.Step.SINGLE,
                 Optional.empty(),

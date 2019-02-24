@@ -25,7 +25,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 
-import static com.facebook.presto.tests.TestGroups.HIVE_CONNECTOR;
 import static com.facebook.presto.tests.TestGroups.HIVE_TABLE_STATISTICS;
 import static com.facebook.presto.tests.utils.QueryExecutors.onHive;
 import static com.facebook.presto.tests.utils.QueryExecutors.onPresto;
@@ -39,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class TestHiveBasicTableStatistics
         extends ProductTest
 {
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testCreateUnpartitioned()
     {
         String tableName = "test_basic_statistics_unpartitioned_ctas_presto";
@@ -57,7 +56,7 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testCreateTableWithNoData()
     {
         String tableName = "test_basic_statistics_unpartitioned_ctas_presto_with_no_data";
@@ -74,7 +73,7 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testInsertUnpartitioned()
     {
         String tableName = "test_basic_statistics_unpartitioned_insert_presto";
@@ -110,7 +109,7 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testCreatePartitioned()
     {
         String tableName = "test_basic_statistics_partitioned_ctas_presto";
@@ -145,7 +144,81 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
+    public void testAnalyzePartitioned()
+    {
+        String tableName = "test_basic_statistics_analyze_partitioned";
+
+        onPresto().executeQuery("DROP TABLE IF EXISTS " + tableName);
+        onPresto().executeQuery(format("" +
+                "CREATE TABLE %s " +
+                "WITH ( " +
+                "   partitioned_by = ARRAY['n_regionkey'], " +
+                "   bucketed_by = ARRAY['n_nationkey'], " +
+                "   bucket_count = 10 " +
+                ") " +
+                "AS " +
+                "SELECT n_nationkey, n_name, n_comment, n_regionkey " +
+                "FROM nation " +
+                "WHERE n_regionkey = 1", tableName));
+
+        try {
+            BasicStatistics tableStatistics = getBasicStatisticsForTable(onHive(), tableName);
+            assertThatStatisticsAreNotPresent(tableStatistics);
+
+            BasicStatistics partitionStatisticsBefore = getBasicStatisticsForPartition(onHive(), tableName, "n_regionkey=1");
+            assertThatStatisticsArePresent(partitionStatisticsBefore);
+
+            // run ANALYZE
+            onPresto().executeQuery(format("ANALYZE %s", tableName));
+            BasicStatistics partitionStatisticsAfter = getBasicStatisticsForPartition(onHive(), tableName, "n_regionkey=1");
+            assertThatStatisticsArePresent(partitionStatisticsAfter);
+
+            // ANALYZE must not change the basic stats
+            assertThat(partitionStatisticsBefore.getNumRows().getAsLong()).isEqualTo(partitionStatisticsAfter.getNumRows().getAsLong());
+            assertThat(partitionStatisticsBefore.getNumFiles().getAsLong()).isEqualTo(partitionStatisticsAfter.getNumFiles().getAsLong());
+            assertThat(partitionStatisticsBefore.getRawDataSize().getAsLong()).isEqualTo(partitionStatisticsAfter.getRawDataSize().getAsLong());
+            assertThat(partitionStatisticsBefore.getTotalSize().getAsLong()).isEqualTo(partitionStatisticsAfter.getTotalSize().getAsLong());
+        }
+        finally {
+            onPresto().executeQuery(format("DROP TABLE %s", tableName));
+        }
+    }
+
+    @Test(groups = {HIVE_TABLE_STATISTICS})
+    public void testAnalyzeUnpartitioned()
+    {
+        String tableName = "test_basic_statistics_analyze_unpartitioned";
+
+        onPresto().executeQuery("DROP TABLE IF EXISTS " + tableName);
+        onPresto().executeQuery(format("" +
+                "CREATE TABLE %s " +
+                "AS " +
+                "SELECT n_nationkey, n_name, n_comment, n_regionkey " +
+                "FROM nation " +
+                "WHERE n_regionkey = 1", tableName));
+
+        try {
+            BasicStatistics tableStatisticsBefore = getBasicStatisticsForTable(onHive(), tableName);
+            assertThatStatisticsArePresent(tableStatisticsBefore);
+
+            // run ANALYZE
+            onPresto().executeQuery(format("ANALYZE %s", tableName));
+            BasicStatistics tableStatisticsAfter = getBasicStatisticsForTable(onHive(), tableName);
+            assertThatStatisticsArePresent(tableStatisticsAfter);
+
+            // ANALYZE must not change the basic stats
+            assertThat(tableStatisticsBefore.getNumRows()).isEqualTo(tableStatisticsAfter.getNumRows());
+            assertThat(tableStatisticsBefore.getNumFiles()).isEqualTo(tableStatisticsAfter.getNumFiles());
+            assertThat(tableStatisticsBefore.getRawDataSize()).isEqualTo(tableStatisticsAfter.getRawDataSize());
+            assertThat(tableStatisticsBefore.getTotalSize()).isEqualTo(tableStatisticsAfter.getTotalSize());
+        }
+        finally {
+            onPresto().executeQuery(format("DROP TABLE %s", tableName));
+        }
+    }
+
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testInsertPartitioned()
     {
         String tableName = "test_basic_statistics_partitioned_insert_presto";
@@ -183,7 +256,7 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testInsertBucketed()
     {
         String tableName = "test_basic_statistics_bucketed_insert_presto";
@@ -218,7 +291,7 @@ public class TestHiveBasicTableStatistics
         }
     }
 
-    @Test(groups = {HIVE_CONNECTOR, HIVE_TABLE_STATISTICS})
+    @Test(groups = {HIVE_TABLE_STATISTICS})
     public void testInsertBucketedPartitioned()
     {
         String tableName = "test_basic_statistics_bucketed_partitioned_insert_presto";

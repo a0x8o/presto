@@ -119,19 +119,7 @@ public class BooleanInputStream
 
         // count remaining bits
         for (int i = 0; i < items; i++) {
-            // read more data if necessary
-            if (bitsInData == 0) {
-                readByte();
-            }
-
-            // read bit
-            if ((data & HIGH_BIT_MASK) != 0) {
-                count++;
-            }
-
-            // mark bit consumed
-            data <<= 1;
-            bitsInData--;
+            count += nextBit() ? 1 : 0;
         }
 
         return count;
@@ -140,45 +128,31 @@ public class BooleanInputStream
     /**
      * Sets the vector element to true if the bit is set.
      */
-    public void getSetBits(int batchSize, boolean[] vector)
+    public int getSetBits(int batchSize, boolean[] vector)
             throws IOException
     {
+        int count = 0;
         for (int i = 0; i < batchSize; i++) {
-            // read more data if necessary
-            if (bitsInData == 0) {
-                readByte();
-            }
-
-            // read bit
-            vector[i] = (data & HIGH_BIT_MASK) != 0;
-
-            // mark bit consumed
-            data <<= 1;
-            bitsInData--;
+            vector[i] = nextBit();
+            count += vector[i] ? 1 : 0;
         }
+        return count;
     }
 
     /**
      * Sets the vector element to true if the bit is set, skipping the null values.
      */
-    public void getSetBits(int batchSize, boolean[] vector, boolean[] isNull)
+    public int getSetBits(int batchSize, boolean[] vector, boolean[] isNull)
             throws IOException
     {
+        int count = 0;
         for (int i = 0; i < batchSize; i++) {
             if (!isNull[i]) {
-                // read more data if necessary
-                if (bitsInData == 0) {
-                    readByte();
-                }
-
-                // read bit
-                vector[i] = (data & HIGH_BIT_MASK) != 0;
-
-                // mark bit consumed
-                data <<= 1;
-                bitsInData--;
+                vector[i] = nextBit();
+                count += vector[i] ? 1 : 0;
             }
         }
+        return count;
     }
 
     /**
@@ -188,43 +162,7 @@ public class BooleanInputStream
             throws IOException
     {
         for (int i = 0; i < batchSize; i++) {
-            // read more data if necessary
-            if (bitsInData == 0) {
-                readByte();
-            }
-
-            // read bit
-            type.writeBoolean(builder, (data & HIGH_BIT_MASK) != 0);
-
-            // mark bit consumed
-            data <<= 1;
-            bitsInData--;
-        }
-    }
-
-    /**
-     * Sets the vector element to true if the bit is set, skipping the null values.
-     */
-    public void getSetBits(Type type, int batchSize, BlockBuilder builder, boolean[] isNull)
-            throws IOException
-    {
-        getSetBits(type, batchSize, builder, isNull, 0);
-    }
-
-    /**
-     * Sets the vector element to true for the batchSize number of elements starting at offset
-     * if the bit is set, skipping the null values.
-     */
-    public void getSetBits(Type type, int batchSize, BlockBuilder builder, boolean[] isNull, int offset)
-            throws IOException
-    {
-        for (int i = offset; i < batchSize + offset; i++) {
-            if (isNull[i]) {
-                builder.appendNull();
-            }
-            else {
-                type.writeBoolean(builder, nextBit());
-            }
+            type.writeBoolean(builder, nextBit());
         }
     }
 
@@ -247,9 +185,20 @@ public class BooleanInputStream
         int count = 0;
         for (int i = offset; i < batchSize + offset; i++) {
             vector[i] = !nextBit();
-            if (vector[i]) {
-                count++;
-            }
+            count += vector[i] ? 1 : 0;
+        }
+        return count;
+    }
+
+    /**
+     * Return the number of unset bits
+     */
+    public int getUnsetBits(int batchSize)
+            throws IOException
+    {
+        int count = 0;
+        for (int i = 0; i < batchSize; i++) {
+            count += nextBit() ? 0 : 1;
         }
         return count;
     }

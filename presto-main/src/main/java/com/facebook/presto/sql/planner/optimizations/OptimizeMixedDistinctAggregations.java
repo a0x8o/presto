@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.type.BigintType;
@@ -32,6 +33,7 @@ import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.tree.Cast;
+import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
@@ -54,6 +56,7 @@ import java.util.stream.Collectors;
 
 import static com.facebook.presto.SystemSessionProperties.isOptimizeDistinctAggregationEnabled;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
@@ -81,7 +84,7 @@ public class OptimizeMixedDistinctAggregations
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         if (isOptimizeDistinctAggregationEnabled(session)) {
             return SimplePlanRewriter.rewriteWith(new Optimizer(idAllocator, symbolAllocator, metadata), plan, Optional.empty());
@@ -149,6 +152,9 @@ public class OptimizeMixedDistinctAggregations
             // Change aggregate node to do second aggregation, handles this part of optimized plan mentioned above:
             //          SELECT a1, a2,..., an, arbitrary(if(group = 0, f1)),...., arbitrary(if(group = 0, fm)), F(if(group = 1, c))
             ImmutableMap.Builder<Symbol, Aggregation> aggregations = ImmutableMap.builder();
+            // Add coalesce projection node to handle count(), count_if(), approx_distinct() functions return a
+            // non-null result without any input
+            ImmutableMap.Builder<Symbol, Symbol> coalesceSymbolsBuilder = ImmutableMap.builder();
             for (Map.Entry<Symbol, Aggregation> entry : node.getAggregations().entrySet()) {
                 FunctionCall functionCall = entry.getValue().getCall();
                 if (entry.getValue().getMask().isPresent()) {
@@ -165,14 +171,25 @@ public class OptimizeMixedDistinctAggregations
                     // Aggregations on non-distinct are already done by new node, just extract the non-null value
                     Symbol argument = aggregateInfo.getNewNonDistinctAggregateSymbols().get(entry.getKey());
                     QualifiedName functionName = QualifiedName.of("arbitrary");
-                    aggregations.put(entry.getKey(), new Aggregation(
+                    String signatureName = entry.getValue().getSignature().getName();
+                    Aggregation aggregation = new Aggregation(
                             new FunctionCall(functionName, functionCall.getWindow(), false, ImmutableList.of(argument.toSymbolReference())),
                             getFunctionSignature(functionName, argument),
-                            Optional.empty()));
+                            Optional.empty());
+                    if (signatureName.equals("count")
+                            || signatureName.equals("count_if") || signatureName.equals("approx_distinct")) {
+                        Symbol newSymbol = symbolAllocator.newSymbol("expr", symbolAllocator.getTypes().get(entry.getKey()));
+                        aggregations.put(newSymbol, aggregation);
+                        coalesceSymbolsBuilder.put(newSymbol, entry.getKey());
+                    }
+                    else {
+                        aggregations.put(entry.getKey(), aggregation);
+                    }
                 }
             }
+            Map<Symbol, Symbol> coalesceSymbols = coalesceSymbolsBuilder.build();
 
-            return new AggregationNode(
+            AggregationNode aggregationNode = new AggregationNode(
                     idAllocator.getNextId(),
                     source,
                     aggregations.build(),
@@ -181,6 +198,23 @@ public class OptimizeMixedDistinctAggregations
                     node.getStep(),
                     Optional.empty(),
                     node.getGroupIdSymbol());
+
+            if (coalesceSymbols.isEmpty()) {
+                return aggregationNode;
+            }
+
+            Assignments.Builder outputSymbols = Assignments.builder();
+            for (Symbol symbol : aggregationNode.getOutputSymbols()) {
+                if (coalesceSymbols.containsKey(symbol)) {
+                    Expression expression = new CoalesceExpression(symbol.toSymbolReference(), new Cast(new LongLiteral("0"), "bigint"));
+                    outputSymbols.put(coalesceSymbols.get(symbol), expression);
+                }
+                else {
+                    outputSymbols.putIdentity(symbol);
+                }
+            }
+
+            return new ProjectNode(idAllocator.getNextId(), aggregationNode, outputSymbols.build());
         }
 
         @Override
@@ -228,8 +262,7 @@ public class OptimizeMixedDistinctAggregations
                     source);
 
             // 2. Add aggregation node
-            Set<Symbol> groupByKeys = new HashSet<>();
-            groupByKeys.addAll(groupBySymbols);
+            Set<Symbol> groupByKeys = new HashSet<>(groupBySymbols);
             groupByKeys.add(distinctSymbol);
             groupByKeys.add(groupSymbol);
 
@@ -356,8 +389,7 @@ public class OptimizeMixedDistinctAggregations
             groups.add(ImmutableList.copyOf(group0));
 
             // g1
-            Set<Symbol> group1 = new HashSet<>();
-            group1.addAll(groupBySymbols);
+            Set<Symbol> group1 = new HashSet<>(groupBySymbols);
             group1.add(distinctSymbol);
             groups.add(ImmutableList.copyOf(group1));
 
@@ -420,7 +452,7 @@ public class OptimizeMixedDistinctAggregations
                     idAllocator.getNextId(),
                     groupIdNode,
                     aggregations.build(),
-                    ImmutableList.of(ImmutableList.copyOf(groupByKeys)),
+                    singleGroupingSet(ImmutableList.copyOf(groupByKeys)),
                     ImmutableList.of(),
                     SINGLE,
                     originalNode.getHashSymbol(),
@@ -429,7 +461,7 @@ public class OptimizeMixedDistinctAggregations
 
         private Signature getFunctionSignature(QualifiedName functionName, Symbol argument)
         {
-            return metadata.getFunctionRegistry()
+            return metadata.getFunctionManager()
                     .resolveFunction(
                             functionName,
                             ImmutableList.of(new TypeSignatureProvider(symbolAllocator.getTypes().get(argument).getTypeSignature())));

@@ -265,7 +265,9 @@ public class ConnectorManager
                 .ifPresent(accessControl -> accessControlManager.addCatalogAccessControl(connectorId, accessControl));
 
         metadataManager.getTablePropertyManager().addProperties(connectorId, connector.getTableProperties());
+        metadataManager.getColumnPropertyManager().addProperties(connectorId, connector.getColumnProperties());
         metadataManager.getSchemaPropertyManager().addProperties(connectorId, connector.getSchemaProperties());
+        metadataManager.getAnalyzePropertyManager().addProperties(connectorId, connector.getAnalyzeProperties());
         metadataManager.getSessionPropertyManager().addConnectorSessionProperties(connectorId, connector.getSessionProperties());
     }
 
@@ -291,6 +293,7 @@ public class ConnectorManager
         metadataManager.getProcedureRegistry().removeProcedures(connectorId);
         accessControlManager.removeCatalogAccessControl(connectorId);
         metadataManager.getTablePropertyManager().removeProperties(connectorId);
+        metadataManager.getColumnPropertyManager().removeProperties(connectorId);
         metadataManager.getSchemaPropertyManager().removeProperties(connectorId);
         metadataManager.getSessionPropertyManager().removeConnectorSessionProperties(connectorId);
 
@@ -334,6 +337,8 @@ public class ConnectorManager
         private final List<PropertyMetadata<?>> sessionProperties;
         private final List<PropertyMetadata<?>> tableProperties;
         private final List<PropertyMetadata<?>> schemaProperties;
+        private final List<PropertyMetadata<?>> columnProperties;
+        private final List<PropertyMetadata<?>> analyzeProperties;
 
         public MaterializedConnector(ConnectorId connectorId, Connector connector)
         {
@@ -418,6 +423,14 @@ public class ConnectorManager
             List<PropertyMetadata<?>> schemaProperties = connector.getSchemaProperties();
             requireNonNull(schemaProperties, "Connector %s returned a null schema properties set");
             this.schemaProperties = ImmutableList.copyOf(schemaProperties);
+
+            List<PropertyMetadata<?>> columnProperties = connector.getColumnProperties();
+            requireNonNull(columnProperties, "Connector %s returned a null column properties set");
+            this.columnProperties = ImmutableList.copyOf(columnProperties);
+
+            List<PropertyMetadata<?>> analyzeProperties = connector.getAnalyzeProperties();
+            requireNonNull(analyzeProperties, "Connector %s returned a null analyze properties set");
+            this.analyzeProperties = ImmutableList.copyOf(analyzeProperties);
         }
 
         public ConnectorId getConnectorId()
@@ -480,9 +493,19 @@ public class ConnectorManager
             return tableProperties;
         }
 
+        public List<PropertyMetadata<?>> getColumnProperties()
+        {
+            return columnProperties;
+        }
+
         public List<PropertyMetadata<?>> getSchemaProperties()
         {
             return schemaProperties;
+        }
+
+        public List<PropertyMetadata<?>> getAnalyzeProperties()
+        {
+            return analyzeProperties;
         }
     }
 }

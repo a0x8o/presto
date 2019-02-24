@@ -48,6 +48,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.Futures.nonCancellationPropagating;
+import static com.google.common.util.concurrent.Futures.transform;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 
@@ -149,6 +151,7 @@ public final class PartitionedLookupSourceFactory
     {
         lock.writeLock().lock();
         try {
+            checkState(!destroyed.isDone(), "already destroyed");
             if (lookupSourceSupplier != null) {
                 return immediateFuture(new SpillAwareLookupSourceProvider());
             }
@@ -163,6 +166,19 @@ public final class PartitionedLookupSourceFactory
     }
 
     @Override
+    public ListenableFuture<?> whenBuildFinishes()
+    {
+        return transform(
+                this.createLookupSourceProvider(),
+                lookupSourceProvider -> {
+                    // Close the lookupSourceProvider we just created.
+                    // The only reason we created it is to wait until lookup source is ready.
+                    lookupSourceProvider.close();
+                    return null;
+                },
+                directExecutor());
+    }
+
     public ListenableFuture<?> lendPartitionLookupSource(int partitionIndex, Supplier<LookupSource> partitionLookupSource)
     {
         requireNonNull(partitionLookupSource, "partitionLookupSource is null");
@@ -192,7 +208,6 @@ public final class PartitionedLookupSourceFactory
         return partitionsNoLongerNeeded;
     }
 
-    @Override
     public void setPartitionSpilledLookupSourceHandle(int partitionIndex, SpilledLookupSourceHandle spilledLookupSourceHandle)
     {
         requireNonNull(spilledLookupSourceHandle, "spilledLookupSourceHandle is null");

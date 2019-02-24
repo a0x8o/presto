@@ -14,9 +14,13 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.function.BlockIndex;
+import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.IsNull;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarOperator;
+import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.TinyintType;
@@ -44,6 +48,7 @@ import static com.facebook.presto.spi.function.OperatorType.NEGATION;
 import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
 import static com.facebook.presto.spi.function.OperatorType.XX_HASH_64;
+import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.String.format;
@@ -128,14 +133,16 @@ public final class TinyintOperators
 
     @ScalarOperator(EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean equal(@SqlType(StandardTypes.TINYINT) long left, @SqlType(StandardTypes.TINYINT) long right)
+    @SqlNullable
+    public static Boolean equal(@SqlType(StandardTypes.TINYINT) long left, @SqlType(StandardTypes.TINYINT) long right)
     {
         return left == right;
     }
 
     @ScalarOperator(NOT_EQUAL)
     @SqlType(StandardTypes.BOOLEAN)
-    public static boolean notEqual(@SqlType(StandardTypes.TINYINT) long left, @SqlType(StandardTypes.TINYINT) long right)
+    @SqlNullable
+    public static Boolean notEqual(@SqlType(StandardTypes.TINYINT) long left, @SqlType(StandardTypes.TINYINT) long right)
     {
         return left != right;
     }
@@ -241,20 +248,39 @@ public final class TinyintOperators
     }
 
     @ScalarOperator(IS_DISTINCT_FROM)
-    @SqlType(StandardTypes.BOOLEAN)
-    public static boolean isDistinctFrom(
-            @SqlType(StandardTypes.TINYINT) long left,
-            @IsNull boolean leftNull,
-            @SqlType(StandardTypes.TINYINT) long right,
-            @IsNull boolean rightNull)
+    public static class TinyintDistinctFromOperator
     {
-        if (leftNull != rightNull) {
-            return true;
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @SqlType(StandardTypes.TINYINT) long left,
+                @IsNull boolean leftNull,
+                @SqlType(StandardTypes.TINYINT) long right,
+                @IsNull boolean rightNull)
+        {
+            if (leftNull != rightNull) {
+                return true;
+            }
+            if (leftNull) {
+                return false;
+            }
+            return notEqual(left, right);
         }
-        if (leftNull) {
-            return false;
+
+        @SqlType(StandardTypes.BOOLEAN)
+        public static boolean isDistinctFrom(
+                @BlockPosition @SqlType(value = StandardTypes.TINYINT, nativeContainerType = long.class) Block left,
+                @BlockIndex int leftPosition,
+                @BlockPosition @SqlType(value = StandardTypes.TINYINT, nativeContainerType = long.class) Block right,
+                @BlockIndex int rightPosition)
+        {
+            if (left.isNull(leftPosition) != right.isNull(rightPosition)) {
+                return true;
+            }
+            if (left.isNull(leftPosition)) {
+                return false;
+            }
+            return notEqual(TINYINT.getLong(left, leftPosition), TINYINT.getLong(right, rightPosition));
         }
-        return notEqual(left, right);
     }
 
     @ScalarOperator(INDETERMINATE)

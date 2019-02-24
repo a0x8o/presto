@@ -16,7 +16,7 @@ package com.facebook.presto.operator.scalar;
 import com.facebook.presto.annotation.UsedByGeneratedCode;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
@@ -81,12 +81,12 @@ public class MapElementAtFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type keyType = boundVariables.getTypeVariable("K");
         Type valueType = boundVariables.getTypeVariable("V");
 
-        MethodHandle keyEqualsMethod = functionRegistry.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(keyType, keyType))).getMethodHandle();
+        MethodHandle keyEqualsMethod = functionManager.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(keyType, keyType))).getMethodHandle();
 
         MethodHandle methodHandle;
         if (keyType.getJavaType() == boolean.class) {
@@ -105,14 +105,7 @@ public class MapElementAtFunction
             methodHandle = METHOD_HANDLE_OBJECT;
         }
         methodHandle = methodHandle.bindTo(keyEqualsMethod).bindTo(keyType).bindTo(valueType);
-
-        // this casting is necessary because otherwise presto byte code generator will generate illegal byte code
-        if (valueType.getJavaType() == void.class) {
-            methodHandle = methodHandle.asType(methodHandle.type().changeReturnType(void.class));
-        }
-        else {
-            methodHandle = methodHandle.asType(methodHandle.type().changeReturnType(Primitives.wrap(valueType.getJavaType())));
-        }
+        methodHandle = methodHandle.asType(methodHandle.type().changeReturnType(Primitives.wrap(valueType.getJavaType())));
 
         return new ScalarFunctionImplementation(
                 true,
