@@ -29,6 +29,7 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.planner.Plan;
@@ -44,6 +45,7 @@ import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.tests.AbstractTestIntegrationSmokeTest;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Files;
 import org.apache.hadoop.fs.Path;
@@ -83,6 +85,7 @@ import static com.facebook.presto.hive.HiveTableProperties.STORAGE_FORMAT_PROPER
 import static com.facebook.presto.hive.HiveTestUtils.TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveUtil.columnExtraInfo;
 import static com.facebook.presto.spi.predicate.Marker.Bound.EXACTLY;
+import static com.facebook.presto.spi.security.SelectedRole.Type.ROLE;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -135,7 +138,7 @@ public class TestHiveIntegrationSmokeTest
     @SuppressWarnings("unused")
     public TestHiveIntegrationSmokeTest()
     {
-        this(() -> createQueryRunner(ORDERS, CUSTOMER), createBucketedSession(), HIVE_CATALOG, new HiveTypeTranslator());
+        this(() -> createQueryRunner(ORDERS, CUSTOMER), createBucketedSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin")))), HIVE_CATALOG, new HiveTypeTranslator());
     }
 
     protected TestHiveIntegrationSmokeTest(QueryRunnerSupplier queryRunnerSupplier, Session bucketedSession, String catalog, TypeTranslator typeTranslator)
@@ -154,15 +157,19 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testSchemaOperations()
     {
-        assertUpdate("CREATE SCHEMA new_schema");
+        Session admin = Session.builder(getQueryRunner().getDefaultSession())
+                .setIdentity(new Identity("hive", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("admin")))))
+                .build();
 
-        assertUpdate("CREATE TABLE new_schema.test (x bigint)");
+        assertUpdate(admin, "CREATE SCHEMA new_schema");
 
-        assertQueryFails("DROP SCHEMA new_schema", "Schema not empty: new_schema");
+        assertUpdate(admin, "CREATE TABLE new_schema.test (x bigint)");
 
-        assertUpdate("DROP TABLE new_schema.test");
+        assertQueryFails(admin, "DROP SCHEMA new_schema", "Schema not empty: new_schema");
 
-        assertUpdate("DROP SCHEMA new_schema");
+        assertUpdate(admin, "DROP TABLE new_schema.test");
+
+        assertUpdate(admin, "DROP SCHEMA new_schema");
     }
 
     @Test
@@ -2181,35 +2188,6 @@ public class TestHiveIntegrationSmokeTest
     }
 
     @Test
-    public void testCreateUnpartitionedTableAndQuery()
-    {
-        Session session = getSession();
-
-        List<MaterializedRow> expected = MaterializedResult.resultBuilder(session, BIGINT, BIGINT)
-                .row(101L, 1L)
-                .row(201L, 2L)
-                .row(202L, 2L)
-                .row(301L, 3L)
-                .row(302L, 3L)
-                .build()
-                .getMaterializedRows();
-
-        transaction(getQueryRunner().getTransactionManager(), getQueryRunner().getAccessControl())
-                .execute(session, transactionSession -> {
-                    assertUpdate(
-                            transactionSession,
-                            "CREATE TABLE tmp_create_query AS " +
-                                    "SELECT * from (VALUES (CAST (101 AS BIGINT), CAST (1 AS BIGINT)), (201, 2), (202, 2), (301, 3), (302, 3)) t(a, z)",
-                            5);
-                    MaterializedResult actualFromCurrentTransaction = computeActual(transactionSession, "SELECT * FROM tmp_create_query");
-                    assertEqualsIgnoreOrder(actualFromCurrentTransaction, expected);
-                });
-
-        MaterializedResult actualAfterTransaction = computeActual(session, "SELECT * FROM tmp_create_query");
-        assertEqualsIgnoreOrder(actualAfterTransaction, expected);
-    }
-
-    @Test
     public void testAddColumn()
     {
         assertUpdate("CREATE TABLE test_add_column (a bigint COMMENT 'test comment AAA')");
@@ -3103,6 +3081,13 @@ public class TestHiveIntegrationSmokeTest
                         "(null, null, null, null, 0E0, null, null)");
 
         assertUpdate(format("DROP TABLE %s", tableName));
+    }
+
+    @Test
+    public void testAnalyzePropertiesSystemTable()
+    {
+        assertQuery("SELECT * FROM system.metadata.analyze_properties WHERE catalog_name = 'hive'",
+                "SELECT 'hive', 'partitions', '', 'array(array(varchar))', 'Partitions to be analyzed'");
     }
 
     @Test

@@ -105,6 +105,7 @@ import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.HOURS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -116,6 +117,7 @@ public class TestSqlTaskExecution
     private static final ConnectorId CONNECTOR_ID = new ConnectorId("test");
     private static final ConnectorTransactionHandle TRANSACTION_HANDLE = TestingTransactionHandle.create();
     private static final Duration ASSERT_WAIT_TIMEOUT = new Duration(1, HOURS);
+    private static final TaskId TASK_ID = TaskId.valueOf("queryid.0.0");
 
     @DataProvider
     public static Object[][] executionStrategies()
@@ -133,7 +135,7 @@ public class TestSqlTaskExecution
         taskExecutor.start();
 
         try {
-            TaskStateMachine taskStateMachine = new TaskStateMachine(TaskId.valueOf("task-id"), taskNotificationExecutor);
+            TaskStateMachine taskStateMachine = new TaskStateMachine(TASK_ID, taskNotificationExecutor);
             PartitionedOutputBuffer outputBuffer = newTestingOutputBuffer(taskNotificationExecutor);
             OutputBufferConsumer outputBufferConsumer = new OutputBufferConsumer(outputBuffer, OUTPUT_BUFFER_ID);
 
@@ -252,6 +254,8 @@ public class TestSqlTaskExecution
                     waitUntilEquals(taskContext::getCompletedDriverGroups, ImmutableSet.of(Lifespan.driverGroup(1), Lifespan.driverGroup(5)), ASSERT_WAIT_TIMEOUT);
 
                     // pause operator execution to make sure that
+                    // * operatorFactory will be closed even though operator can't execute
+                    // * completedDriverGroups will NOT include the newly scheduled driver group while pause is in place
                     testingScanOperatorFactory.getPauser().pause();
                     // add source for pipeline (driver group [7]), mark pipeline as noMoreSplits without explicitly marking driver group 7
                     sqlTaskExecution.addSources(ImmutableList.of(new TaskSource(
@@ -269,6 +273,9 @@ public class TestSqlTaskExecution
                     assertEquals(taskContext.getCompletedDriverGroups(), ImmutableSet.of(Lifespan.driverGroup(1), Lifespan.driverGroup(5)));
                     // resume operator execution
                     testingScanOperatorFactory.getPauser().resume();
+                    // assert driver group [7] is not completed before output buffer is consumed
+                    MILLISECONDS.sleep(1000);
+                    assertEquals(taskContext.getCompletedDriverGroups(), ImmutableSet.of(Lifespan.driverGroup(1), Lifespan.driverGroup(5)));
                     // assert that result is produced
                     outputBufferConsumer.consume(45 + 54, ASSERT_WAIT_TIMEOUT);
                     outputBufferConsumer.assertBufferComplete(ASSERT_WAIT_TIMEOUT);
@@ -301,7 +308,7 @@ public class TestSqlTaskExecution
         taskExecutor.start();
 
         try {
-            TaskStateMachine taskStateMachine = new TaskStateMachine(TaskId.valueOf("task-id"), taskNotificationExecutor);
+            TaskStateMachine taskStateMachine = new TaskStateMachine(TASK_ID, taskNotificationExecutor);
             PartitionedOutputBuffer outputBuffer = newTestingOutputBuffer(taskNotificationExecutor);
             OutputBufferConsumer outputBufferConsumer = new OutputBufferConsumer(outputBuffer, OUTPUT_BUFFER_ID);
 
@@ -605,13 +612,13 @@ public class TestSqlTaskExecution
                 driverYieldExecutor,
                 new DataSize(1, MEGABYTE),
                 new SpillSpaceTracker(new DataSize(1, GIGABYTE)));
-        return queryContext.addTaskContext(taskStateMachine, TEST_SESSION, false, false, OptionalInt.empty());
+        return queryContext.addTaskContext(taskStateMachine, TEST_SESSION, false, false, OptionalInt.empty(), false);
     }
 
     private PartitionedOutputBuffer newTestingOutputBuffer(ScheduledExecutorService taskNotificationExecutor)
     {
         return new PartitionedOutputBuffer(
-                "task-id",
+                "queryId.0.0",
                 new StateMachine<>("bufferState", taskNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
                 createInitialEmptyOutputBuffers(PARTITIONED)
                         .withBuffer(OUTPUT_BUFFER_ID, 0)
@@ -666,6 +673,7 @@ public class TestSqlTaskExecution
                 }
                 sequenceId += results.getSerializedPages().size();
             }
+            outputBuffer.acknowledge(outputBufferId, sequenceId);
         }
 
         public void assertBufferComplete(Duration timeout)

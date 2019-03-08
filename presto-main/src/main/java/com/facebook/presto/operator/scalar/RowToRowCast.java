@@ -15,7 +15,6 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
@@ -23,6 +22,7 @@ import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.gen.CachedInstanceBinder;
@@ -43,11 +43,10 @@ import io.airlift.bytecode.expression.BytecodeExpression;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.internalOperator;
-import static com.facebook.presto.metadata.Signature.withVariadicBound;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.spi.function.Signature.withVariadicBound;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.gen.InvokeFunctionBytecodeExpression.invokeFunction;
 import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
@@ -142,18 +141,15 @@ public class RowToRowCast
 
         // loop through to append member blocks
         for (int i = 0; i < toTypes.size(); i++) {
-            Signature signature = internalOperator(
-                    CAST.name(),
-                    toTypes.get(i).getTypeSignature(),
-                    ImmutableList.of(fromTypes.get(i).getTypeSignature()));
-            ScalarFunctionImplementation function = functionManager.getScalarFunctionImplementation(signature);
+            FunctionHandle functionHandle = functionManager.lookupCast(CAST, fromTypes.get(i).getTypeSignature(), toTypes.get(i).getTypeSignature());
+            ScalarFunctionImplementation function = functionManager.getScalarFunctionImplementation(functionHandle);
             Type currentFromType = fromTypes.get(i);
             if (currentFromType.equals(UNKNOWN)) {
                 body.append(singleRowBlockWriter.invoke("appendNull", BlockBuilder.class).pop());
                 continue;
             }
             BytecodeExpression fromElement = constantType(binder, currentFromType).getValue(value, constantInt(i));
-            BytecodeExpression toElement = invokeFunction(scope, cachedInstanceBinder, signature.getName(), function, fromElement);
+            BytecodeExpression toElement = invokeFunction(scope, cachedInstanceBinder, CAST.name(), function, fromElement);
             IfStatement ifElementNull = new IfStatement("if the element in the row type is null...");
 
             ifElementNull.condition(value.invoke("isNull", boolean.class, constantInt(i)))

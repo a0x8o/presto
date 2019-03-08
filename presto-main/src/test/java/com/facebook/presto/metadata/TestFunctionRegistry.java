@@ -17,16 +17,18 @@ import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.operator.scalar.CustomFunctions;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.ScalarFunction;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlType;
+import com.facebook.presto.spi.function.TypeVariableConstraint;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.type.TypeRegistry;
-import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.Test;
@@ -34,12 +36,14 @@ import org.testng.annotations.Test;
 import java.lang.invoke.MethodHandles;
 import java.util.List;
 
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
 import static com.facebook.presto.metadata.OperatorSignatureUtils.unmangleOperator;
-import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.spi.function.OperatorType.SATURATED_FLOOR_CAST;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -63,10 +67,8 @@ public class TestFunctionRegistry
     {
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = createFunctionRegistry(typeManager);
-        Signature exactOperator = registry.getCoercion(HYPER_LOG_LOG, HYPER_LOG_LOG);
-        assertEquals(exactOperator.getName(), mangleOperatorName(OperatorType.CAST.name()));
-        assertEquals(transform(exactOperator.getArgumentTypes(), Functions.toStringFunction()), ImmutableList.of(StandardTypes.HYPER_LOG_LOG));
-        assertEquals(exactOperator.getReturnType().getBase(), StandardTypes.HYPER_LOG_LOG);
+        FunctionHandle exactOperator = registry.lookupCast(CAST, HYPER_LOG_LOG.getTypeSignature(), HYPER_LOG_LOG.getTypeSignature());
+        assertEquals(exactOperator, new FunctionHandle(new Signature(mangleOperatorName(CAST.name()), SCALAR, HYPER_LOG_LOG.getTypeSignature(), HYPER_LOG_LOG.getTypeSignature())));
     }
 
     @Test
@@ -77,7 +79,7 @@ public class TestFunctionRegistry
         boolean foundOperator = false;
         for (SqlFunction function : registry.listOperators()) {
             OperatorType operatorType = unmangleOperator(function.getSignature().getName());
-            if (operatorType == OperatorType.CAST || operatorType == OperatorType.SATURATED_FLOOR_CAST) {
+            if (operatorType == CAST || operatorType == SATURATED_FLOOR_CAST) {
                 continue;
             }
             if (!function.getSignature().getTypeVariableConstraints().isEmpty()) {
@@ -86,8 +88,8 @@ public class TestFunctionRegistry
             if (function.getSignature().getArgumentTypes().stream().anyMatch(TypeSignature::isCalculated)) {
                 continue;
             }
-            Signature exactOperator = registry.resolveOperator(operatorType, resolveTypes(function.getSignature().getArgumentTypes(), typeManager));
-            assertEquals(exactOperator, function.getSignature());
+            FunctionHandle exactOperator = registry.resolveOperator(operatorType, resolveTypes(function.getSignature().getArgumentTypes(), typeManager));
+            assertEquals(exactOperator.getSignature(), function.getSignature());
             foundOperator = true;
         }
         assertTrue(foundOperator);
@@ -103,8 +105,8 @@ public class TestFunctionRegistry
 
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = createFunctionRegistry(typeManager);
-        Signature function = registry.resolveFunction(QualifiedName.of(signature.getName()), fromTypeSignatures(signature.getArgumentTypes()));
-        assertEquals(function.getArgumentTypes(), ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT)));
+        FunctionHandle functionHandle = registry.resolveFunction(QualifiedName.of(signature.getName()), fromTypeSignatures(signature.getArgumentTypes()));
+        assertEquals(functionHandle.getSignature().getArgumentTypes(), ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT)));
         assertEquals(signature.getReturnType().getBase(), StandardTypes.TIMESTAMP_WITH_TIME_ZONE);
     }
 
@@ -353,16 +355,16 @@ public class TestFunctionRegistry
 
         public ResolveFunctionAssertion returns(SignatureBuilder functionSignature)
         {
-            Signature expectedSignature = functionSignature.name(TEST_FUNCTION_NAME).build();
-            Signature actualSignature = resolveSignature();
-            assertEquals(actualSignature, expectedSignature);
+            FunctionHandle expectedFunction = new FunctionHandle(functionSignature.name(TEST_FUNCTION_NAME).build());
+            FunctionHandle actualFunction = resolveFunctionHandle();
+            assertEquals(expectedFunction, actualFunction);
             return this;
         }
 
         public ResolveFunctionAssertion failsWithMessage(String... messages)
         {
             try {
-                resolveSignature();
+                resolveFunctionHandle();
                 fail("didn't fail as expected");
             }
             catch (RuntimeException e) {
@@ -376,7 +378,7 @@ public class TestFunctionRegistry
             return this;
         }
 
-        private Signature resolveSignature()
+        private FunctionHandle resolveFunctionHandle()
         {
             FeaturesConfig featuresConfig = new FeaturesConfig();
             FunctionManager functionManager = new FunctionManager(typeRegistry, blockEncoding, featuresConfig);

@@ -13,11 +13,14 @@
  */
 package com.facebook.presto.metadata;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
@@ -40,7 +43,7 @@ public class FunctionManager
     {
         FunctionRegistry functionRegistry = new FunctionRegistry(typeManager, blockEncodingSerde, featuresConfig, this);
         this.globalFunctionNamespace = new FunctionNamespace(functionRegistry);
-        this.functionInvokerProvider = new FunctionInvokerProvider(functionRegistry);
+        this.functionInvokerProvider = new FunctionInvokerProvider(this);
         if (typeManager instanceof TypeRegistry) {
             ((TypeRegistry) typeManager).setFunctionManager(this);
         }
@@ -61,19 +64,34 @@ public class FunctionManager
         return globalFunctionNamespace.listFunctions();
     }
 
-    public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    public FunctionHandle resolveFunction(Session session, QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
+        // TODO Actually use session
+        // Session will be used to provide information about the order of function namespaces to through resolving the function.
+        // This is likely to be in terms of SQL path. Currently we still don't have support multiple function namespaces, nor
+        // SQL path. As a result, session is not used here. We still add this to distinguish the two versions of resolveFunction
+        // while the refactoring is on-going.
         return globalFunctionNamespace.resolveFunction(name, parameterTypes);
     }
 
-    public WindowFunctionSupplier getWindowFunctionImplementation(Signature signature)
+    public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
-        return globalFunctionNamespace.getWindowFunctionImplementation(signature);
+        return globalFunctionNamespace.resolveFunction(name, parameterTypes).getSignature();
     }
 
-    public InternalAggregationFunction getAggregateFunctionImplementation(Signature signature)
+    public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
     {
-        return globalFunctionNamespace.getAggregateFunctionImplementation(signature);
+        return globalFunctionNamespace.getWindowFunctionImplementation(functionHandle);
+    }
+
+    public InternalAggregationFunction getAggregateFunctionImplementation(FunctionHandle functionHandle)
+    {
+        return globalFunctionNamespace.getAggregateFunctionImplementation(functionHandle);
+    }
+
+    public ScalarFunctionImplementation getScalarFunctionImplementation(FunctionHandle functionHandle)
+    {
+        return globalFunctionNamespace.getScalarFunctionImplementation(functionHandle.getSignature());
     }
 
     public ScalarFunctionImplementation getScalarFunctionImplementation(Signature signature)
@@ -86,12 +104,7 @@ public class FunctionManager
         return globalFunctionNamespace.isAggregationFunction(name);
     }
 
-    public boolean canResolveOperator(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes)
-    {
-        return globalFunctionNamespace.canResolveOperator(operatorType, returnType, argumentTypes);
-    }
-
-    public Signature resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
+    public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
     {
         return globalFunctionNamespace.resolveOperator(operatorType, argumentTypes);
     }
@@ -101,13 +114,8 @@ public class FunctionManager
         return globalFunctionNamespace.isRegistered(signature);
     }
 
-    public Signature getCoercion(Type fromType, Type toType)
+    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
     {
-        return getCoercion(fromType.getTypeSignature(), toType.getTypeSignature());
-    }
-
-    public Signature getCoercion(TypeSignature fromType, TypeSignature toType)
-    {
-        return globalFunctionNamespace.getCoercion(fromType, toType);
+        return globalFunctionNamespace.lookupCast(castType, fromType, toType);
     }
 }

@@ -13,15 +13,16 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule.test;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.IndexHandle;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.ExpressionUtils;
@@ -66,6 +67,7 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
@@ -93,6 +95,7 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.util.MoreLists.nElements;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -254,6 +257,7 @@ public class PlanBuilder
         private Step step = Step.SINGLE;
         private Optional<Symbol> hashSymbol = Optional.empty();
         private Optional<Symbol> groupIdSymbol = Optional.empty();
+        private Session session = testSessionBuilder().build();
 
         public AggregationBuilder source(PlanNode source)
         {
@@ -275,8 +279,8 @@ public class PlanBuilder
         {
             checkArgument(expression instanceof FunctionCall);
             FunctionCall aggregation = (FunctionCall) expression;
-            Signature signature = metadata.getFunctionManager().resolveFunction(aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
-            return addAggregation(output, new Aggregation(aggregation, signature, mask));
+            FunctionHandle functionHandle = metadata.getFunctionManager().resolveFunction(session, aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
+            return addAggregation(output, new Aggregation(aggregation, functionHandle, mask));
         }
 
         public AggregationBuilder addAggregation(Symbol output, Aggregation aggregation)
@@ -737,6 +741,15 @@ public class PlanBuilder
         return new RemoteSourceNode(idAllocator.getNextId(), fragmentIds, symbols, Optional.empty(), exchangeType);
     }
 
+    public UnnestNode unnest(PlanNode source, List<Symbol> replicateSymbols, Map<Symbol, List<Symbol>> unnestSymbols, Optional<Symbol> ordinalitySymbol)
+    {
+        return new UnnestNode(
+                idAllocator.getNextId(),
+                source,
+                replicateSymbols,
+                unnestSymbols,
+                ordinalitySymbol);
+    }
     public static Expression expression(String sql)
     {
         return ExpressionUtils.rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(sql));

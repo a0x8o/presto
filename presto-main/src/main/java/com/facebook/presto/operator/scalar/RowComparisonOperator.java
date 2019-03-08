@@ -14,9 +14,9 @@ package com.facebook.presto.operator.scalar;
  */
 
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.StandardTypes;
@@ -26,7 +26,7 @@ import com.google.common.collect.ImmutableList;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.orderableWithVariadicBound;
+import static com.facebook.presto.spi.function.Signature.orderableWithVariadicBound;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 import static com.facebook.presto.type.TypeUtils.checkElementNotNull;
@@ -48,8 +48,8 @@ public abstract class RowComparisonOperator
     {
         ImmutableList.Builder<MethodHandle> argumentMethods = ImmutableList.builder();
         for (Type parameterType : type.getTypeParameters()) {
-            Signature signature = functionManager.resolveOperator(operatorType, ImmutableList.of(parameterType, parameterType));
-            argumentMethods.add(functionManager.getScalarFunctionImplementation(signature).getMethodHandle());
+            FunctionHandle operatorHandle = functionManager.resolveOperator(operatorType, ImmutableList.of(parameterType, parameterType));
+            argumentMethods.add(functionManager.getScalarFunctionImplementation(operatorHandle).getMethodHandle());
         }
         return argumentMethods.build();
     }

@@ -43,6 +43,7 @@ public class TestTaskManagerConfig
                 .setMinDrivers(Runtime.getRuntime().availableProcessors() * 2 * 2)
                 .setMinDriversPerTask(3)
                 .setMaxDriversPerTask(Integer.MAX_VALUE)
+                .setMaxTasksPerStage(Integer.MAX_VALUE)
                 .setInfoMaxAge(new Duration(15, TimeUnit.MINUTES))
                 .setClientTimeout(new Duration(2, TimeUnit.MINUTES))
                 .setMaxIndexMemoryUsage(new DataSize(64, Unit.MEGABYTE))
@@ -58,7 +59,8 @@ public class TestTaskManagerConfig
                 .setTaskNotificationThreads(5)
                 .setTaskYieldThreads(3)
                 .setLevelTimeMultiplier(new BigDecimal("2"))
-                .setStatisticsCpuTimerEnabled(true));
+                .setStatisticsCpuTimerEnabled(true)
+                .setLegacyLifespanCompletionCondition(false));
     }
 
     @Test
@@ -79,6 +81,7 @@ public class TestTaskManagerConfig
                 .put("task.min-drivers", "2")
                 .put("task.min-drivers-per-task", "5")
                 .put("task.max-drivers-per-task", "13")
+                .put("stage.max-tasks-per-stage", "999")
                 .put("task.info.max-age", "22m")
                 .put("task.client.timeout", "10s")
                 .put("sink.max-buffer-size", "42MB")
@@ -91,6 +94,7 @@ public class TestTaskManagerConfig
                 .put("task.task-yield-threads", "8")
                 .put("task.level-time-multiplier", "2.1")
                 .put("task.statistics-cpu-timer-enabled", "false")
+                .put("task.legacy-lifespan-completion-condition", "true")
                 .build();
 
         TaskManagerConfig expected = new TaskManagerConfig()
@@ -108,6 +112,7 @@ public class TestTaskManagerConfig
                 .setMinDrivers(2)
                 .setMinDriversPerTask(5)
                 .setMaxDriversPerTask(13)
+                .setMaxTasksPerStage(999)
                 .setInfoMaxAge(new Duration(22, TimeUnit.MINUTES))
                 .setClientTimeout(new Duration(10, TimeUnit.SECONDS))
                 .setSinkMaxBufferSize(new DataSize(42, Unit.MEGABYTE))
@@ -119,7 +124,8 @@ public class TestTaskManagerConfig
                 .setTaskNotificationThreads(13)
                 .setTaskYieldThreads(8)
                 .setLevelTimeMultiplier(new BigDecimal("2.1"))
-                .setStatisticsCpuTimerEnabled(false);
+                .setStatisticsCpuTimerEnabled(false)
+                .setLegacyLifespanCompletionCondition(true);
 
         assertFullMapping(properties, expected);
     }

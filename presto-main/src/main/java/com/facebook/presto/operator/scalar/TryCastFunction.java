@@ -14,11 +14,12 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
+import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -27,7 +28,8 @@ import com.google.common.primitives.Primitives;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static java.lang.invoke.MethodHandles.catchException;
 import static java.lang.invoke.MethodHandles.constant;
@@ -80,8 +82,8 @@ public class TryCastFunction
         MethodHandle tryCastHandle;
 
         // the resulting method needs to return a boxed type
-        Signature signature = functionManager.getCoercion(fromType, toType);
-        ScalarFunctionImplementation implementation = functionManager.getScalarFunctionImplementation(signature);
+        FunctionHandle functionHandle = functionManager.lookupCast(CAST, fromType.getTypeSignature(), toType.getTypeSignature());
+        ScalarFunctionImplementation implementation = functionManager.getScalarFunctionImplementation(functionHandle);
         argumentProperties = ImmutableList.of(implementation.getArgumentProperty(0));
         MethodHandle coercion = implementation.getMethodHandle();
         coercion = coercion.asType(methodType(returnType, coercion.type()));

@@ -24,68 +24,35 @@ import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.schema.GroupType;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType;
 import org.testng.annotations.Test;
-import parquet.column.ColumnDescriptor;
-import parquet.column.Encoding;
-import parquet.schema.GroupType;
-import parquet.schema.MessageType;
-import parquet.schema.PrimitiveType;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.parquet.ParquetPageSourceFactory.getParquetTupleDomain;
 import static com.facebook.presto.parquet.ParquetTypeUtils.getDescriptors;
-import static com.facebook.presto.parquet.predicate.PredicateUtils.isOnlyDictionaryEncodingPages;
 import static com.facebook.presto.spi.block.MethodHandleUtil.methodHandle;
 import static com.facebook.presto.spi.predicate.TupleDomain.withColumnDomains;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.google.common.collect.Sets.union;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
+import static org.apache.parquet.schema.Type.Repetition.OPTIONAL;
+import static org.apache.parquet.schema.Type.Repetition.REPEATED;
+import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import static parquet.column.Encoding.BIT_PACKED;
-import static parquet.column.Encoding.PLAIN;
-import static parquet.column.Encoding.PLAIN_DICTIONARY;
-import static parquet.column.Encoding.RLE;
-import static parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
-import static parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
-import static parquet.schema.Type.Repetition.OPTIONAL;
-import static parquet.schema.Type.Repetition.REPEATED;
-import static parquet.schema.Type.Repetition.REQUIRED;
 
 public class TestParquetPredicateUtils
 {
-    @Test
-    @SuppressWarnings("deprecation")
-    public void testDictionaryEncodingCasesV1()
-    {
-        Set<Encoding> required = ImmutableSet.of(BIT_PACKED);
-        Set<Encoding> optional = ImmutableSet.of(BIT_PACKED, RLE);
-        Set<Encoding> repeated = ImmutableSet.of(RLE);
-
-        Set<Encoding> notDictionary = ImmutableSet.of(PLAIN);
-        Set<Encoding> mixedDictionary = ImmutableSet.of(PLAIN_DICTIONARY, PLAIN);
-        Set<Encoding> dictionary = ImmutableSet.of(PLAIN_DICTIONARY);
-
-        assertFalse(isOnlyDictionaryEncodingPages(union(required, notDictionary)), "required notDictionary");
-        assertFalse(isOnlyDictionaryEncodingPages(union(optional, notDictionary)), "optional notDictionary");
-        assertFalse(isOnlyDictionaryEncodingPages(union(repeated, notDictionary)), "repeated notDictionary");
-        assertFalse(isOnlyDictionaryEncodingPages(union(required, mixedDictionary)), "required mixedDictionary");
-        assertFalse(isOnlyDictionaryEncodingPages(union(optional, mixedDictionary)), "optional mixedDictionary");
-        assertFalse(isOnlyDictionaryEncodingPages(union(repeated, mixedDictionary)), "repeated mixedDictionary");
-        assertTrue(isOnlyDictionaryEncodingPages(union(required, dictionary)), "required dictionary");
-        assertTrue(isOnlyDictionaryEncodingPages(union(optional, dictionary)), "optional dictionary");
-        assertTrue(isOnlyDictionaryEncodingPages(union(repeated, dictionary)), "repeated dictionary");
-    }
-
     @Test
     public void testParquetTupleDomainPrimitiveArray()
     {

@@ -22,7 +22,6 @@ import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.operator.AggregationOperator.AggregationOperatorFactory;
 import com.facebook.presto.operator.AssignUniqueIdOperator;
 import com.facebook.presto.operator.DeleteOperator.DeleteOperatorFactory;
@@ -105,6 +104,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.PartitioningSpillerFactory;
@@ -191,7 +191,6 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.common.primitives.Ints;
-import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 
 import javax.inject.Inject;
@@ -221,7 +220,6 @@ import static com.facebook.presto.SystemSessionProperties.getTaskWriterCount;
 import static com.facebook.presto.SystemSessionProperties.isExchangeCompressionEnabled;
 import static com.facebook.presto.SystemSessionProperties.isSpillEnabled;
 import static com.facebook.presto.execution.warnings.WarningCollector.NOOP;
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
 import static com.facebook.presto.operator.NestedLoopBuildOperator.NestedLoopBuildOperatorFactory;
 import static com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopJoinOperatorFactory;
@@ -236,6 +234,7 @@ import static com.facebook.presto.operator.TableWriterOperator.TableWriterOperat
 import static com.facebook.presto.operator.UnnestOperator.UnnestOperatorFactory;
 import static com.facebook.presto.operator.WindowFunctionDefinition.window;
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
@@ -285,8 +284,6 @@ import static java.util.stream.IntStream.range;
 
 public class LocalExecutionPlanner
 {
-    private static final Logger log = Logger.get(LocalExecutionPlanner.class);
-
     private final Metadata metadata;
     private final SqlParser sqlParser;
     private final Optional<ExplainAnalyzeContext> explainAnalyzeContext;
@@ -904,15 +901,15 @@ public class LocalExecutionPlanner
                 FrameInfo frameInfo = new FrameInfo(frame.getType(), frame.getStartType(), frameStartChannel, frame.getEndType(), frameEndChannel);
 
                 FunctionCall functionCall = entry.getValue().getFunctionCall();
-                Signature signature = entry.getValue().getSignature();
+                FunctionHandle functionHandle = entry.getValue().getFunctionHandle();
                 ImmutableList.Builder<Integer> arguments = ImmutableList.builder();
                 for (Expression argument : functionCall.getArguments()) {
                     Symbol argumentSymbol = Symbol.from(argument);
                     arguments.add(source.getLayout().get(argumentSymbol));
                 }
                 Symbol symbol = entry.getKey();
-                WindowFunctionSupplier windowFunctionSupplier = metadata.getFunctionManager().getWindowFunctionImplementation(signature);
-                Type type = metadata.getType(signature.getReturnType());
+                WindowFunctionSupplier windowFunctionSupplier = metadata.getFunctionManager().getWindowFunctionImplementation(functionHandle);
+                Type type = metadata.getType(functionHandle.getSignature().getReturnType());
                 windowFunctionsBuilder.add(window(windowFunctionSupplier, type, frameInfo, arguments.build()));
                 windowFunctionOutputSymbolsBuilder.add(symbol);
             }
@@ -2525,7 +2522,7 @@ public class LocalExecutionPlanner
         {
             InternalAggregationFunction internalAggregationFunction = metadata
                     .getFunctionManager()
-                    .getAggregateFunctionImplementation(aggregation.getSignature());
+                    .getAggregateFunctionImplementation(aggregation.getFunctionHandle());
 
             List<Integer> valueChannels = new ArrayList<>();
             for (Expression argument : aggregation.getCall().getArguments()) {
@@ -2541,7 +2538,7 @@ public class LocalExecutionPlanner
                     .map(LambdaExpression.class::cast)
                     .collect(toImmutableList());
             if (!lambdaExpressions.isEmpty()) {
-                List<FunctionType> functionTypes = aggregation.getSignature().getArgumentTypes().stream()
+                List<FunctionType> functionTypes = aggregation.getFunctionHandle().getSignature().getArgumentTypes().stream()
                         .filter(typeSignature -> typeSignature.getBase().equals(FunctionType.NAME))
                         .map(typeSignature -> (FunctionType) (metadata.getTypeManager().getType(typeSignature)))
                         .collect(toImmutableList());

@@ -18,9 +18,11 @@ import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.Argument
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ScalarImplementationChoice;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.InvocationConvention;
 import com.facebook.presto.spi.function.InvocationConvention.InvocationArgumentConvention;
 import com.facebook.presto.spi.function.InvocationConvention.InvocationReturnConvention;
+import com.facebook.presto.spi.function.Signature;
 import com.google.common.annotations.VisibleForTesting;
 
 import java.util.List;
@@ -37,23 +39,28 @@ import static java.lang.String.format;
 
 public class FunctionInvokerProvider
 {
-    private final FunctionRegistry functionRegistry;
+    private final FunctionManager functionManager;
 
-    public FunctionInvokerProvider(FunctionRegistry functionRegistry)
+    public FunctionInvokerProvider(FunctionManager functionManager)
     {
-        this.functionRegistry = functionRegistry;
+        this.functionManager = functionManager;
     }
 
     public FunctionInvoker createFunctionInvoker(Signature signature, Optional<InvocationConvention> invocationConvention)
     {
-        ScalarFunctionImplementation scalarFunctionImplementation = functionRegistry.getScalarFunctionImplementation(signature);
+        return createFunctionInvoker(new FunctionHandle(signature), invocationConvention);
+    }
+
+    public FunctionInvoker createFunctionInvoker(FunctionHandle functionHandle, Optional<InvocationConvention> invocationConvention)
+    {
+        ScalarFunctionImplementation scalarFunctionImplementation = functionManager.getScalarFunctionImplementation(functionHandle);
         for (ScalarImplementationChoice choice : scalarFunctionImplementation.getAllChoices()) {
             if (checkChoice(choice.getArgumentProperties(), choice.isNullable(), choice.hasSession(), invocationConvention)) {
                 return new FunctionInvoker(choice.getMethodHandle());
             }
         }
         checkState(invocationConvention.isPresent());
-        throw new PrestoException(FUNCTION_NOT_FOUND, format("Dependent function implementation (%s) with convention (%s) is not available", signature, invocationConvention.toString()));
+        throw new PrestoException(FUNCTION_NOT_FOUND, format("Dependent function implementation (%s) with convention (%s) is not available", functionHandle, invocationConvention.toString()));
     }
 
     @VisibleForTesting

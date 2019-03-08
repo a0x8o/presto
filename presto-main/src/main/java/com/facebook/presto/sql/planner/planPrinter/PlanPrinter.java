@@ -15,18 +15,18 @@ package com.facebook.presto.sql.planner.planPrinter;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.cost.PlanNodeCostEstimate;
+import com.facebook.presto.cost.PlanCostEstimate;
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.StageInfo;
 import com.facebook.presto.execution.StageStats;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.OperatorNotFoundException;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.Marker;
 import com.facebook.presto.spi.predicate.NullableValue;
@@ -89,6 +89,7 @@ import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.planner.planPrinter.NodeRepresentation.OutputSymbol;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
@@ -115,6 +116,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.facebook.presto.execution.StageInfo.getAllStages;
+import static com.facebook.presto.spi.function.OperatorType.CAST;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.planPrinter.PlanNodeStatsSummarizer.aggregateStageStats;
@@ -1168,8 +1170,8 @@ public class PlanPrinter
             List<PlanNodeStatsEstimate> estimatedStats = allNodes.stream()
                     .map(nodeId -> estimatedStatsAndCosts.getStats().getOrDefault(nodeId, PlanNodeStatsEstimate.unknown()))
                     .collect(toList());
-            List<PlanNodeCostEstimate> estimatedCosts = allNodes.stream()
-                    .map(nodeId -> estimatedStatsAndCosts.getCosts().getOrDefault(nodeId, PlanNodeCostEstimate.unknown()))
+            List<PlanCostEstimate> estimatedCosts = allNodes.stream()
+                    .map(nodeId -> estimatedStatsAndCosts.getCosts().getOrDefault(nodeId, PlanCostEstimate.unknown()))
                     .collect(toList());
 
             NodeRepresentation nodeOutput = new NodeRepresentation(
@@ -1177,7 +1179,9 @@ public class PlanPrinter
                     name,
                     rootNode.getClass().getSimpleName(),
                     identifier,
-                    rootNode.getOutputSymbols(),
+                    rootNode.getOutputSymbols().stream()
+                            .map(s -> new OutputSymbol(s, types.get(s).getDisplayName()))
+                            .collect(toImmutableList()),
                     stats.map(s -> s.get(rootNode.getId())),
                     estimatedStats,
                     estimatedCosts,
@@ -1196,8 +1200,8 @@ public class PlanPrinter
         }
 
         try {
-            Signature coercion = functionManager.getCoercion(type, VARCHAR);
-            Slice coerced = (Slice) new InterpretedFunctionInvoker(functionManager).invoke(coercion, session.toConnectorSession(), value);
+            FunctionHandle cast = functionManager.lookupCast(CAST, type.getTypeSignature(), VARCHAR.getTypeSignature());
+            Slice coerced = (Slice) new InterpretedFunctionInvoker(functionManager).invoke(cast, session.toConnectorSession(), value);
             return coerced.toStringUtf8();
         }
         catch (OperatorNotFoundException e) {

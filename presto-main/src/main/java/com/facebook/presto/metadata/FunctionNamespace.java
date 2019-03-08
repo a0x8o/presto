@@ -16,7 +16,9 @@ package com.facebook.presto.metadata;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.window.WindowFunctionSupplier;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
@@ -48,19 +50,19 @@ class FunctionNamespace
         return registry.list();
     }
 
-    public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    public FunctionHandle resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         return registry.resolveFunction(name, parameterTypes);
     }
 
-    public WindowFunctionSupplier getWindowFunctionImplementation(Signature signature)
+    public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
     {
-        return registry.getWindowFunctionImplementation(signature);
+        return registry.getWindowFunctionImplementation(functionHandle);
     }
 
-    public InternalAggregationFunction getAggregateFunctionImplementation(Signature signature)
+    public InternalAggregationFunction getAggregateFunctionImplementation(FunctionHandle functionHandle)
     {
-        return registry.getAggregateFunctionImplementation(signature);
+        return registry.getAggregateFunctionImplementation(functionHandle);
     }
 
     public ScalarFunctionImplementation getScalarFunctionImplementation(Signature signature)
@@ -73,20 +75,15 @@ class FunctionNamespace
         return registry.isAggregationFunction(name);
     }
 
-    public boolean canResolveOperator(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes)
-    {
-        return registry.canResolveOperator(operatorType, returnType, argumentTypes);
-    }
-
-    public Signature resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
+    public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
             throws OperatorNotFoundException
     {
         return registry.resolveOperator(operatorType, argumentTypes);
     }
 
-    public Signature getCoercion(TypeSignature fromType, TypeSignature toType)
+    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
     {
-        return registry.getCoercion(fromType, toType);
+        return registry.lookupCast(castType, fromType, toType);
     }
 
     public boolean isRegistered(Signature signature)

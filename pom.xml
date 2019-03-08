@@ -56,6 +56,7 @@
         <dep.testng.version>6.10</dep.testng.version>
         <dep.assertj-core.version>3.8.0</dep.assertj-core.version>
         <dep.logback.version>1.2.3</dep.logback.version>
+        <dep.parquet.version>1.10.0</dep.parquet.version>
 
         <!--
           America/Bahia_Banderas has:
@@ -406,6 +407,12 @@
             </dependency>
 
             <dependency>
+                <groupId>com.fasterxml.jackson.module</groupId>
+                <artifactId>jackson-module-afterburner</artifactId>
+                <version>${dep.jackson.version}</version>
+            </dependency>
+
+            <dependency>
                 <groupId>com.facebook.presto.hadoop</groupId>
                 <artifactId>hadoop-apache2</artifactId>
                 <version>2.7.4-5</version>
@@ -596,7 +603,7 @@
             <dependency>
                 <groupId>io.airlift</groupId>
                 <artifactId>joni</artifactId>
-                <version>2.1.5.1</version>
+                <version>2.1.5.2</version>
             </dependency>
 
             <dependency>
@@ -716,7 +723,7 @@
             <dependency>
                 <groupId>mysql</groupId>
                 <artifactId>mysql-connector-java</artifactId>
-                <version>5.1.44</version>
+                <version>5.1.46</version>
             </dependency>
 
             <dependency>
@@ -886,7 +893,7 @@
             <dependency>
                 <groupId>io.airlift</groupId>
                 <artifactId>testing-mysql-server</artifactId>
-                <version>5.7.22-1</version>
+                <version>8.0.12-1</version>
             </dependency>
 
             <dependency>

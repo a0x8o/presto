@@ -36,6 +36,7 @@ import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
@@ -43,7 +44,9 @@ import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
+import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
+import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
@@ -89,6 +92,7 @@ import static com.facebook.presto.metadata.QualifiedObjectName.convertFromSchema
 import static com.facebook.presto.metadata.TableLayout.fromConnectorLayout;
 import static com.facebook.presto.metadata.ViewDefinition.ViewColumn;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_VIEW;
+import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.SYNTAX_ERROR;
 import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
@@ -104,6 +108,7 @@ import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.transaction.InMemoryTransactionManager.createTestTransactionManager;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
@@ -215,23 +220,23 @@ public class MetadataManager
         Multimap<Type, OperatorType> missingOperators = HashMultimap.create();
         for (Type type : typeManager.getTypes()) {
             if (type.isComparable()) {
-                if (!functions.canResolveOperator(HASH_CODE, BIGINT, ImmutableList.of(type))) {
+                if (!canResolveOperator(HASH_CODE, BIGINT, ImmutableList.of(type))) {
                     missingOperators.put(type, HASH_CODE);
                 }
-                if (!functions.canResolveOperator(EQUAL, BOOLEAN, ImmutableList.of(type, type))) {
+                if (!canResolveOperator(EQUAL, BOOLEAN, ImmutableList.of(type, type))) {
                     missingOperators.put(type, EQUAL);
                 }
-                if (!functions.canResolveOperator(NOT_EQUAL, BOOLEAN, ImmutableList.of(type, type))) {
+                if (!canResolveOperator(NOT_EQUAL, BOOLEAN, ImmutableList.of(type, type))) {
                     missingOperators.put(type, NOT_EQUAL);
                 }
             }
             if (type.isOrderable()) {
                 for (OperatorType operator : ImmutableList.of(LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL)) {
-                    if (!functions.canResolveOperator(operator, BOOLEAN, ImmutableList.of(type, type))) {
+                    if (!canResolveOperator(operator, BOOLEAN, ImmutableList.of(type, type))) {
                         missingOperators.put(type, operator);
                     }
                 }
-                if (!functions.canResolveOperator(BETWEEN, BOOLEAN, ImmutableList.of(type, type, type))) {
+                if (!canResolveOperator(BETWEEN, BOOLEAN, ImmutableList.of(type, type, type))) {
                     missingOperators.put(type, BETWEEN);
                 }
             }
@@ -428,6 +433,18 @@ public class MetadataManager
         ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
         Optional<ConnectorPartitioningHandle> commonHandle = metadata.getCommonPartitioningHandle(session.toConnectorSession(connectorId), left.getConnectorHandle(), right.getConnectorHandle());
         return commonHandle.map(handle -> new PartitioningHandle(Optional.of(connectorId), left.getTransactionHandle(), handle));
+    }
+
+    @Override
+    public PartitioningHandle getPartitioningHandleForExchange(Session session, String catalogName, int partitionCount, List<Type> partitionTypes)
+    {
+        CatalogMetadata catalogMetadata = getOptionalCatalogMetadata(session, catalogName)
+                .orElseThrow(() -> new PrestoException(NOT_FOUND, format("Catalog '%s' does not exist", catalogName)));
+        ConnectorId connectorId = catalogMetadata.getConnectorId();
+        ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
+        ConnectorPartitioningHandle connectorPartitioningHandle = metadata.getPartitioningHandleForExchange(session.toConnectorSession(connectorId), partitionCount, partitionTypes);
+        ConnectorTransactionHandle transaction = catalogMetadata.getTransactionHandleFor(connectorId);
+        return new PartitioningHandle(Optional.of(connectorId), Optional.of(transaction), connectorPartitioningHandle);
     }
 
     @Override
@@ -931,7 +948,101 @@ public class MetadataManager
     }
 
     @Override
-    public void grantTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, String grantee, boolean grantOption)
+    public void createRole(Session session, String role, Optional<PrestoPrincipal> grantor, String catalog)
+    {
+        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalog);
+        ConnectorId connectorId = catalogMetadata.getConnectorId();
+        ConnectorMetadata metadata = catalogMetadata.getMetadata();
+
+        metadata.createRole(session.toConnectorSession(connectorId), role, grantor);
+    }
+
+    @Override
+    public void dropRole(Session session, String role, String catalog)
+    {
+        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalog);
+        ConnectorId connectorId = catalogMetadata.getConnectorId();
+        ConnectorMetadata metadata = catalogMetadata.getMetadata();
+
+        metadata.dropRole(session.toConnectorSession(connectorId), role);
+    }
+
+    @Override
+    public Set<String> listRoles(Session session, String catalog)
+    {
+        Optional<CatalogMetadata> catalogMetadata = getOptionalCatalogMetadata(session, catalog);
+        if (!catalogMetadata.isPresent()) {
+            return ImmutableSet.of();
+        }
+        ConnectorId connectorId = catalogMetadata.get().getConnectorId();
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+        ConnectorMetadata metadata = catalogMetadata.get().getMetadataFor(connectorId);
+        return metadata.listRoles(connectorSession).stream()
+                .map(role -> role.toLowerCase(ENGLISH))
+                .collect(toImmutableSet());
+    }
+
+    @Override
+    public Set<RoleGrant> listRoleGrants(Session session, String catalog, PrestoPrincipal principal)
+    {
+        Optional<CatalogMetadata> catalogMetadata = getOptionalCatalogMetadata(session, catalog);
+        if (!catalogMetadata.isPresent()) {
+            return ImmutableSet.of();
+        }
+        ConnectorId connectorId = catalogMetadata.get().getConnectorId();
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+        ConnectorMetadata metadata = catalogMetadata.get().getMetadataFor(connectorId);
+        return metadata.listRoleGrants(connectorSession, principal);
+    }
+
+    @Override
+    public void grantRoles(Session session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, Optional<PrestoPrincipal> grantor, String catalog)
+    {
+        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalog);
+        ConnectorId connectorId = catalogMetadata.getConnectorId();
+        ConnectorMetadata metadata = catalogMetadata.getMetadata();
+
+        metadata.grantRoles(session.toConnectorSession(connectorId), roles, grantees, withAdminOption, grantor);
+    }
+
+    @Override
+    public void revokeRoles(Session session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, Optional<PrestoPrincipal> grantor, String catalog)
+    {
+        CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, catalog);
+        ConnectorId connectorId = catalogMetadata.getConnectorId();
+        ConnectorMetadata metadata = catalogMetadata.getMetadata();
+
+        metadata.revokeRoles(session.toConnectorSession(connectorId), roles, grantees, adminOptionFor, grantor);
+    }
+
+    @Override
+    public Set<RoleGrant> listApplicableRoles(Session session, PrestoPrincipal principal, String catalog)
+    {
+        Optional<CatalogMetadata> catalogMetadata = getOptionalCatalogMetadata(session, catalog);
+        if (!catalogMetadata.isPresent()) {
+            return ImmutableSet.of();
+        }
+        ConnectorId connectorId = catalogMetadata.get().getConnectorId();
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+        ConnectorMetadata metadata = catalogMetadata.get().getMetadataFor(connectorId);
+        return ImmutableSet.copyOf(metadata.listApplicableRoles(connectorSession, principal));
+    }
+
+    @Override
+    public Set<String> listEnabledRoles(Session session, String catalog)
+    {
+        Optional<CatalogMetadata> catalogMetadata = getOptionalCatalogMetadata(session, catalog);
+        if (!catalogMetadata.isPresent()) {
+            return ImmutableSet.of();
+        }
+        ConnectorId connectorId = catalogMetadata.get().getConnectorId();
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+        ConnectorMetadata metadata = catalogMetadata.get().getMetadataFor(connectorId);
+        return ImmutableSet.copyOf(metadata.listEnabledRoles(connectorSession));
+    }
+
+    @Override
+    public void grantTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, PrestoPrincipal grantee, boolean grantOption)
     {
         CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, tableName.getCatalogName());
         ConnectorId connectorId = catalogMetadata.getConnectorId();
@@ -941,7 +1052,7 @@ public class MetadataManager
     }
 
     @Override
-    public void revokeTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, String grantee, boolean grantOption)
+    public void revokeTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, PrestoPrincipal grantee, boolean grantOption)
     {
         CatalogMetadata catalogMetadata = getCatalogMetadataForWrite(session, tableName.getCatalogName());
         ConnectorId connectorId = catalogMetadata.getConnectorId();
@@ -1025,6 +1136,12 @@ public class MetadataManager
         return analyzePropertyManager;
     }
 
+    @Override
+    public Set<ConnectorCapabilities> getConnectorCapabilities(Session session, ConnectorId connectorId)
+    {
+        return getCatalogMetadata(session, connectorId).getConnectorCapabilities();
+    }
+
     private ViewDefinition deserializeView(String data)
     {
         try {
@@ -1070,6 +1187,17 @@ public class MetadataManager
         ObjectMapperProvider provider = new ObjectMapperProvider();
         provider.setJsonDeserializers(ImmutableMap.of(Type.class, new TypeDeserializer(new TypeRegistry())));
         return new JsonCodecFactory(provider).jsonCodec(ViewDefinition.class);
+    }
+
+    private boolean canResolveOperator(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes)
+    {
+        try {
+            getFunctionManager().resolveOperator(operatorType, argumentTypes);
+            return true;
+        }
+        catch (OperatorNotFoundException e) {
+            return false;
+        }
     }
 
     @VisibleForTesting

@@ -31,7 +31,6 @@ import io.airlift.slice.Slice;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
@@ -39,6 +38,7 @@ import static com.facebook.presto.spi.block.MethodHandleUtil.compose;
 import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueGetter;
 import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueWriter;
 import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Failures.internalError;
 import static com.facebook.presto.util.Reflection.methodHandle;
@@ -106,7 +106,7 @@ public final class MapToMapCast
         MethodHandle getter = nativeValueGetter(fromType);
 
         // Adapt cast that takes ([ConnectorSession,] ?) to one that takes (?, ConnectorSession), where ? is the return type of getter.
-        ScalarFunctionImplementation castImplementation = functionManager.getScalarFunctionImplementation(functionManager.getCoercion(fromType, toType));
+        ScalarFunctionImplementation castImplementation = functionManager.getScalarFunctionImplementation(functionManager.lookupCast(CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
         MethodHandle cast = castImplementation.getMethodHandle();
         if (cast.type().parameterArray()[0] != ConnectorSession.class) {
             cast = MethodHandles.dropArguments(cast, 0, ConnectorSession.class);

@@ -15,10 +15,10 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.execution.warnings.WarningCollector;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.VarcharType;
@@ -60,6 +60,7 @@ import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 
@@ -69,6 +70,7 @@ public class TestTypeValidator
     private static final TableHandle TEST_TABLE_HANDLE = new TableHandle(new ConnectorId("test"), new TestingTableHandle());
     private static final SqlParser SQL_PARSER = new SqlParser();
     private static final TypeValidator TYPE_VALIDATOR = new TypeValidator();
+    private static final FunctionManager FUNCTION_MANAGER = createTestMetadataManager().getFunctionManager();
 
     private SymbolAllocator symbolAllocator;
     private TableScanNode baseTableScan;
@@ -145,14 +147,7 @@ public class TestTypeValidator
     public void testValidWindow()
     {
         Symbol windowSymbol = symbolAllocator.newSymbol("sum", DOUBLE);
-        Signature signature = new Signature(
-                "sum",
-                FunctionKind.WINDOW,
-                ImmutableList.of(),
-                ImmutableList.of(),
-                DOUBLE.getTypeSignature(),
-                ImmutableList.of(DOUBLE.getTypeSignature()),
-                false);
+        FunctionHandle functionHandle = FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(DOUBLE));
         FunctionCall functionCall = new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnC.toSymbolReference()));
 
         WindowNode.Frame frame = new WindowNode.Frame(
@@ -164,7 +159,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(functionCall, signature, frame);
+        WindowNode.Function function = new WindowNode.Function(functionCall, functionHandle, frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 
@@ -190,14 +185,7 @@ public class TestTypeValidator
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
                         new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnC.toSymbolReference())),
-                        new Signature(
-                                "sum",
-                                FunctionKind.AGGREGATE,
-                                ImmutableList.of(),
-                                ImmutableList.of(),
-                                DOUBLE.getTypeSignature(),
-                                ImmutableList.of(DOUBLE.getTypeSignature()),
-                                false),
+                        FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(DOUBLE)),
                         Optional.empty())),
                 singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
@@ -248,14 +236,7 @@ public class TestTypeValidator
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
                         new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnA.toSymbolReference())),
-                        new Signature(
-                                "sum",
-                                FunctionKind.AGGREGATE,
-                                ImmutableList.of(),
-                                ImmutableList.of(),
-                                DOUBLE.getTypeSignature(),
-                                ImmutableList.of(DOUBLE.getTypeSignature()),
-                                false),
+                        FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(DOUBLE)),
                         Optional.empty())),
                 singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
@@ -276,14 +257,7 @@ public class TestTypeValidator
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
                         new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnC.toSymbolReference())),
-                        new Signature(
-                                "sum",
-                                FunctionKind.AGGREGATE,
-                                ImmutableList.of(),
-                                ImmutableList.of(),
-                                BIGINT.getTypeSignature(), // should be DOUBLE
-                                ImmutableList.of(DOUBLE.getTypeSignature()),
-                                false),
+                        FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(BIGINT)), // should be DOUBLE
                         Optional.empty())),
                 singleGroupingSet(ImmutableList.of(columnA, columnB)),
                 ImmutableList.of(),
@@ -298,14 +272,7 @@ public class TestTypeValidator
     public void testInvalidWindowFunctionCall()
     {
         Symbol windowSymbol = symbolAllocator.newSymbol("sum", DOUBLE);
-        Signature signature = new Signature(
-                "sum",
-                FunctionKind.WINDOW,
-                ImmutableList.of(),
-                ImmutableList.of(),
-                DOUBLE.getTypeSignature(),
-                ImmutableList.of(DOUBLE.getTypeSignature()),
-                false);
+        FunctionHandle functionHandle = FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(DOUBLE));
         FunctionCall functionCall = new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnA.toSymbolReference())); // should be columnC
 
         WindowNode.Frame frame = new WindowNode.Frame(
@@ -317,7 +284,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(functionCall, signature, frame);
+        WindowNode.Function function = new WindowNode.Function(functionCall, functionHandle, frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 
@@ -337,14 +304,7 @@ public class TestTypeValidator
     public void testInvalidWindowFunctionSignature()
     {
         Symbol windowSymbol = symbolAllocator.newSymbol("sum", DOUBLE);
-        Signature signature = new Signature(
-                "sum",
-                FunctionKind.WINDOW,
-                ImmutableList.of(),
-                ImmutableList.of(),
-                BIGINT.getTypeSignature(), // should be DOUBLE
-                ImmutableList.of(DOUBLE.getTypeSignature()),
-                false);
+        FunctionHandle functionHandle = FUNCTION_MANAGER.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(BIGINT)); // should be DOUBLE
         FunctionCall functionCall = new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(columnC.toSymbolReference()));
 
         WindowNode.Frame frame = new WindowNode.Frame(
@@ -356,7 +316,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(functionCall, signature, frame);
+        WindowNode.Function function = new WindowNode.Function(functionCall, functionHandle, frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 

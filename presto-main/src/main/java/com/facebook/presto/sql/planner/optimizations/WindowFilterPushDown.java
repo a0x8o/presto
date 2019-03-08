@@ -16,7 +16,7 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.Range;
 import com.facebook.presto.spi.predicate.TupleDomain;
@@ -45,7 +45,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import static com.facebook.presto.SystemSessionProperties.isOptimizeTopNRowNumber;
-import static com.facebook.presto.metadata.FunctionKind.WINDOW;
+import static com.facebook.presto.spi.function.FunctionKind.WINDOW;
 import static com.facebook.presto.spi.predicate.Marker.Bound.BELOW;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -277,7 +277,7 @@ public class WindowFilterPushDown
                 return false;
             }
             Symbol rowNumberSymbol = getOnlyElement(node.getWindowFunctions().entrySet()).getKey();
-            return isRowNumberSignature(node.getWindowFunctions().get(rowNumberSymbol).getSignature());
+            return isRowNumberSignature(node.getWindowFunctions().get(rowNumberSymbol).getFunctionHandle().getSignature());
         }
 
         private static boolean isRowNumberSignature(Signature signature)

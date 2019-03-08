@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.planPrinter;
 
-import com.facebook.presto.cost.PlanNodeCostEstimate;
+import com.facebook.presto.cost.PlanCostEstimate;
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
@@ -32,12 +32,12 @@ public class NodeRepresentation
     private final String name;
     private final String type;
     private final String identifier;
-    private final List<Symbol> outputs;
+    private final List<OutputSymbol> outputs;
     private final List<PlanNodeId> children;
     private final List<PlanFragmentId> remoteSources;
     private final Optional<PlanNodeStats> stats;
     private final List<PlanNodeStatsEstimate> estimatedStats;
-    private final List<PlanNodeCostEstimate> estimatedCost;
+    private final List<PlanCostEstimate> estimatedCost;
 
     private final StringBuilder details = new StringBuilder();
 
@@ -46,10 +46,10 @@ public class NodeRepresentation
             String name,
             String type,
             String identifier,
-            List<Symbol> outputs,
+            List<OutputSymbol> outputs,
             Optional<PlanNodeStats> stats,
             List<PlanNodeStatsEstimate> estimatedStats,
-            List<PlanNodeCostEstimate> estimatedCost,
+            List<PlanCostEstimate> estimatedCost,
             List<PlanNodeId> children,
             List<PlanFragmentId> remoteSources)
     {
@@ -103,7 +103,7 @@ public class NodeRepresentation
         return identifier;
     }
 
-    public List<Symbol> getOutputs()
+    public List<OutputSymbol> getOutputs()
     {
         return outputs;
     }
@@ -133,8 +133,30 @@ public class NodeRepresentation
         return estimatedStats;
     }
 
-    public List<PlanNodeCostEstimate> getEstimatedCost()
+    public List<PlanCostEstimate> getEstimatedCost()
     {
         return estimatedCost;
+    }
+
+    public static class OutputSymbol
+    {
+        private final Symbol symbol;
+        private final String type;
+
+        public OutputSymbol(Symbol symbol, String type)
+        {
+            this.symbol = symbol;
+            this.type = type;
+        }
+
+        public Symbol getSymbol()
+        {
+            return symbol;
+        }
+
+        public String getType()
+        {
+            return type;
+        }
     }
 }
