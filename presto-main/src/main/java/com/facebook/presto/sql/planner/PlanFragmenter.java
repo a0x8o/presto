@@ -29,6 +29,7 @@ import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
@@ -49,9 +50,9 @@ import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.planner.sanity.PlanSanityChecker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
 
 import javax.inject.Inject;
 
@@ -69,16 +70,19 @@ import static com.facebook.presto.spi.StandardErrorCode.QUERY_HAS_TOO_MANY_STAGE
 import static com.facebook.presto.spi.StandardWarningCode.TOO_MANY_STAGES;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.facebook.presto.sql.planner.SchedulingOrderVisitor.scheduleOrder;
+import static com.facebook.presto.sql.planner.SymbolsExtractor.extractOutputSymbols;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.COORDINATOR_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPLICATE;
 import static com.facebook.presto.sql.planner.planPrinter.PlanPrinter.jsonFragmentPlan;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static com.google.common.collect.Maps.filterKeys;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -93,18 +97,27 @@ public class PlanFragmenter
     private final Metadata metadata;
     private final NodePartitioningManager nodePartitioningManager;
     private final QueryManagerConfig config;
+    private final SqlParser sqlParser;
 
     @Inject
-    public PlanFragmenter(Metadata metadata, NodePartitioningManager nodePartitioningManager, QueryManagerConfig queryManagerConfig)
+    public PlanFragmenter(Metadata metadata, NodePartitioningManager nodePartitioningManager, QueryManagerConfig queryManagerConfig, SqlParser sqlParser)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.nodePartitioningManager = requireNonNull(nodePartitioningManager, "nodePartitioningManager is null");
         this.config = requireNonNull(queryManagerConfig, "queryManagerConfig is null");
+        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
     }
 
     public SubPlan createSubPlans(Session session, Plan plan, boolean forceSingleNode, WarningCollector warningCollector)
     {
-        Fragmenter fragmenter = new Fragmenter(session, metadata, plan.getTypes(), plan.getStatsAndCosts());
+        Fragmenter fragmenter = new Fragmenter(
+                session,
+                metadata,
+                plan.getTypes(),
+                plan.getStatsAndCosts(),
+                new PlanSanityChecker(forceSingleNode),
+                warningCollector,
+                sqlParser);
 
         FragmentProperties properties = new FragmentProperties(new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getRoot().getOutputSymbols()));
         if (forceSingleNode || isForceSingleNodeOutput(session)) {
@@ -145,7 +158,8 @@ public class PlanFragmenter
         PlanFragment fragment = subPlan.getFragment();
         GroupedExecutionProperties properties = fragment.getRoot().accept(new GroupedExecutionTagger(session, metadata, nodePartitioningManager), null);
         if (properties.isSubTreeUseful()) {
-            boolean preferDynamic = fragment.getRemoteSourceNodes().isEmpty() && isDynamicSchduleForGroupedExecution(session);
+            boolean preferDynamic = fragment.getRemoteSourceNodes().stream().allMatch(node -> node.getExchangeType() == REPLICATE)
+                    && isDynamicSchduleForGroupedExecution(session);
             BucketNodeMap bucketNodeMap = nodePartitioningManager.getBucketNodeMap(session, fragment.getPartitioning(), preferDynamic);
             if (bucketNodeMap.isDynamic()) {
                 fragment = fragment.withDynamicLifespanScheduleGroupedExecution(properties.getCapableTableScanNodes());
@@ -214,14 +228,27 @@ public class PlanFragmenter
         private final Metadata metadata;
         private final TypeProvider types;
         private final StatsAndCosts statsAndCosts;
+        private final PlanSanityChecker planSanityChecker;
+        private final WarningCollector warningCollector;
+        private final SqlParser sqlParser;
         private int nextFragmentId = ROOT_FRAGMENT_ID + 1;
 
-        public Fragmenter(Session session, Metadata metadata, TypeProvider types, StatsAndCosts statsAndCosts)
+        public Fragmenter(
+                Session session,
+                Metadata metadata,
+                TypeProvider types,
+                StatsAndCosts statsAndCosts,
+                PlanSanityChecker planSanityChecker,
+                WarningCollector warningCollector,
+                SqlParser sqlParser)
         {
             this.session = requireNonNull(session, "session is null");
             this.metadata = requireNonNull(metadata, "metadata is null");
             this.types = requireNonNull(types, "types is null");
             this.statsAndCosts = requireNonNull(statsAndCosts, "statsAndCosts is null");
+            this.planSanityChecker = requireNonNull(planSanityChecker, "planSanityChecker is null");
+            this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
+            this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
         }
 
         public SubPlan buildRootFragment(PlanNode root, FragmentProperties properties)
@@ -236,24 +263,25 @@ public class PlanFragmenter
 
         private SubPlan buildFragment(PlanNode root, FragmentProperties properties, PlanFragmentId fragmentId)
         {
-            Set<Symbol> dependencies = SymbolsExtractor.extractOutputSymbols(root);
-
             List<PlanNodeId> schedulingOrder = scheduleOrder(root);
-            boolean equals = properties.getPartitionedSources().equals(ImmutableSet.copyOf(schedulingOrder));
-            checkArgument(equals, "Expected scheduling order (%s) to contain an entry for all partitioned sources (%s)", schedulingOrder, properties.getPartitionedSources());
+            checkArgument(
+                    properties.getPartitionedSources().equals(ImmutableSet.copyOf(schedulingOrder)),
+                    "Expected scheduling order (%s) to contain an entry for all partitioned sources (%s)",
+                    schedulingOrder,
+                    properties.getPartitionedSources());
 
-            Map<Symbol, Type> symbols = Maps.filterKeys(types.allTypes(), in(dependencies));
-
+            Map<Symbol, Type> fragmentSymbolTypes = filterKeys(types.allTypes(), in(extractOutputSymbols(root)));
+            planSanityChecker.validatePlanFragment(root, session, metadata, sqlParser, TypeProvider.viewOf(fragmentSymbolTypes), warningCollector);
             PlanFragment fragment = new PlanFragment(
                     fragmentId,
                     root,
-                    symbols,
+                    fragmentSymbolTypes,
                     properties.getPartitioningHandle(),
                     schedulingOrder,
                     properties.getPartitioningScheme(),
                     StageExecutionDescriptor.ungroupedExecution(),
                     statsAndCosts.getForSubplan(root),
-                    Optional.of(jsonFragmentPlan(root, symbols, metadata.getFunctionManager(), session)));
+                    Optional.of(jsonFragmentPlan(root, fragmentSymbolTypes, metadata.getFunctionManager(), session)));
 
             return new SubPlan(fragment, properties.getChildren());
         }

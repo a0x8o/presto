@@ -38,7 +38,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import io.airlift.concurrent.MoreFutures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
 import io.airlift.log.Logger;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -57,8 +58,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -74,6 +73,9 @@ import static com.facebook.presto.hive.HiveWriteUtils.createDirectory;
 import static com.facebook.presto.hive.HiveWriteUtils.pathExists;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_NEW_DIRECTORY;
 import static com.facebook.presto.hive.metastore.HivePrivilegeInfo.HivePrivilege.OWNERSHIP;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.getFileSystem;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.renameFile;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.waitForListenableFutures;
 import static com.facebook.presto.hive.util.Statistics.ReduceOperator.SUBTRACT;
 import static com.facebook.presto.hive.util.Statistics.merge;
 import static com.facebook.presto.hive.util.Statistics.reduce;
@@ -98,7 +100,7 @@ public class SemiTransactionalHiveMetastore
 
     private final ExtendedHiveMetastore delegate;
     private final HdfsEnvironment hdfsEnvironment;
-    private final Executor renameExecutor;
+    private final ListeningExecutorService renameExecutor;
     private final boolean skipDeletionForAlter;
     private final boolean skipTargetCleanupOnRollback;
 
@@ -114,7 +116,12 @@ public class SemiTransactionalHiveMetastore
     private State state = State.EMPTY;
     private boolean throwOnCleanupFailure;
 
-    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, ExtendedHiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
+    public SemiTransactionalHiveMetastore(
+            HdfsEnvironment hdfsEnvironment,
+            ExtendedHiveMetastore delegate,
+            ListeningExecutorService renameExecutor,
+            boolean skipDeletionForAlter,
+            boolean skipTargetCleanupOnRollback)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
@@ -970,7 +977,7 @@ public class SemiTransactionalHiveMetastore
             }
 
             // Wait for all renames submitted for "INSERT_EXISTING" action to finish
-            committer.waitForAsyncRenames();
+            waitForListenableFutures(committer.getFileRenameFutures());
 
             // At this point, all file system operations, whether asynchronously issued or not, have completed successfully.
             // We are moving on to metastore operations now.
@@ -1033,7 +1040,7 @@ public class SemiTransactionalHiveMetastore
     private class Committer
     {
         private final AtomicBoolean fileRenameCancelled = new AtomicBoolean(false);
-        private final List<CompletableFuture<?>> fileRenameFutures = new ArrayList<>();
+        private final List<ListenableFuture<?>> fileRenameFutures = new ArrayList<>();
 
         // File system
         // For file system changes, only operations outside of writing paths (as specified in declared intentions to write)
@@ -1051,6 +1058,11 @@ public class SemiTransactionalHiveMetastore
 
         // Flag for better error message
         private boolean deleteOnly = true;
+
+        private List<ListenableFuture<?>> getFileRenameFutures()
+        {
+            return ImmutableList.copyOf(fileRenameFutures);
+        }
 
         private void prepareDropTable(SchemaTableName schemaTableName)
         {
@@ -1328,16 +1340,9 @@ public class SemiTransactionalHiveMetastore
             }
         }
 
-        private void waitForAsyncRenames()
-        {
-            for (CompletableFuture<?> fileRenameFuture : fileRenameFutures) {
-                MoreFutures.getFutureValue(fileRenameFuture, PrestoException.class);
-            }
-        }
-
         private void waitForAsyncRenamesSuppressThrowables()
         {
-            for (CompletableFuture<?> future : fileRenameFutures) {
+            for (ListenableFuture<?> future : fileRenameFutures) {
                 try {
                     future.get();
                 }
@@ -1654,38 +1659,24 @@ public class SemiTransactionalHiveMetastore
 
     private static void asyncRename(
             HdfsEnvironment hdfsEnvironment,
-            Executor executor,
+            ListeningExecutorService executor,
             AtomicBoolean cancelled,
-            List<CompletableFuture<?>> fileRenameFutures,
+            List<ListenableFuture<?>> fileRenameFutures,
             HdfsContext context,
             Path currentPath,
             Path targetPath,
             List<String> fileNames)
     {
-        FileSystem fileSystem;
-        try {
-            fileSystem = hdfsEnvironment.getFileSystem(context, currentPath);
-        }
-        catch (IOException e) {
-            throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files to final location. Error listing directory %s", currentPath), e);
-        }
-
+        FileSystem fileSystem = getFileSystem(hdfsEnvironment, context, currentPath);
         for (String fileName : fileNames) {
             Path source = new Path(currentPath, fileName);
             Path target = new Path(targetPath, fileName);
-            fileRenameFutures.add(CompletableFuture.runAsync(() -> {
+            fileRenameFutures.add(executor.submit(() -> {
                 if (cancelled.get()) {
                     return;
                 }
-                try {
-                    if (fileSystem.exists(target) || !fileSystem.rename(source, target)) {
-                        throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files from %s to final location %s", source, target));
-                    }
-                }
-                catch (IOException e) {
-                    throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files from %s to final location %s", source, target), e);
-                }
-            }, executor));
+                renameFile(fileSystem, source, target);
+            }));
         }
     }
 
@@ -1772,7 +1763,9 @@ public class SemiTransactionalHiveMetastore
                 boolean eligible = false;
                 // never delete presto dot files
                 if (!fileName.startsWith(".presto")) {
-                    eligible = filePrefixes.stream().anyMatch(fileName::startsWith);
+                    // file name that starts with ".tmp.presto" is staging file, see HiveWriterFactory#createWriter.
+                    eligible = filePrefixes.stream().anyMatch(prefix ->
+                            fileName.startsWith(prefix) || fileName.startsWith(".tmp.presto." + prefix));
                 }
                 if (eligible) {
                     if (!deleteIfExists(fileSystem, filePath, false)) {
