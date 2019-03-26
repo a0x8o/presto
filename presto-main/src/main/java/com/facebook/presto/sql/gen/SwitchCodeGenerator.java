@@ -14,11 +14,9 @@
 package com.facebook.presto.sql.gen;
 
 import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.relational.CallExpression;
 import com.facebook.presto.sql.relational.RowExpression;
-import com.google.common.base.Preconditions;
+import com.facebook.presto.sql.relational.SpecialFormExpression;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import io.airlift.bytecode.BytecodeBlock;
@@ -33,15 +31,17 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.sql.gen.BytecodeGenerator.generateWrite;
+import static com.facebook.presto.sql.gen.SpecialFormBytecodeGenerator.generateWrite;
+import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.WHEN;
+import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantFalse;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantTrue;
 
 public class SwitchCodeGenerator
-        implements BytecodeGenerator
+        implements SpecialFormBytecodeGenerator
 {
     @Override
-    public BytecodeNode generateExpression(Signature signature, BytecodeGeneratorContext generatorContext, Type returnType, List<RowExpression> arguments, Optional<Variable> outputBlockVariable)
+    public BytecodeNode generateExpression(BytecodeGeneratorContext generatorContext, Type returnType, List<RowExpression> arguments, Optional<Variable> outputBlockVariable)
     {
         // TODO: compile as
         /*
@@ -82,7 +82,7 @@ public class SwitchCodeGenerator
 
         List<RowExpression> whenClauses;
         RowExpression last = arguments.get(arguments.size() - 1);
-        if (last instanceof CallExpression && ((CallExpression) last).getSignature().getName().equals("WHEN")) {
+        if (last instanceof SpecialFormExpression && ((SpecialFormExpression) last).getForm().equals(WHEN)) {
             whenClauses = arguments.subList(1, arguments.size());
             elseValue = new BytecodeBlock()
                     .append(generatorContext.wasNull().set(constantTrue()))
@@ -110,10 +110,10 @@ public class SwitchCodeGenerator
         elseValue = new BytecodeBlock().visitLabel(nullValue).append(elseValue);
         // reverse list because current if statement builder doesn't support if/else so we need to build the if statements bottom up
         for (RowExpression clause : Lists.reverse(whenClauses)) {
-            Preconditions.checkArgument(clause instanceof CallExpression && ((CallExpression) clause).getSignature().getName().equals("WHEN"));
+            checkArgument(clause instanceof SpecialFormExpression && ((SpecialFormExpression) clause).getForm().equals(WHEN));
 
-            RowExpression operand = ((CallExpression) clause).getArguments().get(0);
-            RowExpression result = ((CallExpression) clause).getArguments().get(1);
+            RowExpression operand = ((SpecialFormExpression) clause).getArguments().get(0);
+            RowExpression result = ((SpecialFormExpression) clause).getArguments().get(1);
 
             // call equals(value, operand)
             FunctionHandle equalsFunction = generatorContext.getFunctionManager().resolveOperator(EQUAL, ImmutableList.of(value.getType(), operand.getType()));

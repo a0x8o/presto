@@ -109,12 +109,7 @@ public class FunctionManager
         return globalFunctionNamespace.resolveOperator(operatorType, argumentTypes);
     }
 
-    public boolean isRegistered(Signature signature)
-    {
-        return globalFunctionNamespace.isRegistered(signature);
-    }
-
-    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
+    public FunctionHandle lookupCast(CastType castType, TypeSignature fromType, TypeSignature toType)
     {
         return globalFunctionNamespace.lookupCast(castType, fromType, toType);
     }

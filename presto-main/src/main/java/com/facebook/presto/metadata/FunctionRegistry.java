@@ -212,7 +212,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.metadata.InternalSignatureUtils.internalOperator;
+import static com.facebook.presto.metadata.CastType.toOperatorType;
+import static com.facebook.presto.metadata.InternalSignatureUtils.internalScalarFunction;
 import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
 import static com.facebook.presto.metadata.SignatureBinder.applyBoundVariables;
 import static com.facebook.presto.operator.aggregation.ArbitraryAggregationFunction.ARBITRARY_AGGREGATION;
@@ -1056,21 +1057,6 @@ class FunctionRegistry
                 .collect(toImmutableList());
     }
 
-    public boolean isRegistered(Signature signature)
-    {
-        try {
-            // TODO: this is hacky, but until the magic literal and row field reference hacks are cleaned up it's difficult to implement this.
-            getScalarFunctionImplementation(signature);
-            return true;
-        }
-        catch (PrestoException e) {
-            if (e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
-                return false;
-            }
-            throw e;
-        }
-    }
-
     public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
             throws OperatorNotFoundException
     {
@@ -1091,16 +1077,15 @@ class FunctionRegistry
         }
     }
 
-    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
+    public FunctionHandle lookupCast(CastType castType, TypeSignature fromType, TypeSignature toType)
     {
-        checkArgument(castType == OperatorType.CAST || castType == OperatorType.SATURATED_FLOOR_CAST, format("%s is not a cast type", castType.name()));
-        Signature signature = internalOperator(castType.name(), toType, ImmutableList.of(fromType));
+        Signature signature = internalScalarFunction(castType.getCastName(), toType, fromType);
         try {
             getScalarFunctionImplementation(signature);
         }
         catch (PrestoException e) {
-            if (e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
-                throw new OperatorNotFoundException(castType, ImmutableList.of(fromType), toType);
+            if (castType.isOperatorType() && e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
+                throw new OperatorNotFoundException(toOperatorType(castType), ImmutableList.of(fromType), toType);
             }
             throw e;
         }

@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.sql.gen;
 
+import com.facebook.presto.metadata.CastType;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.relational.RowExpression;
@@ -32,15 +32,15 @@ import java.util.Optional;
 
 import static com.facebook.presto.spi.function.OperatorType.CAST;
 import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.sql.gen.BytecodeGenerator.generateWrite;
 import static com.facebook.presto.sql.gen.BytecodeUtils.ifWasNullPopAndGoto;
+import static com.facebook.presto.sql.gen.SpecialFormBytecodeGenerator.generateWrite;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantTrue;
 
 public class NullIfCodeGenerator
-        implements BytecodeGenerator
+        implements SpecialFormBytecodeGenerator
 {
     @Override
-    public BytecodeNode generateExpression(Signature signature, BytecodeGeneratorContext generatorContext, Type returnType, List<RowExpression> arguments, Optional<Variable> outputBlockVariable)
+    public BytecodeNode generateExpression(BytecodeGeneratorContext generatorContext, Type returnType, List<RowExpression> arguments, Optional<Variable> outputBlockVariable)
     {
         Scope scope = generatorContext.getScope();
 
@@ -103,7 +103,7 @@ public class NullIfCodeGenerator
 
         FunctionHandle functionHandle = generatorContext
                 .getFunctionManager()
-                .lookupCast(CAST, actualType.getTypeSignature(), requiredType);
+                .lookupCast(CastType.CAST, actualType.getTypeSignature(), requiredType);
 
         // TODO: do we need a full function call? (nullability checks, etc)
         return generatorContext.generateCall(CAST.name(), generatorContext.getFunctionManager().getScalarFunctionImplementation(functionHandle), ImmutableList.of(argument));

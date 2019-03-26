@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.sql.relational;
 
-import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -23,27 +22,28 @@ import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 
-public final class CallExpression
+public class SpecialFormExpression
         extends RowExpression
 {
-    private final FunctionHandle functionHandle;
+    private final Form form;
     private final Type returnType;
     private final List<RowExpression> arguments;
 
-    public CallExpression(FunctionHandle functionHandle, Type returnType, List<RowExpression> arguments)
+    public SpecialFormExpression(Form form, Type returnType, RowExpression... arguments)
     {
-        requireNonNull(functionHandle, "functionHandle is null");
-        requireNonNull(arguments, "arguments is null");
-        requireNonNull(returnType, "returnType is null");
-
-        this.functionHandle = functionHandle;
-        this.returnType = returnType;
-        this.arguments = ImmutableList.copyOf(arguments);
+        this(form, returnType, ImmutableList.copyOf(arguments));
     }
 
-    public FunctionHandle getFunctionHandle()
+    public SpecialFormExpression(Form form, Type returnType, List<RowExpression> arguments)
     {
-        return functionHandle;
+        this.form = requireNonNull(form, "form is null");
+        this.returnType = requireNonNull(returnType, "returnType is null");
+        this.arguments = requireNonNull(arguments, "arguments is null");
+    }
+
+    public Form getForm()
+    {
+        return form;
     }
 
     @Override
@@ -60,13 +60,13 @@ public final class CallExpression
     @Override
     public String toString()
     {
-        return functionHandle.getSignature().getName() + "(" + Joiner.on(", ").join(arguments) + ")";
+        return form.name() + "(" + Joiner.on(", ").join(arguments) + ")";
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(functionHandle, arguments);
+        return Objects.hash(form, arguments);
     }
 
     @Override
@@ -78,13 +78,30 @@ public final class CallExpression
         if (obj == null || getClass() != obj.getClass()) {
             return false;
         }
-        CallExpression other = (CallExpression) obj;
-        return Objects.equals(this.functionHandle, other.functionHandle) && Objects.equals(this.arguments, other.arguments);
+        SpecialFormExpression other = (SpecialFormExpression) obj;
+        return this.form == other.form &&
+                Objects.equals(this.arguments, other.arguments);
     }
 
     @Override
     public <R, C> R accept(RowExpressionVisitor<R, C> visitor, C context)
     {
-        return visitor.visitCall(this, context);
+        return visitor.visitSpecialForm(this, context);
+    }
+
+    public enum Form
+    {
+        IF,
+        NULL_IF,
+        SWITCH,
+        WHEN,
+        IS_NULL,
+        COALESCE,
+        IN,
+        AND,
+        OR,
+        DEREFERENCE,
+        ROW_CONSTRUCTOR,
+        BIND,
     }
 }

@@ -81,13 +81,8 @@ class FunctionNamespace
         return registry.resolveOperator(operatorType, argumentTypes);
     }
 
-    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
+    public FunctionHandle lookupCast(CastType castType, TypeSignature fromType, TypeSignature toType)
     {
         return registry.lookupCast(castType, fromType, toType);
-    }
-
-    public boolean isRegistered(Signature signature)
-    {
-        return registry.isRegistered(signature);
     }
 }
