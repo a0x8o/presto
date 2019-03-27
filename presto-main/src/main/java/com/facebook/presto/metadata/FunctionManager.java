@@ -21,7 +21,6 @@ import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.Signature;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
@@ -64,6 +63,19 @@ public class FunctionManager
         return globalFunctionNamespace.listFunctions();
     }
 
+    /**
+     * Lookup up a function with a fully qualified name and fully bound types.
+     * @throws PrestoException if function could not be found
+     */
+    public FunctionHandle lookupFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    {
+        return globalFunctionNamespace.lookupFunction(name, parameterTypes);
+    }
+
+    /**
+     * Resolves a function using the SQL path, and implicit type coercions.
+     * @throws PrestoException if there are no matches or multiple matches
+     */
     public FunctionHandle resolveFunction(Session session, QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         // TODO Actually use session
@@ -72,11 +84,6 @@ public class FunctionManager
         // SQL path. As a result, session is not used here. We still add this to distinguish the two versions of resolveFunction
         // while the refactoring is on-going.
         return globalFunctionNamespace.resolveFunction(name, parameterTypes);
-    }
-
-    public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
-    {
-        return globalFunctionNamespace.resolveFunction(name, parameterTypes).getSignature();
     }
 
     public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
@@ -104,7 +111,7 @@ public class FunctionManager
         return globalFunctionNamespace.isAggregationFunction(name);
     }
 
-    public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
+    public FunctionHandle resolveOperator(OperatorType operatorType, List<TypeSignatureProvider> argumentTypes)
     {
         return globalFunctionNamespace.resolveOperator(operatorType, argumentTypes);
     }

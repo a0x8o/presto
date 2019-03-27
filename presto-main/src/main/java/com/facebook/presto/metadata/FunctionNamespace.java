@@ -19,7 +19,6 @@ import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.Signature;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
 import com.facebook.presto.sql.tree.QualifiedName;
@@ -50,6 +49,11 @@ class FunctionNamespace
         return registry.list();
     }
 
+    public FunctionHandle lookupFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    {
+        return registry.lookupFunction(name, parameterTypes);
+    }
+
     public FunctionHandle resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         return registry.resolveFunction(name, parameterTypes);
@@ -75,7 +79,7 @@ class FunctionNamespace
         return registry.isAggregationFunction(name);
     }
 
-    public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
+    public FunctionHandle resolveOperator(OperatorType operatorType, List<TypeSignatureProvider> argumentTypes)
             throws OperatorNotFoundException
     {
         return registry.resolveOperator(operatorType, argumentTypes);

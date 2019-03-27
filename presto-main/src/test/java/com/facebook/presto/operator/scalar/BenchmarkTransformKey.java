@@ -54,7 +54,6 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
-import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.function.OperatorType.ADD;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -62,6 +61,7 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
@@ -126,13 +126,12 @@ public class BenchmarkTransformKey
                     throw new UnsupportedOperationException();
             }
             MapType mapType = mapType(elementType, elementType);
-            FunctionHandle functionHandle = functionManager.resolveFunction(
-                    TEST_SESSION,
+            FunctionHandle functionHandle = functionManager.lookupFunction(
                     QualifiedName.of(name),
                     fromTypeSignatures(
                             mapType.getTypeSignature(),
                             parseTypeSignature(format("function(%s, %s, %s)", type, type, type))));
-            FunctionHandle add = functionManager.resolveOperator(ADD, ImmutableList.of(elementType, elementType));
+            FunctionHandle add = functionManager.resolveOperator(ADD, fromTypes(elementType, elementType));
             projectionsBuilder.add(call(functionHandle, mapType, ImmutableList.of(
                     field(0, mapType),
                     new LambdaDefinitionExpression(

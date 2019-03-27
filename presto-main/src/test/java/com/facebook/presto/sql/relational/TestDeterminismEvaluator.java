@@ -19,7 +19,6 @@ import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.Test;
 
-import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -40,13 +39,13 @@ public class TestDeterminismEvaluator
         DeterminismEvaluator determinismEvaluator = new DeterminismEvaluator(functionManager);
 
         CallExpression random = new CallExpression(
-                functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("random"), fromTypes(BIGINT)),
+                functionManager.lookupFunction(QualifiedName.of("random"), fromTypes(BIGINT)),
                 BIGINT,
                 singletonList(constant(10L, BIGINT)));
         assertFalse(determinismEvaluator.isDeterministic(random));
 
         InputReferenceExpression col0 = field(0, BIGINT);
-        FunctionHandle lessThan = functionManager.resolveOperator(LESS_THAN, ImmutableList.of(BIGINT, BIGINT));
+        FunctionHandle lessThan = functionManager.resolveOperator(LESS_THAN, fromTypes(BIGINT, BIGINT));
 
         CallExpression lessThanExpression = new CallExpression(lessThan, BOOLEAN, ImmutableList.of(col0, constant(10L, BIGINT)));
         assertTrue(determinismEvaluator.isDeterministic(lessThanExpression));

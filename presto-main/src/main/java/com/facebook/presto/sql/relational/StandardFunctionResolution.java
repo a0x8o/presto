@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.sql.relational;
 
-import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
@@ -22,7 +21,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.QualifiedName;
-import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
@@ -48,34 +46,32 @@ import static java.util.Objects.requireNonNull;
 
 public final class StandardFunctionResolution
 {
-    private final Session session;
     private final FunctionManager functionManager;
 
-    public StandardFunctionResolution(Session session, FunctionManager functionManager)
+    public StandardFunctionResolution(FunctionManager functionManager)
     {
-        this.session = requireNonNull(session, "session is null");
         this.functionManager = requireNonNull(functionManager, "functionManager is null");
     }
 
     public FunctionHandle notFunction()
     {
-        return functionManager.resolveFunction(session, QualifiedName.of("not"), fromTypes(BOOLEAN));
+        return functionManager.lookupFunction(QualifiedName.of("not"), fromTypes(BOOLEAN));
     }
 
     public FunctionHandle likeVarcharFunction()
     {
-        return functionManager.resolveFunction(session, QualifiedName.of("LIKE"), fromTypes(VARCHAR, LIKE_PATTERN));
+        return functionManager.lookupFunction(QualifiedName.of("LIKE"), fromTypes(VARCHAR, LIKE_PATTERN));
     }
 
     public FunctionHandle likeCharFunction(Type valueType)
     {
         checkArgument(valueType instanceof CharType, "Expected CHAR value type");
-        return functionManager.resolveFunction(session, QualifiedName.of("LIKE"), fromTypes(valueType, LIKE_PATTERN));
+        return functionManager.lookupFunction(QualifiedName.of("LIKE"), fromTypes(valueType, LIKE_PATTERN));
     }
 
     public FunctionHandle likePatternFunction()
     {
-        return functionManager.resolveFunction(session, QualifiedName.of("LIKE_PATTERN"), fromTypes(VARCHAR, VARCHAR));
+        return functionManager.lookupFunction(QualifiedName.of("LIKE_PATTERN"), fromTypes(VARCHAR, VARCHAR));
     }
 
     public FunctionHandle arithmeticFunction(ArithmeticBinaryExpression.Operator operator, Type leftType, Type rightType)
@@ -100,12 +96,12 @@ public final class StandardFunctionResolution
             default:
                 throw new IllegalStateException("Unknown arithmetic operator: " + operator);
         }
-        return functionManager.resolveOperator(operatorType, ImmutableList.of(leftType, rightType));
+        return functionManager.resolveOperator(operatorType, fromTypes(leftType, rightType));
     }
 
     public FunctionHandle arrayConstructor(List<? extends Type> argumentTypes)
     {
-        return functionManager.resolveFunction(session, QualifiedName.of(ARRAY_CONSTRUCTOR), fromTypes(argumentTypes));
+        return functionManager.lookupFunction(QualifiedName.of(ARRAY_CONSTRUCTOR), fromTypes(argumentTypes));
     }
 
     public FunctionHandle comparisonFunction(ComparisonExpression.Operator operator, Type leftType, Type rightType)
@@ -137,11 +133,11 @@ public final class StandardFunctionResolution
                 throw new IllegalStateException("Unsupported comparison operator type: " + operator);
         }
 
-        return functionManager.resolveOperator(operatorType, ImmutableList.of(leftType, rightType));
+        return functionManager.resolveOperator(operatorType, fromTypes(leftType, rightType));
     }
 
     public FunctionHandle tryFunction(Type returnType)
     {
-        return functionManager.resolveFunction(session, QualifiedName.of("TRY"), fromTypes(returnType));
+        return functionManager.lookupFunction(QualifiedName.of("TRY"), fromTypes(returnType));
     }
 }

@@ -57,13 +57,13 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
 
 @SuppressWarnings("MethodMayBeStatic")
@@ -116,8 +116,8 @@ public class BenchmarkArrayTransform
             for (int i = 0; i < TYPES.size(); i++) {
                 Type elementType = TYPES.get(i);
                 ArrayType arrayType = new ArrayType(elementType);
-                FunctionHandle functionHandle = functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("transform"), fromTypeSignatures(arrayType.getTypeSignature(), parseTypeSignature("function(bigint,boolean)")));
-                FunctionHandle greaterThan = functionManager.resolveOperator(GREATER_THAN, ImmutableList.of(BIGINT, BIGINT));
+                FunctionHandle functionHandle = functionManager.lookupFunction(QualifiedName.of("transform"), fromTypeSignatures(arrayType.getTypeSignature(), parseTypeSignature("function(bigint,boolean)")));
+                FunctionHandle greaterThan = functionManager.resolveOperator(GREATER_THAN, fromTypes(BIGINT, BIGINT));
                 projectionsBuilder.add(new CallExpression(functionHandle, returnType, ImmutableList.of(
                         new InputReferenceExpression(0, arrayType),
                         new LambdaDefinitionExpression(

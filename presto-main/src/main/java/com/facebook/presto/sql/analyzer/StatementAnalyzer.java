@@ -194,6 +194,7 @@ import static com.facebook.presto.sql.analyzer.SemanticErrorCode.VIEW_IS_STALE;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.VIEW_PARSE_ERROR;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.WILDCARD_WITHOUT_FROM;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.planner.DeterminismEvaluator.isDeterministic;
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.expressionOptimizer;
 import static com.facebook.presto.sql.tree.ExplainType.Type.DISTRIBUTED;
@@ -1238,7 +1239,7 @@ class StatementAnalyzer
 
                 // ensure a comparison operator exists for the given types (applying coercions if necessary)
                 try {
-                    metadata.getFunctionManager().resolveOperator(OperatorType.EQUAL, ImmutableList.of(
+                    metadata.getFunctionManager().resolveOperator(OperatorType.EQUAL, fromTypes(
                             leftField.get().getType(), rightField.get().getType()));
                 }
                 catch (OperatorNotFoundException e) {
@@ -1410,7 +1411,7 @@ class StatementAnalyzer
 
                 List<TypeSignature> argumentTypes = Lists.transform(windowFunction.getArguments(), expression -> analysis.getType(expression).getTypeSignature());
 
-                FunctionKind kind = metadata.getFunctionManager().resolveFunction(windowFunction.getName(), fromTypeSignatures(argumentTypes)).getKind();
+                FunctionKind kind = metadata.getFunctionManager().resolveFunction(session, windowFunction.getName(), fromTypeSignatures(argumentTypes)).getSignature().getKind();
                 if (kind != AGGREGATE && kind != WINDOW) {
                     throw new SemanticException(MUST_BE_WINDOW_FUNCTION, node, "Not a window function: %s", windowFunction.getName());
                 }
