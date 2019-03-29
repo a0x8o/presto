@@ -162,7 +162,7 @@ public class SemiTransactionalHiveMetastore
             case ADD:
             case ALTER:
             case INSERT_EXISTING:
-                return Optional.of(tableAction.getData().getTable());
+                return Optional.of(tableAction.getData().getAugmentedTableForInTransactionRead());
             case DROP:
                 return Optional.empty();
             default:
@@ -2025,6 +2025,32 @@ public class SemiTransactionalHiveMetastore
             return statisticsUpdate;
         }
 
+        public Table getAugmentedTableForInTransactionRead()
+        {
+            // Don't augment the location for partitioned tables,
+            // as data is never read directly from the partitioned table location
+            if (!table.getPartitionColumns().isEmpty()) {
+                return table;
+            }
+
+            // view don't have currentLocation
+            if (!currentLocation.isPresent()) {
+                return table;
+            }
+
+            // For unpartitioned table, this method augments the location field of the table
+            // to the staging location.
+            // This way, if the table is accessed in an ongoing transaction, staged data
+            // can be found and accessed.
+            String currentLocation = this.currentLocation.get().toString();
+            if (!currentLocation.equals(table.getStorage().getLocation())) {
+                return Table.builder(table)
+                        .withStorage(storage -> storage.setLocation(currentLocation))
+                        .build();
+            }
+            return table;
+        }
+
         @Override
         public String toString()
         {
@@ -2088,10 +2114,9 @@ public class SemiTransactionalHiveMetastore
             // This method augments the location field of the partition to the staging location.
             // This way, if the partition is accessed in an ongoing transaction, staged data
             // can be found and accessed.
-            Partition partition = this.partition;
             String currentLocation = this.currentLocation.toString();
             if (!currentLocation.equals(partition.getStorage().getLocation())) {
-                partition = Partition.builder(partition)
+                return Partition.builder(partition)
                         .withStorage(storage -> storage.setLocation(currentLocation))
                         .build();
             }

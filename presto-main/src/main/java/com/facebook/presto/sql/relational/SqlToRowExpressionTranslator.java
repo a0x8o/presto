@@ -15,6 +15,15 @@ package com.facebook.presto.sql.relational;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.InputReferenceExpression;
+import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.RowExpressionVisitor;
+import com.facebook.presto.spi.relation.SpecialFormExpression;
+import com.facebook.presto.spi.relation.SpecialFormExpression.Form;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.CharType;
 import com.facebook.presto.spi.type.DecimalParseResult;
 import com.facebook.presto.spi.type.Decimals;
@@ -24,7 +33,7 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
-import com.facebook.presto.sql.relational.SpecialFormExpression.Form;
+import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.relational.optimizer.ExpressionOptimizer;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
@@ -88,6 +97,18 @@ import static com.facebook.presto.metadata.CastType.TRY_CAST;
 import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
 import static com.facebook.presto.spi.function.OperatorType.NEGATION;
 import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.AND;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.BIND;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.COALESCE;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.DEREFERENCE;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IF;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IN;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.NULL_IF;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.OR;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.ROW_CONSTRUCTOR;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.SWITCH;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.WHEN;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -104,18 +125,6 @@ import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.constantNull;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.sql.relational.Expressions.specialForm;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.AND;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.BIND;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.COALESCE;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.DEREFERENCE;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.IF;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.IN;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.IS_NULL;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.NULL_IF;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.OR;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.ROW_CONSTRUCTOR;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.SWITCH;
-import static com.facebook.presto.sql.relational.SpecialFormExpression.Form.WHEN;
 import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
 import static com.facebook.presto.util.DateTimeUtils.parseDayTimeInterval;
@@ -138,6 +147,7 @@ public final class SqlToRowExpressionTranslator
     public static RowExpression translate(
             Expression expression,
             Map<NodeRef<Expression>, Type> types,
+            Map<Symbol, Integer> layout,
             FunctionManager functionManager,
             TypeManager typeManager,
             Session session,
@@ -145,6 +155,7 @@ public final class SqlToRowExpressionTranslator
     {
         Visitor visitor = new Visitor(
                 types,
+                layout,
                 typeManager,
                 functionManager,
                 session);
@@ -164,6 +175,7 @@ public final class SqlToRowExpressionTranslator
             extends AstVisitor<RowExpression, Void>
     {
         private final Map<NodeRef<Expression>, Type> types;
+        private final Map<Symbol, Integer> layout;
         private final TypeManager typeManager;
         private final FunctionManager functionManager;
         private final Session session;
@@ -171,11 +183,13 @@ public final class SqlToRowExpressionTranslator
 
         private Visitor(
                 Map<NodeRef<Expression>, Type> types,
+                Map<Symbol, Integer> layout,
                 TypeManager typeManager,
                 FunctionManager functionManager,
                 Session session)
         {
             this.types = ImmutableMap.copyOf(requireNonNull(types, "types is null"));
+            this.layout = layout;
             this.typeManager = typeManager;
             this.functionManager = functionManager;
             this.session = session;
@@ -352,6 +366,11 @@ public final class SqlToRowExpressionTranslator
         @Override
         protected RowExpression visitSymbolReference(SymbolReference node, Void context)
         {
+            Integer channel = layout.get(Symbol.from(node));
+            if (channel != null) {
+                return field(channel, getType(node));
+            }
+
             return new VariableReferenceExpression(node.getName(), getType(node));
         }
 
