@@ -82,7 +82,6 @@ import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_ARB
 import static com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties.StreamDistribution.FIXED;
 import static com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties.StreamDistribution.MULTIPLE;
 import static com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties.StreamDistribution.SINGLE;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -298,7 +297,7 @@ public final class StreamPropertyDerivations
                 return StreamProperties.ordered();
             }
 
-            if (node.getScope() == REMOTE) {
+            if (node.getScope().isRemote()) {
                 // TODO: correctly determine if stream is parallelised
                 // based on session properties
                 return StreamProperties.fixedStreams();
@@ -314,7 +313,7 @@ public final class StreamPropertyDerivations
                     return new StreamProperties(
                             FIXED,
                             Optional.of(node.getPartitioningScheme().getPartitioning().getArguments().stream()
-                                    .map(ArgumentBinding::getSymbol)
+                                    .map(ArgumentBinding::getColumn)
                                     .collect(toImmutableList())), false);
                 case REPLICATE:
                     return new StreamProperties(MULTIPLE, Optional.empty(), false);

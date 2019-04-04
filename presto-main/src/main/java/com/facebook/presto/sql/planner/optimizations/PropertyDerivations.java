@@ -31,7 +31,6 @@ import com.facebook.presto.sql.planner.DomainTranslator;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.NoOpSymbolResolver;
 import com.facebook.presto.sql.planner.OrderingScheme;
-import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.ActualProperties.Global;
@@ -69,7 +68,6 @@ import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
-import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.NodeRef;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -97,8 +95,6 @@ import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Glo
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.partitionedOn;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.singleStreamPartition;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.streamPartitionedOn;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.LOCAL;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -433,21 +429,8 @@ public class PropertyDerivations
                             .unordered(true)
                             .build();
                 case FULL:
-                    if (probeProperties.getNodePartitioning().isPresent()) {
-                        Partitioning nodePartitioning = probeProperties.getNodePartitioning().get();
-                        ImmutableList.Builder<Expression> coalesceExpressions = ImmutableList.builder();
-                        for (Symbol column : nodePartitioning.getColumns()) {
-                            for (JoinNode.EquiJoinClause equality : node.getCriteria()) {
-                                if (equality.getLeft().equals(column) || equality.getRight().equals(column)) {
-                                    coalesceExpressions.add(new CoalesceExpression(ImmutableList.of(equality.getLeft().toSymbolReference(), equality.getRight().toSymbolReference())));
-                                }
-                            }
-                        }
-
-                        return ActualProperties.builder()
-                                .global(partitionedOn(Partitioning.createWithExpressions(nodePartitioning.getHandle(), coalesceExpressions.build()), Optional.empty()))
-                                .build();
-                    }
+                    // We can't say anything about the partitioning scheme because any partition of
+                    // a hash-partitioned join can produce nulls in case of a lack of matches
                     return ActualProperties.builder()
                             .global(probeProperties.isSingleNode() ? singleStreamPartition() : arbitraryPartition())
                             .build();
@@ -533,7 +516,7 @@ public class PropertyDerivations
         @Override
         public ActualProperties visitExchange(ExchangeNode node, List<ActualProperties> inputProperties)
         {
-            checkArgument(node.getScope() != REMOTE || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated), "Null-and-any replicated inputs should not be remotely exchanged");
+            checkArgument(!node.getScope().isRemote() || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated), "Null-and-any replicated inputs should not be remotely exchanged");
 
             Set<Map.Entry<Symbol, NullableValue>> entries = null;
             for (int sourceIndex = 0; sourceIndex < node.getSources().size(); sourceIndex++) {
@@ -561,7 +544,7 @@ public class PropertyDerivations
             // However, for the purpose of validation, some global properties (single-node vs distributed)
             // are computed for local exchanges.
             // TODO: implement full properties for local exchanges
-            if (node.getScope() == LOCAL) {
+            if (node.getScope().isLocal()) {
                 ActualProperties.Builder builder = ActualProperties.builder();
                 builder.local(localProperties.build());
                 builder.constants(constants);
@@ -629,7 +612,7 @@ public class PropertyDerivations
 
             Map<Symbol, Symbol> identities = computeIdentityTranslations(node.getAssignments().getMap());
 
-            ActualProperties translatedProperties = properties.translate(column -> Optional.ofNullable(identities.get(column)), expression -> rewriteExpression(node.getAssignments().getMap(), expression));
+            ActualProperties translatedProperties = properties.translate(column -> Optional.ofNullable(identities.get(column)));
 
             // Extract additional constants
             Map<Symbol, NullableValue> constants = new HashMap<>();
@@ -845,29 +828,6 @@ public class PropertyDerivations
             }
         }
 
-        return Optional.empty();
-    }
-
-    private static Optional<Symbol> rewriteExpression(Map<Symbol, Expression> assignments, Expression expression)
-    {
-        checkArgument(expression instanceof CoalesceExpression, "The rewrite can only handle CoalesceExpression");
-        Set<Expression> expressionOperands = ImmutableSet.copyOf(((CoalesceExpression) expression).getOperands());
-        checkArgument(expressionOperands.stream().allMatch(SymbolReference.class::isInstance), "Expect operands of CoalesceExpression to be SymbolReference");
-        // We are using the property that the result of coalesce from full outer join keys would not be null despite of the order
-        // of the arguments. Thus we extract and compare the symbols of the CoalesceExpression as a set rather than compare the
-        // CoalesceExpression directly.
-        for (Map.Entry<Symbol, Expression> entry : assignments.entrySet()) {
-            if (entry.getValue() instanceof CoalesceExpression) {
-                Set<Expression> assignmentOperands = ImmutableSet.copyOf(((CoalesceExpression) entry.getValue()).getOperands());
-                if (!assignmentOperands.stream().allMatch(SymbolReference.class::isInstance)) {
-                    return Optional.empty();
-                }
-
-                if (assignmentOperands.equals(expressionOperands)) {
-                    return Optional.of(entry.getKey());
-                }
-            }
-        }
         return Optional.empty();
     }
 }

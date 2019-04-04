@@ -24,9 +24,9 @@ import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedName;
-import com.facebook.presto.sql.tree.WindowFrame;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -49,8 +49,9 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strict
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.window;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.windowFrame;
-import static com.facebook.presto.sql.tree.FrameBound.Type.CURRENT_ROW;
-import static com.facebook.presto.sql.tree.FrameBound.Type.UNBOUNDED_PRECEDING;
+import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.BoundType.CURRENT_ROW;
+import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.BoundType.UNBOUNDED_PRECEDING;
+import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.WindowType.RANGE;
 import static com.google.common.base.Predicates.alwaysTrue;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
@@ -64,14 +65,14 @@ public class TestPruneWindowColumns
     private static final Set<String> inputSymbolNameSet = ImmutableSet.copyOf(inputSymbolNameList);
 
     private static final ExpectedValueProvider<WindowNode.Frame> frameProvider1 = windowFrame(
-            WindowFrame.Type.RANGE,
+            RANGE,
             UNBOUNDED_PRECEDING,
             Optional.of("startValue1"),
             CURRENT_ROW,
             Optional.of("endValue1"));
 
     private static final ExpectedValueProvider<WindowNode.Frame> frameProvider2 = windowFrame(
-            WindowFrame.Type.RANGE,
+            RANGE,
             UNBOUNDED_PRECEDING,
             Optional.of("startValue2"),
             CURRENT_ROW,
@@ -218,25 +219,25 @@ public class TestPruneWindowColumns
                                         new FunctionCall(QualifiedName.of("min"), ImmutableList.of(input1.toSymbolReference())),
                                         FUNCTION_HANDLE,
                                         new WindowNode.Frame(
-                                                WindowFrame.Type.RANGE,
+                                                RANGE,
                                                 UNBOUNDED_PRECEDING,
                                                 Optional.of(startValue1),
                                                 CURRENT_ROW,
                                                 Optional.of(endValue1),
-                                                Optional.of(startValue1.toSymbolReference()),
-                                                Optional.of(endValue2.toSymbolReference()))),
+                                                Optional.of(startValue1.toSymbolReference()).map(Expression::toString),
+                                                Optional.of(endValue2.toSymbolReference()).map(Expression::toString))),
                                 output2,
                                 new WindowNode.Function(
                                         new FunctionCall(QualifiedName.of("min"), ImmutableList.of(input2.toSymbolReference())),
                                         FUNCTION_HANDLE,
                                         new WindowNode.Frame(
-                                                WindowFrame.Type.RANGE,
+                                                RANGE,
                                                 UNBOUNDED_PRECEDING,
                                                 Optional.of(startValue2),
                                                 CURRENT_ROW,
                                                 Optional.of(endValue2),
-                                                Optional.of(startValue2.toSymbolReference()),
-                                                Optional.of(endValue2.toSymbolReference())))),
+                                                Optional.of(startValue2.toSymbolReference()).map(Expression::toString),
+                                                Optional.of(endValue2.toSymbolReference()).map(Expression::toString)))),
                         hash,
                         p.values(
                                 inputs.stream()

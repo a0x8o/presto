@@ -55,8 +55,9 @@ public class FixedLifespanScheduler
     private boolean initialScheduled;
     private SettableFuture<?> newDriverGroupReady = SettableFuture.create();
     @GuardedBy("this")
-    private final List<Lifespan> recentlyCompletedDriverGroups = new ArrayList<>();
-    private int totalDriverGroupsScheduled;
+    private final List<Lifespan> recentlyCompletelyExecutedDriverGroups = new ArrayList<>();
+    @GuardedBy("this")
+    private int totalLifespanExecutionFinished;
 
     public FixedLifespanScheduler(BucketNodeMap bucketNodeMap, List<ConnectorPartitionHandle> partitionHandles, OptionalInt concurrentLifespansPerTask)
     {
@@ -93,33 +94,29 @@ public class FixedLifespanScheduler
                 int driverGroupId = driverGroupsIterator.nextInt();
                 scheduler.startLifespan(Lifespan.driverGroup(driverGroupId), partitionHandles.get(driverGroupId));
 
-                totalDriverGroupsScheduled++;
                 driverGroupsScheduled++;
                 if (concurrentLifespansPerTask.isPresent() && driverGroupsScheduled == concurrentLifespansPerTask.getAsInt()) {
                     break;
                 }
             }
         }
-
-        verify(totalDriverGroupsScheduled <= driverGroupToNodeMap.size());
-        if (totalDriverGroupsScheduled == driverGroupToNodeMap.size()) {
-            scheduler.noMoreLifespans();
-        }
     }
 
-    public void onLifespanFinished(Iterable<Lifespan> newlyCompletedDriverGroups)
+    public void onLifespanExecutionFinished(Iterable<Lifespan> newlyCompletelyExecutedDriverGroups)
     {
         checkState(initialScheduled);
 
         SettableFuture<?> newDriverGroupReady;
         synchronized (this) {
-            for (Lifespan newlyCompletedDriverGroup : newlyCompletedDriverGroups) {
-                checkArgument(!newlyCompletedDriverGroup.isTaskWide());
-                recentlyCompletedDriverGroups.add(newlyCompletedDriverGroup);
+            for (Lifespan newlyCompletelyExecutedDriverGroup : newlyCompletelyExecutedDriverGroups) {
+                checkArgument(!newlyCompletelyExecutedDriverGroup.isTaskWide());
+                recentlyCompletelyExecutedDriverGroups.add(newlyCompletelyExecutedDriverGroup);
+                totalLifespanExecutionFinished++;
             }
             newDriverGroupReady = this.newDriverGroupReady;
         }
         newDriverGroupReady.set(null);
+        verify(totalLifespanExecutionFinished <= partitionHandles.size());
     }
 
     public SettableFuture schedule(SourceScheduler scheduler)
@@ -131,8 +128,8 @@ public class FixedLifespanScheduler
 
         List<Lifespan> recentlyCompletedDriverGroups;
         synchronized (this) {
-            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
-            this.recentlyCompletedDriverGroups.clear();
+            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletelyExecutedDriverGroups);
+            this.recentlyCompletelyExecutedDriverGroups.clear();
             newDriverGroupReady = SettableFuture.create();
         }
 
@@ -143,14 +140,14 @@ public class FixedLifespanScheduler
             }
             int driverGroupId = driverGroupsIterator.nextInt();
             scheduler.startLifespan(Lifespan.driverGroup(driverGroupId), partitionHandles.get(driverGroupId));
-            totalDriverGroupsScheduled++;
-        }
-
-        verify(totalDriverGroupsScheduled <= driverGroupToNodeMap.size());
-        if (totalDriverGroupsScheduled == driverGroupToNodeMap.size()) {
-            scheduler.noMoreLifespans();
         }
 
         return newDriverGroupReady;
+    }
+
+    @Override
+    public synchronized boolean allLifespanExecutionFinished()
+    {
+        return totalLifespanExecutionFinished == partitionHandles.size();
     }
 }

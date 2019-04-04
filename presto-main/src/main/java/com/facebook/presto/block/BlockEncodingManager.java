@@ -19,7 +19,7 @@ import com.facebook.presto.spi.block.BlockEncoding;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.block.ByteArrayBlockEncoding;
 import com.facebook.presto.spi.block.DictionaryBlockEncoding;
-import com.facebook.presto.spi.block.FixedWidthBlockEncoding;
+import com.facebook.presto.spi.block.Int128ArrayBlockEncoding;
 import com.facebook.presto.spi.block.IntArrayBlockEncoding;
 import com.facebook.presto.spi.block.LazyBlockEncoding;
 import com.facebook.presto.spi.block.LongArrayBlockEncoding;
@@ -63,11 +63,11 @@ public final class BlockEncodingManager
 
         // always add the built-in BlockEncodings
         addBlockEncoding(new VariableWidthBlockEncoding());
-        addBlockEncoding(new FixedWidthBlockEncoding());
         addBlockEncoding(new ByteArrayBlockEncoding());
         addBlockEncoding(new ShortArrayBlockEncoding());
         addBlockEncoding(new IntArrayBlockEncoding());
         addBlockEncoding(new LongArrayBlockEncoding());
+        addBlockEncoding(new Int128ArrayBlockEncoding());
         addBlockEncoding(new DictionaryBlockEncoding());
         addBlockEncoding(new ArrayBlockEncoding());
         addBlockEncoding(new MapBlockEncoding(typeManager));

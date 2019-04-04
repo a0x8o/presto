@@ -57,7 +57,9 @@ public class DynamicLifespanScheduler
     private SettableFuture<?> newDriverGroupReady = SettableFuture.create();
 
     @GuardedBy("this")
-    private final List<Lifespan> recentlyCompletedDriverGroups = new ArrayList<>();
+    private final List<Lifespan> recentlyCompletelyExecutedDriverGroups = new ArrayList<>();
+    @GuardedBy("this")
+    private int totalLifespanExecutionFinished;
 
     public DynamicLifespanScheduler(BucketNodeMap bucketNodeMap, List<Node> allNodes, List<ConnectorPartitionHandle> partitionHandles, OptionalInt concurrentLifespansPerTask)
     {
@@ -94,22 +96,19 @@ public class DynamicLifespanScheduler
                 break;
             }
         }
-
-        if (!driverGroups.hasNext()) {
-            scheduler.noMoreLifespans();
-        }
     }
 
     @Override
-    public void onLifespanFinished(Iterable<Lifespan> newlyCompletedDriverGroups)
+    public void onLifespanExecutionFinished(Iterable<Lifespan> newlyCompletelyExecutedDriverGroups)
     {
         checkState(initialScheduled);
 
         SettableFuture<?> newDriverGroupReady;
         synchronized (this) {
-            for (Lifespan newlyCompletedDriverGroup : newlyCompletedDriverGroups) {
-                checkArgument(!newlyCompletedDriverGroup.isTaskWide());
-                recentlyCompletedDriverGroups.add(newlyCompletedDriverGroup);
+            for (Lifespan newlyCompletelyExecutedDriverGroup : newlyCompletelyExecutedDriverGroups) {
+                checkArgument(!newlyCompletelyExecutedDriverGroup.isTaskWide());
+                recentlyCompletelyExecutedDriverGroups.add(newlyCompletelyExecutedDriverGroup);
+                totalLifespanExecutionFinished++;
             }
             newDriverGroupReady = this.newDriverGroupReady;
         }
@@ -126,8 +125,8 @@ public class DynamicLifespanScheduler
 
         List<Lifespan> recentlyCompletedDriverGroups;
         synchronized (this) {
-            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
-            this.recentlyCompletedDriverGroups.clear();
+            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletelyExecutedDriverGroups);
+            this.recentlyCompletelyExecutedDriverGroups.clear();
             newDriverGroupReady = SettableFuture.create();
         }
 
@@ -142,9 +141,12 @@ public class DynamicLifespanScheduler
             scheduler.startLifespan(Lifespan.driverGroup(driverGroupId), partitionHandles.get(driverGroupId));
         }
 
-        if (!driverGroups.hasNext()) {
-            scheduler.noMoreLifespans();
-        }
         return newDriverGroupReady;
+    }
+
+    @Override
+    public synchronized boolean allLifespanExecutionFinished()
+    {
+        return totalLifespanExecutionFinished == partitionHandles.size();
     }
 }

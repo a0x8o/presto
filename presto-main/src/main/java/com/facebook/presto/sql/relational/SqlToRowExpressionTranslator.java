@@ -47,6 +47,8 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CharLiteral;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
+import com.facebook.presto.sql.tree.CurrentPath;
+import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.DoubleLiteral;
@@ -85,6 +87,7 @@ import com.facebook.presto.type.UnknownType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
+import io.airlift.slice.Slices;
 
 import java.util.List;
 import java.util.Map;
@@ -164,7 +167,7 @@ public final class SqlToRowExpressionTranslator
         requireNonNull(result, "translated expression is null");
 
         if (optimize) {
-            ExpressionOptimizer optimizer = new ExpressionOptimizer(functionManager, typeManager, session);
+            ExpressionOptimizer optimizer = new ExpressionOptimizer(functionManager, session);
             return optimizer.optimize(result);
         }
 
@@ -205,6 +208,25 @@ public final class SqlToRowExpressionTranslator
         protected RowExpression visitExpression(Expression node, Void context)
         {
             throw new UnsupportedOperationException("not yet implemented: expression translator for " + node.getClass().getName());
+        }
+
+        @Override
+        protected RowExpression visitIdentifier(Identifier node, Void context)
+        {
+            // identifier should never be reachable with the exception of lambda within VALUES (#9711)
+            return new VariableReferenceExpression(node.getValue(), getType(node));
+        }
+
+        @Override
+        protected RowExpression visitCurrentUser(CurrentUser node, Void context)
+        {
+            return constant(Slices.utf8Slice(session.getUser()), VARCHAR);
+        }
+
+        @Override
+        protected RowExpression visitCurrentPath(CurrentPath node, Void context)
+        {
+            return constant(Slices.utf8Slice(session.getPath().toString()), VARCHAR);
         }
 
         @Override

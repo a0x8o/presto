@@ -79,7 +79,7 @@ public class SourcePartitionedScheduler
 
         /**
          * All splits have been provided to caller of this scheduler.
-         * Cleanup operations are done (e.g., drainCompletedLifespans has drained all driver groups).
+         * Cleanup operations are done (e.g., drainCompletelyScheduledLifespans has drained all driver groups).
          */
         FINISHED
     }
@@ -92,7 +92,6 @@ public class SourcePartitionedScheduler
     private final boolean groupedExecution;
 
     private final Map<Lifespan, ScheduleGroup> scheduleGroups = new HashMap<>();
-    private boolean noMoreScheduleGroups;
     private State state = State.INITIALIZED;
 
     private SettableFuture<?> whenFinishedOrNewLifespanAdded = SettableFuture.create();
@@ -136,14 +135,13 @@ public class SourcePartitionedScheduler
     {
         SourcePartitionedScheduler sourcePartitionedScheduler = new SourcePartitionedScheduler(stage, partitionedNode, splitSource, splitPlacementPolicy, splitBatchSize, false);
         sourcePartitionedScheduler.startLifespan(Lifespan.taskWide(), NOT_PARTITIONED);
-        sourcePartitionedScheduler.noMoreLifespans();
 
         return new StageScheduler() {
             @Override
             public ScheduleResult schedule()
             {
                 ScheduleResult scheduleResult = sourcePartitionedScheduler.schedule();
-                sourcePartitionedScheduler.drainCompletedLifespans();
+                sourcePartitionedScheduler.drainCompletelyScheduledLifespans();
                 return scheduleResult;
             }
 
@@ -162,7 +160,7 @@ public class SourcePartitionedScheduler
      * that is either ungrouped or grouped. However, the caller is responsible initializing
      * the driver groups in this scheduler accordingly.
      * <p>
-     * Besides, the caller is required to poll {@link #drainCompletedLifespans()}
+     * Besides, the caller is required to poll {@link #drainCompletelyScheduledLifespans()}
      * in addition to {@link #schedule()} on the returned object. Otherwise, lifecycle
      * transitioning of the object will not work properly.
      */
@@ -182,18 +180,6 @@ public class SourcePartitionedScheduler
     {
         checkState(state == State.INITIALIZED || state == State.SPLITS_ADDED);
         scheduleGroups.put(lifespan, new ScheduleGroup(partitionHandle));
-        whenFinishedOrNewLifespanAdded.set(null);
-        whenFinishedOrNewLifespanAdded = SettableFuture.create();
-    }
-
-    @Override
-    public synchronized void noMoreLifespans()
-    {
-        checkState(state == State.INITIALIZED || state == State.SPLITS_ADDED);
-        noMoreScheduleGroups = true;
-        // The listener is waiting for "new lifespan added" because new lifespans would bring new works to scheduler.
-        // "No more lifespans" would be of interest to such listeners because it signals that is not going to happen anymore,
-        // and the listener should stop waiting.
         whenFinishedOrNewLifespanAdded.set(null);
         whenFinishedOrNewLifespanAdded = SettableFuture.create();
     }
@@ -317,7 +303,12 @@ public class SourcePartitionedScheduler
         //     which may contain recently published splits. We must not ignore those.
         //   * If any scheduleGroup is still in DISCOVERING_SPLITS state, it means it hasn't realized that there will be no more splits.
         //     Next time it invokes getNextBatch, it will realize that. However, the invocation will fail we tear down splitSource now.
-        if ((state == State.NO_MORE_SPLITS || state == State.FINISHED) || (noMoreScheduleGroups && scheduleGroups.isEmpty() && splitSource.isFinished())) {
+        //
+        // Since grouped execution is going to support failure recovery, and scheduled splits might have to be rescheduled during retry,
+        // we can no longer claim schedule is complete after all splits are scheduled.
+        // Splits schedule can only be considered as finished when all lifespan executions are done
+        // (by calling `notifyAllLifespansFinishedExecution`)
+        if ((state == State.NO_MORE_SPLITS || state == State.FINISHED) || (!groupedExecution && scheduleGroups.isEmpty() && splitSource.isFinished())) {
             switch (state) {
                 case INITIALIZED:
                     // We have not scheduled a single split so far.
@@ -402,7 +393,7 @@ public class SourcePartitionedScheduler
     }
 
     @Override
-    public synchronized List<Lifespan> drainCompletedLifespans()
+    public synchronized List<Lifespan> drainCompletelyScheduledLifespans()
     {
         if (scheduleGroups.isEmpty()) {
             // Invoking splitSource.isFinished would fail if it was already closed, which is possible if scheduleGroups is empty.
@@ -427,6 +418,15 @@ public class SourcePartitionedScheduler
         }
 
         return result.build();
+    }
+
+    @Override
+    public synchronized void notifyAllLifespansFinishedExecution()
+    {
+        checkState(groupedExecution);
+        state = State.FINISHED;
+        splitSource.close();
+        whenFinishedOrNewLifespanAdded.set(null);
     }
 
     private Set<RemoteTask> assignSplits(Multimap<Node, Split> splitAssignment, Multimap<Node, Lifespan> noMoreSplitsNotification)
