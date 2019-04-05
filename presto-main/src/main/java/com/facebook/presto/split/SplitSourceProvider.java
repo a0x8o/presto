@@ -11,24 +11,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.split;
 
-public enum StandardWarningCode
-        implements WarningCodeSupplier
+import com.facebook.presto.Session;
+import com.facebook.presto.metadata.TableLayoutHandle;
+import com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy;
+
+public interface SplitSourceProvider
 {
-    TOO_MANY_STAGES(0x0000_0001),
-    PARSER_WARNING(0x0000_0002),
-    /**/;
-    private final WarningCode warningCode;
-
-    StandardWarningCode(int code)
-    {
-        warningCode = new WarningCode(code, name());
-    }
-
-    @Override
-    public WarningCode toWarningCode()
-    {
-        return warningCode;
-    }
+    SplitSource getSplits(Session session, TableLayoutHandle layout, SplitSchedulingStrategy splitSchedulingStrategy);
 }
