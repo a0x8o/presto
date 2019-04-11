@@ -685,6 +685,21 @@ class StaticFunctionNamespace
         return Iterables.any(functions.get(name), function -> function.getSignature().getKind() == AGGREGATE);
     }
 
+    public FunctionMetadata getFunctionMetadata(FunctionHandle functionHandle)
+    {
+        SpecializedFunctionKey functionKey;
+        try {
+            functionKey = specializedFunctionKeyCache.getUnchecked(functionHandle.getSignature());
+        }
+        catch (UncheckedExecutionException e) {
+            throwIfInstanceOf(e.getCause(), PrestoException.class);
+            throw e;
+        }
+        SqlFunction function = functionKey.getFunction();
+        Signature signature = functionHandle.getSignature();
+        return new FunctionMetadata(signature.getName(), signature.getArgumentTypes(), signature.getReturnType(), signature.getKind(), function.isDeterministic(), function.isCalledOnNullInput());
+    }
+
     public FunctionHandle lookupFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         Collection<SqlFunction> allCandidates = functions.get(name);
@@ -929,9 +944,9 @@ class StaticFunctionNamespace
         for (int i = 0; i < parameterTypes.size(); i++) {
             Type parameterType = parameterTypes.get(i);
             if (parameterType.equals(UNKNOWN)) {
-                // TODO: Move information about nullable arguments to FunctionSignature. Remove this hack.
-                ScalarFunctionImplementation implementation = getScalarFunctionImplementation(boundSignature);
-                if (implementation.getArgumentProperty(i).getNullConvention() != RETURN_NULL_ON_NULL) {
+                // TODO: This still doesn't feel right. Need to understand function resolution logic better to know what's the right way.
+                FunctionHandle functionHandle = new FunctionHandle(boundSignature);
+                if (getFunctionMetadata(functionHandle).isCalledOnNullInput()) {
                     return false;
                 }
             }
@@ -1263,8 +1278,7 @@ class StaticFunctionNamespace
             return new ScalarFunctionImplementation(
                     false,
                     ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                    methodHandle,
-                    isDeterministic());
+                    methodHandle);
         }
     }
 }

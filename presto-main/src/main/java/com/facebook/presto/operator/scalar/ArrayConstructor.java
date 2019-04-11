@@ -95,6 +95,12 @@ public final class ArrayConstructor
     }
 
     @Override
+    public boolean isCalledOnNullInput()
+    {
+        return true;
+    }
+
+    @Override
     public String getDescription()
     {
         // Internal function, doesn't need a description
@@ -129,8 +135,7 @@ public final class ArrayConstructor
         return new ScalarFunctionImplementation(
                 false,
                 nCopies(stackTypes.size(), valueTypeArgumentProperty(USE_BOXED_TYPE)),
-                methodHandle,
-                isDeterministic());
+                methodHandle);
     }
 
     private static Class<?> generateArrayConstructor(List<Class<?>> stackTypes, Type elementType)

@@ -69,6 +69,12 @@ public final class ArrayReduceFunction
     }
 
     @Override
+    public boolean isCalledOnNullInput()
+    {
+        return true;
+    }
+
+    @Override
     public String getDescription()
     {
         return "Reduce elements of the array into a single value";
@@ -91,8 +97,7 @@ public final class ArrayReduceFunction
                 methodHandle.asType(
                         methodHandle.type()
                                 .changeParameterType(1, Primitives.wrap(intermediateType.getJavaType()))
-                                .changeReturnType(Primitives.wrap(outputType.getJavaType()))),
-                isDeterministic());
+                                .changeReturnType(Primitives.wrap(outputType.getJavaType()))));
     }
 
     public static Object reduce(

@@ -16,9 +16,9 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.Session;
 import com.facebook.presto.client.FailureInfo;
 import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.metadata.FunctionMetadata;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.scalar.ArraySubscriptOperator;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.BlockBuilder;
@@ -111,7 +111,6 @@ import java.util.stream.Stream;
 
 import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static com.facebook.presto.metadata.CastType.CAST;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
@@ -877,16 +876,16 @@ public class ExpressionInterpreter
                 argumentTypes.add(type);
             }
             FunctionHandle functionHandle = metadata.getFunctionManager().resolveFunction(session, node.getName(), fromTypes(argumentTypes));
-            ScalarFunctionImplementation function = metadata.getFunctionManager().getScalarFunctionImplementation(functionHandle);
+            FunctionMetadata functionMetadata = metadata.getFunctionManager().getFunctionMetadata(functionHandle);
             for (int i = 0; i < argumentValues.size(); i++) {
                 Object value = argumentValues.get(i);
-                if (value == null && function.getArgumentProperty(i).getNullConvention() == RETURN_NULL_ON_NULL) {
+                if (value == null && !functionMetadata.isCalledOnNullInput()) {
                     return null;
                 }
             }
 
             // do not optimize non-deterministic functions
-            if (optimize && (!function.isDeterministic() || hasUnresolvedValue(argumentValues) || node.getName().equals(QualifiedName.of("fail")))) {
+            if (optimize && (!functionMetadata.isDeterministic() || hasUnresolvedValue(argumentValues) || node.getName().equals(QualifiedName.of("fail")))) {
                 return new FunctionCall(node.getName(), node.getWindow(), node.isDistinct(), toExpressions(argumentValues, argumentTypes));
             }
             return functionInvoker.invoke(functionHandle, connectorSession, argumentValues);

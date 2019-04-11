@@ -15,6 +15,7 @@ package com.facebook.presto.sql.relational.optimizer;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.metadata.FunctionMetadata;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.function.FunctionHandle;
@@ -39,7 +40,6 @@ import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.metadata.CastType.JSON_TO_ARRAY_CAST;
 import static com.facebook.presto.metadata.CastType.JSON_TO_MAP_CAST;
 import static com.facebook.presto.metadata.CastType.JSON_TO_ROW_CAST;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.operator.scalar.TryCastFunction.TRY_CAST_NAME;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.BIND;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -92,13 +92,14 @@ public class ExpressionOptimizer
         public RowExpression visitCall(CallExpression call, Void context)
         {
             FunctionHandle functionHandle = call.getFunctionHandle();
-            if (functionHandle.getSignature().getName().equals(TRY_CAST_NAME)) {
+            FunctionMetadata functionMetadata = functionManager.getFunctionMetadata(functionHandle);
+            if (functionMetadata.getName().equals(TRY_CAST_NAME)) {
                 List<RowExpression> arguments = call.getArguments().stream()
                         .map(argument -> argument.accept(this, null))
                         .collect(toImmutableList());
-                return call(functionHandle, call.getType(), arguments);
+                return call(call.getDisplayName(), functionHandle, call.getType(), arguments);
             }
-            if (functionHandle.getSignature().getName().equals(CAST.getCastName())) {
+            if (functionMetadata.getName().equals(CAST.getCastName())) {
                 call = rewriteCast(call);
                 functionHandle = call.getFunctionHandle();
             }
@@ -109,7 +110,7 @@ public class ExpressionOptimizer
                     .collect(toImmutableList());
 
             // TODO: optimize function calls with lambda arguments. For example, apply(x -> x + 2, 1)
-            if (Iterables.all(arguments, instanceOf(ConstantExpression.class)) && function.isDeterministic()) {
+            if (Iterables.all(arguments, instanceOf(ConstantExpression.class)) && functionMetadata.isDeterministic()) {
                 MethodHandle method = function.getMethodHandle();
 
                 if (method.type().parameterCount() > 0 && method.type().parameterType(0) == ConnectorSession.class) {
@@ -121,7 +122,7 @@ public class ExpressionOptimizer
                 for (RowExpression argument : arguments) {
                     Object value = ((ConstantExpression) argument).getValue();
                     // if any argument is null, return null
-                    if (value == null && function.getArgumentProperty(index).getNullConvention() == RETURN_NULL_ON_NULL) {
+                    if (value == null && !functionMetadata.isCalledOnNullInput()) {
                         return constantNull(call.getType());
                     }
                     constantArguments.add(value);
@@ -139,7 +140,7 @@ public class ExpressionOptimizer
                 }
             }
 
-            return call(functionHandle, call.getType(), arguments);
+            return call(call.getDisplayName(), functionHandle, call.getType(), arguments);
         }
 
         @Override
@@ -223,12 +224,13 @@ public class ExpressionOptimizer
             if (call.getArguments().get(0) instanceof CallExpression) {
                 // Optimization for CAST(JSON_PARSE(...) AS ARRAY/MAP/ROW)
                 CallExpression innerCall = (CallExpression) call.getArguments().get(0);
-                if (innerCall.getFunctionHandle().getSignature().getName().equals("json_parse")) {
+                if (functionManager.getFunctionMetadata(innerCall.getFunctionHandle()).getName().equals("json_parse")) {
                     checkArgument(innerCall.getType().equals(JSON));
                     checkArgument(innerCall.getArguments().size() == 1);
-                    TypeSignature returnType = call.getFunctionHandle().getSignature().getReturnType();
+                    TypeSignature returnType = functionManager.getFunctionMetadata(call.getFunctionHandle()).getReturnType();
                     if (returnType.getBase().equals(ARRAY)) {
                         return call(
+                                JSON_TO_ARRAY_CAST.name(),
                                 functionManager.lookupCast(
                                         JSON_TO_ARRAY_CAST,
                                         parseTypeSignature(VARCHAR),
@@ -238,6 +240,7 @@ public class ExpressionOptimizer
                     }
                     if (returnType.getBase().equals(MAP)) {
                         return call(
+                                JSON_TO_MAP_CAST.name(),
                                 functionManager.lookupCast(
                                         JSON_TO_MAP_CAST,
                                         parseTypeSignature(VARCHAR),
@@ -247,6 +250,7 @@ public class ExpressionOptimizer
                     }
                     if (returnType.getBase().equals(ROW)) {
                         return call(
+                                JSON_TO_ROW_CAST.name(),
                                 functionManager.lookupCast(
                                         JSON_TO_ROW_CAST,
                                         parseTypeSignature(VARCHAR),
@@ -258,6 +262,7 @@ public class ExpressionOptimizer
             }
 
             return call(
+                    CAST.name(),
                     functionManager.lookupCast(
                             CAST,
                             call.getArguments().get(0).getType().getTypeSignature(),
