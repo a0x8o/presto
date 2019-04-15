@@ -13,109 +13,52 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.verifier.checksum.ChecksumResult;
-import com.facebook.presto.verifier.checksum.ColumnMatchResult;
-import com.google.common.collect.ImmutableMap;
-
-import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalLong;
-
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.COLUMN_MISMATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.MATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.ROW_COUNT_MISMATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.SCHEMA_MISMATCH;
-import static com.google.common.base.Preconditions.checkState;
-import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class VerificationResult
 {
-    public enum MatchType
-    {
-        MATCH,
-        SCHEMA_MISMATCH,
-        ROW_COUNT_MISMATCH,
-        COLUMN_MISMATCH,
-    }
-
-    private final MatchType matchType;
-    private final Optional<String> controlChecksumQuery;
-    private final Optional<String> testChecksumQuery;
-    private final Optional<ChecksumResult> controlChecksum;
-    private final OptionalLong controlRowCount;
-    private final OptionalLong testRowCount;
-    private final Map<Column, ColumnMatchResult> mismatchedColumns;
+    private final String controlChecksumQueryId;
+    private final String testChecksumQueryId;
+    private final String controlChecksumQuery;
+    private final String testChecksumQuery;
+    private final MatchResult matchResult;
 
     public VerificationResult(
-            MatchType matchType,
-            Optional<String> controlChecksumQuery,
-            Optional<String> testChecksumQuery,
-            Optional<ChecksumResult> controlChecksum,
-            OptionalLong controlRowCount,
-            OptionalLong testRowCount,
-            Map<Column, ColumnMatchResult> mismatchedColumns)
+            String controlChecksumQueryId,
+            String testChecksumQueryId,
+            String controlChecksumQuery,
+            String testChecksumQuery,
+            MatchResult matchResult)
     {
-        this.matchType = requireNonNull(matchType, "type is null");
+        this.controlChecksumQueryId = requireNonNull(controlChecksumQueryId, "controlChecksumQueryId is null");
+        this.testChecksumQueryId = requireNonNull(testChecksumQueryId, "testChecksumQueryId is null");
         this.controlChecksumQuery = requireNonNull(controlChecksumQuery, "controlChecksumQuery is null");
         this.testChecksumQuery = requireNonNull(testChecksumQuery, "testChecksumQuery is null");
-        this.controlChecksum = requireNonNull(controlChecksum, "controlChecksum is null");
-        this.controlRowCount = requireNonNull(controlRowCount, "controlRowCount is null");
-        this.testRowCount = requireNonNull(testRowCount, "testRowCount is null");
-        this.mismatchedColumns = ImmutableMap.copyOf(mismatchedColumns);
+        this.matchResult = requireNonNull(matchResult, "matchResult is null");
     }
 
-    public boolean isMatched()
+    public String getControlChecksumQueryId()
     {
-        return matchType == MATCH;
+        return controlChecksumQueryId;
     }
 
-    public MatchType getMatchType()
-    {
-        return matchType;
-    }
-
-    public Optional<String> getControlChecksumQuery()
+    public String getControlChecksumQuery()
     {
         return controlChecksumQuery;
     }
 
-    public Optional<String> getTestChecksumQuery()
+    public String getTestChecksumQueryId()
+    {
+        return testChecksumQueryId;
+    }
+
+    public String getTestChecksumQuery()
     {
         return testChecksumQuery;
     }
 
-    public ChecksumResult getControlChecksum()
+    public MatchResult getMatchResult()
     {
-        checkState(controlChecksum.isPresent(), "controlChecksum is missing");
-        return controlChecksum.get();
-    }
-
-    public boolean isMismatchPossiblyCausedByNonDeterminism()
-    {
-        return matchType == ROW_COUNT_MISMATCH || matchType == COLUMN_MISMATCH;
-    }
-
-    public String getResultsComparison()
-    {
-        StringBuilder message = new StringBuilder()
-                .append(matchType.name().replace("_", " "))
-                .append('\n');
-        if (matchType == SCHEMA_MISMATCH) {
-            return message.toString();
-        }
-
-        checkState(controlRowCount.isPresent(), "controlRowCount is missing");
-        checkState(testRowCount.isPresent(), "testRowCount is missing");
-        message.append(format("Control %s rows, Test %s rows\n", controlRowCount.getAsLong(), testRowCount.getAsLong()));
-        if (matchType == ROW_COUNT_MISMATCH) {
-            return message.toString();
-        }
-
-        message.append("Mismatched Columns:\n");
-        mismatchedColumns.forEach((column, matchResult) ->
-                message.append(format("  %s (%s): %s", column.getName(), column.getType().getDisplayName(), matchResult.getMessage()))
-                        .append("\n"));
-        return message.toString();
+        return matchResult;
     }
 }

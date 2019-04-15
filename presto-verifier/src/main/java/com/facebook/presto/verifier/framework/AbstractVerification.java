@@ -21,8 +21,8 @@ import com.facebook.presto.verifier.event.FailureInfo;
 import com.facebook.presto.verifier.event.QueryInfo;
 import com.facebook.presto.verifier.event.VerifierQueryEvent;
 import com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus;
+import com.facebook.presto.verifier.framework.MatchResult.MatchType;
 import com.facebook.presto.verifier.framework.QueryOrigin.QueryGroup;
-import com.facebook.presto.verifier.framework.VerificationResult.MatchType;
 import com.facebook.presto.verifier.resolver.FailureResolver;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
@@ -113,10 +113,10 @@ public abstract class AbstractVerification
             test = queryRewriter.rewriteQuery(sourceQuery.getTestQuery(), TEST, getConfiguration(TEST), getVerificationContext());
             verificationResult = verify(control, test);
 
-            deterministic = verificationResult.isMismatchPossiblyCausedByNonDeterminism() ?
-                    isDeterministic(control, verificationResult.getControlChecksum()) :
+            deterministic = verificationResult.getMatchResult().isMismatchPossiblyCausedByNonDeterminism() ?
+                    isDeterministic(control, verificationResult.getMatchResult().getControlChecksum()) :
                     Optional.empty();
-            resultMismatched = deterministic.orElse(true) && !verificationResult.isMatched();
+            resultMismatched = deterministic.orElse(true) && !verificationResult.getMatchResult().isMatched();
 
             return Optional.of(buildEvent(
                     Optional.of(control),
@@ -202,7 +202,7 @@ public abstract class AbstractVerification
             Optional<VerificationResult> verificationResult,
             Optional<Boolean> deterministic)
     {
-        boolean succeeded = verificationResult.isPresent() && verificationResult.get().isMatched();
+        boolean succeeded = verificationResult.isPresent() && verificationResult.get().getMatchResult().isMatched();
 
         QueryState controlState = getQueryState(controlStats, queryException, CONTROL);
         QueryState testState = getQueryState(testStats, queryException, TEST);
@@ -214,7 +214,7 @@ public abstract class AbstractVerification
                 errorMessage += getStackTraceAsString(queryException.get().getCause());
             }
             if (verificationResult.isPresent()) {
-                errorMessage += verificationResult.get().getResultsComparison();
+                errorMessage += verificationResult.get().getMatchResult().getResultsComparison();
             }
         }
 
@@ -244,7 +244,7 @@ public abstract class AbstractVerification
         Optional<String> errorCode = Optional.empty();
         if (!succeeded) {
             errorCode = Optional.ofNullable(queryException.map(QueryException::getErrorCode).orElse(
-                    verificationResult.map(VerificationResult::getMatchType).map(MatchType::name).orElse(null)));
+                    verificationResult.map(VerificationResult::getMatchResult).map(MatchResult::getMatchType).map(MatchType::name).orElse(null)));
         }
 
         return new VerifierQueryEvent(
@@ -257,14 +257,16 @@ public abstract class AbstractVerification
                 buildQueryInfo(
                         sourceQuery.getControlConfiguration(),
                         sourceQuery.getControlQuery(),
-                        verificationResult.flatMap(VerificationResult::getControlChecksumQuery),
+                        verificationResult.map(VerificationResult::getControlChecksumQueryId),
+                        verificationResult.map(VerificationResult::getControlChecksumQuery),
                         control,
                         controlStats,
                         verificationContext.getAllFailures(CONTROL)),
                 buildQueryInfo(
                         sourceQuery.getTestConfiguration(),
                         sourceQuery.getTestQuery(),
-                        verificationResult.flatMap(VerificationResult::getTestChecksumQuery),
+                        verificationResult.map(VerificationResult::getTestChecksumQueryId),
+                        verificationResult.map(VerificationResult::getTestChecksumQuery),
                         test,
                         testStats,
                         verificationContext.getAllFailures(TEST)),
@@ -286,6 +288,7 @@ public abstract class AbstractVerification
     private static QueryInfo buildQueryInfo(
             QueryConfiguration configuration,
             String originalQuery,
+            Optional<String> checksumQueryId,
             Optional<String> checksumQuery,
             Optional<QueryBundle> queryBundle,
             Optional<QueryStats> queryStats,
@@ -296,6 +299,7 @@ public abstract class AbstractVerification
                 configuration.getSchema(),
                 originalQuery,
                 queryStats.map(QueryStats::getQueryId),
+                checksumQueryId,
                 queryBundle.map(QueryBundle::getQuery).map(AbstractVerification::formatSql),
                 queryBundle.map(QueryBundle::getSetupQueries).map(AbstractVerification::formatSqls),
                 queryBundle.map(QueryBundle::getTeardownQueries).map(AbstractVerification::formatSqls),

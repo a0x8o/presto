@@ -20,8 +20,8 @@ import com.facebook.presto.sql.tree.ShowColumns;
 import com.facebook.presto.verifier.checksum.ChecksumResult;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.checksum.ColumnMatchResult;
+import com.facebook.presto.verifier.framework.MatchResult.MatchType;
 import com.facebook.presto.verifier.framework.QueryOrigin.QueryGroup;
-import com.facebook.presto.verifier.framework.VerificationResult.MatchType;
 import com.facebook.presto.verifier.resolver.FailureResolver;
 import com.google.common.collect.ImmutableMap;
 
@@ -30,15 +30,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 
+import static com.facebook.presto.verifier.framework.MatchResult.MatchType.COLUMN_MISMATCH;
+import static com.facebook.presto.verifier.framework.MatchResult.MatchType.MATCH;
+import static com.facebook.presto.verifier.framework.MatchResult.MatchType.ROW_COUNT_MISMATCH;
+import static com.facebook.presto.verifier.framework.MatchResult.MatchType.SCHEMA_MISMATCH;
 import static com.facebook.presto.verifier.framework.QueryOrigin.QueryGroup.CONTROL;
 import static com.facebook.presto.verifier.framework.QueryOrigin.QueryGroup.TEST;
 import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.CHECKSUM;
 import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.DESCRIBE;
 import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.MAIN;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.COLUMN_MISMATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.MATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.ROW_COUNT_MISMATCH;
-import static com.facebook.presto.verifier.framework.VerificationResult.MatchType.SCHEMA_MISMATCH;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
@@ -66,33 +66,37 @@ public class DataVerification
         setQueryStats(setupAndRun(test, TEST), TEST);
         List<Column> controlColumns = getColumns(control.getTableName(), CONTROL);
         List<Column> testColumns = getColumns(test.getTableName(), TEST);
-        return produceResult(
-                controlColumns,
-                testColumns,
-                computeChecksum(control, controlColumns, CONTROL),
-                computeChecksum(test, testColumns, TEST));
+        ChecksumQueryAndResult controlChecksum = computeChecksum(control, controlColumns, CONTROL);
+        ChecksumQueryAndResult testChecksum = computeChecksum(test, testColumns, TEST);
+        return new VerificationResult(
+                controlChecksum.getQueryId(),
+                testChecksum.getQueryId(),
+                formatSql(controlChecksum.getQuery()),
+                formatSql(testChecksum.getQuery()),
+                match(
+                        controlColumns,
+                        testColumns,
+                        controlChecksum.getResult(),
+                        testChecksum.getResult()));
     }
 
     @Override
-    protected Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksumResult)
+    protected Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksum)
     {
         List<Column> columns = getColumns(control.getTableName(), CONTROL);
-        ChecksumQueryAndResult firstChecksum = new ChecksumQueryAndResult(
-                checksumValidator.generateChecksumQuery(control.getTableName(), columns),
-                firstChecksumResult);
 
         QueryBundle secondRun = null;
         QueryBundle thirdRun = null;
         try {
             secondRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
             setupAndRun(secondRun, CONTROL);
-            if (!produceResult(columns, columns, firstChecksum, computeChecksum(secondRun, columns, CONTROL)).isMatched()) {
+            if (!match(columns, columns, firstChecksum, computeChecksum(secondRun, columns, CONTROL).getResult()).isMatched()) {
                 return Optional.of(false);
             }
 
             thirdRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
             setupAndRun(thirdRun, CONTROL);
-            if (!produceResult(columns, columns, firstChecksum, computeChecksum(thirdRun, columns, CONTROL)).isMatched()) {
+            if (!match(columns, columns, firstChecksum, computeChecksum(thirdRun, columns, CONTROL).getResult()).isMatched()) {
                 return Optional.of(false);
             }
 
@@ -117,43 +121,37 @@ public class DataVerification
         return getPrestoAction().execute(control.getQuery(), getConfiguration(group), new QueryOrigin(group, MAIN), getVerificationContext());
     }
 
-    private VerificationResult produceResult(
+    private MatchResult match(
             List<Column> controlColumns,
             List<Column> testColumns,
-            ChecksumQueryAndResult controlChecksum,
-            ChecksumQueryAndResult testChecksum)
+            ChecksumResult controlChecksum,
+            ChecksumResult testChecksum)
     {
         if (!controlColumns.equals(testColumns)) {
-            return new VerificationResult(
+            return new MatchResult(
                     SCHEMA_MISMATCH,
-                    Optional.empty(),
-                    Optional.empty(),
                     Optional.empty(),
                     OptionalLong.empty(),
                     OptionalLong.empty(),
                     ImmutableMap.of());
         }
 
-        Optional<String> controlChecksumQuery = Optional.of(formatSql(controlChecksum.getQuery()));
-        Optional<String> testChecksumQuery = Optional.of(formatSql(controlChecksum.getQuery()));
-        OptionalLong controlRowCount = OptionalLong.of(controlChecksum.getResult().getRowCount());
-        OptionalLong testRowCount = OptionalLong.of(testChecksum.getResult().getRowCount());
+        OptionalLong controlRowCount = OptionalLong.of(controlChecksum.getRowCount());
+        OptionalLong testRowCount = OptionalLong.of(testChecksum.getRowCount());
 
         MatchType matchType;
         Map<Column, ColumnMatchResult> mismatchedColumns;
-        if (controlChecksum.getResult().getRowCount() != testChecksum.getResult().getRowCount()) {
+        if (controlChecksum.getRowCount() != testChecksum.getRowCount()) {
             mismatchedColumns = ImmutableMap.of();
             matchType = ROW_COUNT_MISMATCH;
         }
         else {
-            mismatchedColumns = checksumValidator.getMismatchedColumns(controlColumns, controlChecksum.getResult(), testChecksum.getResult());
+            mismatchedColumns = checksumValidator.getMismatchedColumns(controlColumns, controlChecksum, testChecksum);
             matchType = mismatchedColumns.isEmpty() ? MATCH : COLUMN_MISMATCH;
         }
-        return new VerificationResult(
+        return new MatchResult(
                 matchType,
-                controlChecksumQuery,
-                testChecksumQuery,
-                Optional.of(controlChecksum.getResult()),
+                Optional.of(controlChecksum),
                 controlRowCount,
                 testRowCount,
                 mismatchedColumns);
@@ -174,27 +172,34 @@ public class DataVerification
     private ChecksumQueryAndResult computeChecksum(QueryBundle bundle, List<Column> columns, QueryGroup group)
     {
         Query checksumQuery = checksumValidator.generateChecksumQuery(bundle.getTableName(), columns);
-        return new ChecksumQueryAndResult(
+        QueryResult<ChecksumResult> queryResult = getPrestoAction().execute(
                 checksumQuery,
-                getOnlyElement(getPrestoAction()
-                        .execute(
-                                checksumQuery,
-                                getConfiguration(group),
-                                new QueryOrigin(group, CHECKSUM),
-                                getVerificationContext(),
-                                ChecksumResult::fromResultSet)
-                        .getResults()));
+                getConfiguration(group),
+                new QueryOrigin(group, CHECKSUM),
+                getVerificationContext(),
+                ChecksumResult::fromResultSet);
+        return new ChecksumQueryAndResult(
+                queryResult.getQueryStats().getQueryId(),
+                checksumQuery,
+                getOnlyElement(queryResult.getResults()));
     }
 
     private class ChecksumQueryAndResult
     {
+        private final String queryId;
         private final Query query;
         private final ChecksumResult result;
 
-        public ChecksumQueryAndResult(Query query, ChecksumResult result)
+        public ChecksumQueryAndResult(String queryId, Query query, ChecksumResult result)
         {
+            this.queryId = requireNonNull(queryId, "queryId is null");
             this.query = requireNonNull(query, "query is null");
             this.result = requireNonNull(result, "result is null");
+        }
+
+        public String getQueryId()
+        {
+            return queryId;
         }
 
         public Query getQuery()

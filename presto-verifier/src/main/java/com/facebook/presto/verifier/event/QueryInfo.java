@@ -31,6 +31,7 @@ public class QueryInfo
     private final String schema;
     private final String originalQuery;
     private final String queryId;
+    private final String checksumQueryId;
     private final String query;
     private final List<String> setupQueries;
     private final List<String> teardownQueries;
@@ -44,6 +45,7 @@ public class QueryInfo
             String schema,
             String originalQuery,
             Optional<String> queryId,
+            Optional<String> checksumQueryId,
             Optional<String> query,
             Optional<List<String>> setupQueries,
             Optional<List<String>> teardownQueries,
@@ -56,6 +58,7 @@ public class QueryInfo
         this.schema = requireNonNull(schema, "schema is null");
         this.originalQuery = requireNonNull(originalQuery, "originalQuery is null");
         this.queryId = queryId.orElse(null);
+        this.checksumQueryId = checksumQueryId.orElse(null);
         this.query = query.orElse(null);
         this.setupQueries = setupQueries.orElse(null);
         this.teardownQueries = teardownQueries.orElse(null);
@@ -63,12 +66,6 @@ public class QueryInfo
         this.cpuTimeSecs = cpuTimeSecs.orElse(null);
         this.wallTimeSecs = wallTimeSecs.orElse(null);
         this.allFailures = requireNonNull(allFailures, "allFailures is null");
-    }
-
-    @EventField
-    public String getQueryId()
-    {
-        return queryId;
     }
 
     @EventField
@@ -87,6 +84,18 @@ public class QueryInfo
     public String getOriginalQuery()
     {
         return originalQuery;
+    }
+
+    @EventField
+    public String getQueryId()
+    {
+        return queryId;
+    }
+
+    @EventField
+    public String getChecksumQueryId()
+    {
+        return checksumQueryId;
     }
 
     @EventField

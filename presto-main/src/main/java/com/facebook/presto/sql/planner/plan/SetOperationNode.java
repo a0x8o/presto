@@ -14,10 +14,8 @@
 package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.tree.SymbolReference;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Function;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
@@ -25,7 +23,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Multimaps;
 
 import javax.annotation.concurrent.Immutable;
 
@@ -106,11 +103,11 @@ public abstract class SetOperationNode
     /**
      * Returns the output to input symbol mapping for the given source channel
      */
-    public Map<Symbol, SymbolReference> sourceSymbolMap(int sourceIndex)
+    public Map<Symbol, Symbol> sourceSymbolMap(int sourceIndex)
     {
-        ImmutableMap.Builder<Symbol, SymbolReference> builder = ImmutableMap.builder();
+        ImmutableMap.Builder<Symbol, Symbol> builder = ImmutableMap.builder();
         for (Map.Entry<Symbol, Collection<Symbol>> entry : outputToInputs.asMap().entrySet()) {
-            builder.put(entry.getKey(), Iterables.get(entry.getValue(), sourceIndex).toSymbolReference());
+            builder.put(entry.getKey(), Iterables.get(entry.getValue(), sourceIndex));
         }
 
         return builder.build();
@@ -120,16 +117,11 @@ public abstract class SetOperationNode
      * Returns the input to output symbol mapping for the given source channel.
      * A single input symbol can map to multiple output symbols, thus requiring a Multimap.
      */
-    public Multimap<Symbol, SymbolReference> outputSymbolMap(int sourceIndex)
+    public Multimap<Symbol, Symbol> outputSymbolMap(int sourceIndex)
     {
-        return Multimaps.transformValues(FluentIterable.from(getOutputSymbols())
-                .toMap(outputToSourceSymbolFunction(sourceIndex))
+        return FluentIterable.from(getOutputSymbols())
+                .toMap(outputSymbol -> outputToInputs.get(outputSymbol).get(sourceIndex))
                 .asMultimap()
-                .inverse(), Symbol::toSymbolReference);
-    }
-
-    private Function<Symbol, Symbol> outputToSourceSymbolFunction(final int sourceIndex)
-    {
-        return outputSymbol -> outputToInputs.get(outputSymbol).get(sourceIndex);
+                .inverse();
     }
 }
