@@ -25,7 +25,7 @@ import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.sql.ExpressionUtils;
-import com.facebook.presto.sql.planner.DomainTranslator;
+import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.LiteralEncoder;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
@@ -51,9 +51,11 @@ import static com.facebook.presto.spi.function.FunctionKind.WINDOW;
 import static com.facebook.presto.spi.predicate.Marker.Bound.BELOW;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.sql.planner.DomainTranslator.ExtractionResult;
-import static com.facebook.presto.sql.planner.DomainTranslator.fromPredicate;
+import static com.facebook.presto.sql.planner.ExpressionDomainTranslator.ExtractionResult;
+import static com.facebook.presto.sql.planner.ExpressionDomainTranslator.fromPredicate;
 import static com.facebook.presto.sql.planner.plan.ChildReplacer.replaceChildren;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.getOnlyElement;
@@ -67,12 +69,12 @@ public class WindowFilterPushDown
     private static final Signature ROW_NUMBER_SIGNATURE = new Signature("row_number", WINDOW, parseTypeSignature(StandardTypes.BIGINT), ImmutableList.of());
 
     private final Metadata metadata;
-    private final DomainTranslator domainTranslator;
+    private final ExpressionDomainTranslator domainTranslator;
 
     public WindowFilterPushDown(Metadata metadata)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.domainTranslator = new DomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
+        this.domainTranslator = new ExpressionDomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
     }
 
     @Override
@@ -92,11 +94,11 @@ public class WindowFilterPushDown
     {
         private final PlanNodeIdAllocator idAllocator;
         private final Metadata metadata;
-        private final DomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
         private final Session session;
         private final TypeProvider types;
 
-        private Rewriter(PlanNodeIdAllocator idAllocator, Metadata metadata, DomainTranslator domainTranslator, Session session, TypeProvider types)
+        private Rewriter(PlanNodeIdAllocator idAllocator, Metadata metadata, ExpressionDomainTranslator domainTranslator, Session session, TypeProvider types)
         {
             this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
             this.metadata = requireNonNull(metadata, "metadata is null");
@@ -157,7 +159,7 @@ public class WindowFilterPushDown
         {
             PlanNode source = context.rewrite(node.getSource());
 
-            TupleDomain<Symbol> tupleDomain = fromPredicate(metadata, session, node.getPredicate(), types).getTupleDomain();
+            TupleDomain<Symbol> tupleDomain = fromPredicate(metadata, session, castToExpression(node.getPredicate()), types).getTupleDomain();
 
             if (source instanceof RowNumberNode) {
                 Symbol rowNumberSymbol = ((RowNumberNode) source).getRowNumberSymbol();
@@ -183,7 +185,7 @@ public class WindowFilterPushDown
 
         private PlanNode rewriteFilterSource(FilterNode filterNode, PlanNode source, Symbol rowNumberSymbol, int upperBound)
         {
-            ExtractionResult extractionResult = fromPredicate(metadata, session, filterNode.getPredicate(), types);
+            ExtractionResult extractionResult = fromPredicate(metadata, session, castToExpression(filterNode.getPredicate()), types);
             TupleDomain<Symbol> tupleDomain = extractionResult.getTupleDomain();
 
             if (!isEqualRange(tupleDomain, rowNumberSymbol, upperBound)) {
@@ -204,7 +206,7 @@ public class WindowFilterPushDown
             if (newPredicate.equals(BooleanLiteral.TRUE_LITERAL)) {
                 return source;
             }
-            return new FilterNode(filterNode.getId(), source, newPredicate);
+            return new FilterNode(filterNode.getId(), source, castToRowExpression(newPredicate));
         }
 
         private static boolean isEqualRange(TupleDomain<Symbol> tupleDomain, Symbol symbol, long upperBound)

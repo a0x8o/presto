@@ -27,7 +27,7 @@ import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.DomainTranslator;
+import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.LiteralEncoder;
 import com.facebook.presto.sql.planner.LookupSymbolResolver;
@@ -64,6 +64,8 @@ import static com.facebook.presto.sql.planner.iterative.rule.PreconditionRules.c
 import static com.facebook.presto.sql.planner.plan.Patterns.filter;
 import static com.facebook.presto.sql.planner.plan.Patterns.source;
 import static com.facebook.presto.sql.planner.plan.Patterns.tableScan;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -81,13 +83,13 @@ public class PickTableLayout
 {
     private final Metadata metadata;
     private final SqlParser parser;
-    private final DomainTranslator domainTranslator;
+    private final ExpressionDomainTranslator domainTranslator;
 
     public PickTableLayout(Metadata metadata, SqlParser parser)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.parser = requireNonNull(parser, "parser is null");
-        this.domainTranslator = new DomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
+        this.domainTranslator = new ExpressionDomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
     }
 
     public Set<Rule<?>> rules()
@@ -113,9 +115,9 @@ public class PickTableLayout
     {
         private final Metadata metadata;
         private final SqlParser parser;
-        private final DomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
 
-        private PickTableLayoutForPredicate(Metadata metadata, SqlParser parser, DomainTranslator domainTranslator)
+        private PickTableLayoutForPredicate(Metadata metadata, SqlParser parser, ExpressionDomainTranslator domainTranslator)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
             this.parser = requireNonNull(parser, "parser is null");
@@ -144,7 +146,7 @@ public class PickTableLayout
         {
             TableScanNode tableScan = captures.get(TABLE_SCAN);
 
-            PlanNode rewritten = planTableScan(tableScan, filterNode.getPredicate(), context.getSession(), context.getSymbolAllocator().getTypes(), context.getIdAllocator(), metadata, parser, domainTranslator);
+            PlanNode rewritten = planTableScan(tableScan, castToExpression(filterNode.getPredicate()), context.getSession(), context.getSymbolAllocator().getTypes(), context.getIdAllocator(), metadata, parser, domainTranslator);
 
             if (arePlansSame(filterNode, tableScan, rewritten)) {
                 return Result.empty();
@@ -184,9 +186,9 @@ public class PickTableLayout
     {
         private final Metadata metadata;
         private final SqlParser parser;
-        private final DomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
 
-        private PickTableLayoutWithoutPredicate(Metadata metadata, SqlParser parser, DomainTranslator domainTranslator)
+        private PickTableLayoutWithoutPredicate(Metadata metadata, SqlParser parser, ExpressionDomainTranslator domainTranslator)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
             this.parser = requireNonNull(parser, "parser is null");
@@ -226,7 +228,7 @@ public class PickTableLayout
             PlanNodeIdAllocator idAllocator,
             Metadata metadata,
             SqlParser parser,
-            DomainTranslator domainTranslator)
+            ExpressionDomainTranslator domainTranslator)
     {
         return listTableLayouts(
                 node,
@@ -250,12 +252,12 @@ public class PickTableLayout
             PlanNodeIdAllocator idAllocator,
             Metadata metadata,
             SqlParser parser,
-            DomainTranslator domainTranslator)
+            ExpressionDomainTranslator domainTranslator)
     {
         // don't include non-deterministic predicates
         Expression deterministicPredicate = filterDeterministicConjuncts(predicate);
 
-        DomainTranslator.ExtractionResult decomposedPredicate = DomainTranslator.fromPredicate(
+        ExpressionDomainTranslator.ExtractionResult decomposedPredicate = ExpressionDomainTranslator.fromPredicate(
                 metadata,
                 session,
                 deterministicPredicate,
@@ -336,7 +338,7 @@ public class PickTableLayout
                             decomposedPredicate.getRemainingExpression());
 
                     if (!TRUE_LITERAL.equals(resultingPredicate)) {
-                        return new FilterNode(idAllocator.getNextId(), tableScan, resultingPredicate);
+                        return new FilterNode(idAllocator.getNextId(), tableScan, castToRowExpression(resultingPredicate));
                     }
 
                     return tableScan;

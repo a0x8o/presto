@@ -35,6 +35,7 @@ import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.MODULUS;
 import static com.facebook.presto.spi.function.OperatorType.MULTIPLY;
+import static com.facebook.presto.spi.function.OperatorType.NEGATION;
 import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -57,6 +58,11 @@ public final class StandardFunctionResolution
     public FunctionHandle notFunction()
     {
         return functionManager.lookupFunction(QualifiedName.of("not"), fromTypes(BOOLEAN));
+    }
+
+    public boolean isNotFunction(FunctionHandle functionHandle)
+    {
+        return notFunction().equals(functionHandle);
     }
 
     public FunctionHandle likeVarcharFunction()
@@ -85,6 +91,11 @@ public final class StandardFunctionResolution
         return functionManager.getFunctionMetadata(functionHandle).getName().equals(mangleOperatorName(OperatorType.CAST.name()));
     }
 
+    public boolean isBetweenFunction(FunctionHandle functionHandle)
+    {
+        return functionHandle.getSignature().getName().equals(mangleOperatorName(OperatorType.BETWEEN.name()));
+    }
+
     public FunctionHandle arithmeticFunction(ArithmeticBinaryExpression.Operator operator, Type leftType, Type rightType)
     {
         OperatorType operatorType;
@@ -108,6 +119,11 @@ public final class StandardFunctionResolution
                 throw new IllegalStateException("Unknown arithmetic operator: " + operator);
         }
         return functionManager.resolveOperator(operatorType, fromTypes(leftType, rightType));
+    }
+
+    public boolean isNegateFunction(FunctionHandle functionHandle)
+    {
+        return functionHandle.getSignature().getName().equals(mangleOperatorName(NEGATION.name()));
     }
 
     public FunctionHandle arrayConstructor(List<? extends Type> argumentTypes)

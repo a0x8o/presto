@@ -15,11 +15,18 @@ package com.facebook.presto.verifier.framework;
 
 import java.util.Objects;
 
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.CHECKSUM;
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.DESCRIBE;
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.MAIN;
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.REWRITE;
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.SETUP;
+import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.TEARDOWN;
+import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
 import static java.util.Objects.requireNonNull;
 
 public class QueryOrigin
 {
-    public enum QueryGroup
+    public enum TargetCluster
     {
         CONTROL,
         TEST,
@@ -27,26 +34,56 @@ public class QueryOrigin
 
     public enum QueryStage
     {
-        REWRITE,
         SETUP,
         MAIN,
         TEARDOWN,
+        REWRITE,
         DESCRIBE,
         CHECKSUM,
     }
 
-    private final QueryGroup group;
+    private final TargetCluster cluster;
     private final QueryStage stage;
 
-    public QueryOrigin(QueryGroup group, QueryStage stage)
+    private QueryOrigin(TargetCluster cluster, QueryStage stage)
     {
-        this.group = requireNonNull(group, "group is null");
+        this.cluster = requireNonNull(cluster, "cluster is null");
         this.stage = requireNonNull(stage, "stage is null");
     }
 
-    public QueryGroup getGroup()
+    public static QueryOrigin forSetup(TargetCluster group)
     {
-        return group;
+        return new QueryOrigin(group, SETUP);
+    }
+
+    public static QueryOrigin forMain(TargetCluster group)
+    {
+        return new QueryOrigin(group, MAIN);
+    }
+
+    public static QueryOrigin forTeardown(TargetCluster group)
+    {
+        return new QueryOrigin(group, TEARDOWN);
+    }
+
+    public static QueryOrigin forRewrite()
+    {
+        return new QueryOrigin(CONTROL, REWRITE);
+    }
+
+    public static QueryOrigin forDescribe()
+    {
+        return new QueryOrigin(CONTROL, DESCRIBE);
+    }
+
+    public static QueryOrigin forChecksum()
+    {
+        return new QueryOrigin(CONTROL, CHECKSUM);
+    }
+
+    public TargetCluster getCluster()
+    {
+        return cluster;
     }
 
     public QueryStage getStage()
@@ -64,13 +101,13 @@ public class QueryOrigin
             return false;
         }
         QueryOrigin o = (QueryOrigin) obj;
-        return Objects.equals(group, o.group) &&
+        return Objects.equals(cluster, o.cluster) &&
                 Objects.equals(stage, o.stage);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(group, stage);
+        return Objects.hash(cluster, stage);
     }
 }
