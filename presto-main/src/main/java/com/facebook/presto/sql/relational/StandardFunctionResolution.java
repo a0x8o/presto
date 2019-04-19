@@ -20,12 +20,13 @@ import com.facebook.presto.spi.type.CharType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.QualifiedName;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
 import static com.facebook.presto.spi.function.OperatorType.ADD;
+import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
 import static com.facebook.presto.spi.function.OperatorType.DIVIDE;
 import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
@@ -57,7 +58,7 @@ public final class StandardFunctionResolution
 
     public FunctionHandle notFunction()
     {
-        return functionManager.lookupFunction(QualifiedName.of("not"), fromTypes(BOOLEAN));
+        return functionManager.lookupFunction("not", fromTypes(BOOLEAN));
     }
 
     public boolean isNotFunction(FunctionHandle functionHandle)
@@ -67,13 +68,13 @@ public final class StandardFunctionResolution
 
     public FunctionHandle likeVarcharFunction()
     {
-        return functionManager.lookupFunction(QualifiedName.of("LIKE"), fromTypes(VARCHAR, LIKE_PATTERN));
+        return functionManager.lookupFunction("LIKE", fromTypes(VARCHAR, LIKE_PATTERN));
     }
 
     public FunctionHandle likeCharFunction(Type valueType)
     {
         checkArgument(valueType instanceof CharType, "Expected CHAR value type");
-        return functionManager.lookupFunction(QualifiedName.of("LIKE"), fromTypes(valueType, LIKE_PATTERN));
+        return functionManager.lookupFunction("LIKE", fromTypes(valueType, LIKE_PATTERN));
     }
 
     public boolean isLikeFunction(FunctionHandle functionHandle)
@@ -83,7 +84,7 @@ public final class StandardFunctionResolution
 
     public FunctionHandle likePatternFunction()
     {
-        return functionManager.lookupFunction(QualifiedName.of("LIKE_PATTERN"), fromTypes(VARCHAR, VARCHAR));
+        return functionManager.lookupFunction("LIKE_PATTERN", fromTypes(VARCHAR, VARCHAR));
     }
 
     public boolean isCastFunction(FunctionHandle functionHandle)
@@ -93,7 +94,7 @@ public final class StandardFunctionResolution
 
     public boolean isBetweenFunction(FunctionHandle functionHandle)
     {
-        return functionHandle.getSignature().getName().equals(mangleOperatorName(OperatorType.BETWEEN.name()));
+        return functionManager.getFunctionMetadata(functionHandle).getOperatorType().equals(Optional.of(BETWEEN));
     }
 
     public FunctionHandle arithmeticFunction(ArithmeticBinaryExpression.Operator operator, Type leftType, Type rightType)
@@ -123,12 +124,12 @@ public final class StandardFunctionResolution
 
     public boolean isNegateFunction(FunctionHandle functionHandle)
     {
-        return functionHandle.getSignature().getName().equals(mangleOperatorName(NEGATION.name()));
+        return functionManager.getFunctionMetadata(functionHandle).getOperatorType().equals(Optional.of(NEGATION));
     }
 
     public FunctionHandle arrayConstructor(List<? extends Type> argumentTypes)
     {
-        return functionManager.lookupFunction(QualifiedName.of(ARRAY_CONSTRUCTOR), fromTypes(argumentTypes));
+        return functionManager.lookupFunction(ARRAY_CONSTRUCTOR, fromTypes(argumentTypes));
     }
 
     public FunctionHandle comparisonFunction(ComparisonExpression.Operator operator, Type leftType, Type rightType)
@@ -165,6 +166,11 @@ public final class StandardFunctionResolution
 
     public FunctionHandle tryFunction(Type returnType)
     {
-        return functionManager.lookupFunction(QualifiedName.of("TRY"), fromTypes(returnType));
+        return functionManager.lookupFunction("TRY", fromTypes(returnType));
+    }
+
+    public boolean isTryFunction(FunctionHandle functionHandle)
+    {
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals("TRY");
     }
 }

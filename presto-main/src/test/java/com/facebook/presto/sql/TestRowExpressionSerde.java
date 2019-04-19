@@ -16,6 +16,7 @@ package com.facebook.presto.sql;
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.block.BlockJsonSerde;
 import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.metadata.HandleJsonModule;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.block.Block;
@@ -39,7 +40,6 @@ import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.NodeRef;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.type.TypeDeserializer;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
@@ -233,7 +233,7 @@ public class TestRowExpressionSerde
 
     private FunctionHandle function(String name, Type... types)
     {
-        return metadata.getFunctionManager().lookupFunction(QualifiedName.of(name), fromTypes(types));
+        return metadata.getFunctionManager().lookupFunction(name, fromTypes(types));
     }
 
     private JsonCodec<RowExpression> getJsonCodec()
@@ -241,6 +241,7 @@ public class TestRowExpressionSerde
     {
         Module module = binder -> {
             binder.install(new JsonModule());
+            binder.install(new HandleJsonModule());
             configBinder(binder).bindConfig(FeaturesConfig.class);
 
             binder.bind(TypeManager.class).to(TypeRegistry.class).in(Scopes.SINGLETON);

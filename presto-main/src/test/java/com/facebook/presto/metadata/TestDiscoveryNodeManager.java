@@ -16,7 +16,6 @@ package com.facebook.presto.metadata;
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.failureDetector.NoOpFailureDetector;
 import com.facebook.presto.server.InternalCommunicationConfig;
-import com.facebook.presto.spi.Node;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -56,10 +55,10 @@ public class TestDiscoveryNodeManager
     private final NodeInfo nodeInfo = new NodeInfo("test");
     private final InternalCommunicationConfig internalCommunicationConfig = new InternalCommunicationConfig();
     private NodeVersion expectedVersion;
-    private Set<Node> activeNodes;
-    private Set<Node> inactiveNodes;
-    private PrestoNode coordinator;
-    private PrestoNode currentNode;
+    private Set<InternalNode> activeNodes;
+    private Set<InternalNode> inactiveNodes;
+    private InternalNode coordinator;
+    private InternalNode currentNode;
     private final PrestoNodeServiceSelector selector = new PrestoNodeServiceSelector();
     private HttpClient testHttpClient;
 
@@ -69,17 +68,17 @@ public class TestDiscoveryNodeManager
         testHttpClient = new TestingHttpClient(input -> new TestingResponse(OK, ArrayListMultimap.create(), ACTIVE.name().getBytes()));
 
         expectedVersion = new NodeVersion("1");
-        coordinator = new PrestoNode(UUID.randomUUID().toString(), URI.create("https://192.0.2.8"), expectedVersion, true);
-        currentNode = new PrestoNode(nodeInfo.getNodeId(), URI.create("http://192.0.1.1"), expectedVersion, false);
+        coordinator = new InternalNode(UUID.randomUUID().toString(), URI.create("https://192.0.2.8"), expectedVersion, true);
+        currentNode = new InternalNode(nodeInfo.getNodeId(), URI.create("http://192.0.1.1"), expectedVersion, false);
 
         activeNodes = ImmutableSet.of(
                 currentNode,
-                new PrestoNode(UUID.randomUUID().toString(), URI.create("http://192.0.2.1:8080"), expectedVersion, false),
-                new PrestoNode(UUID.randomUUID().toString(), URI.create("http://192.0.2.3"), expectedVersion, false),
+                new InternalNode(UUID.randomUUID().toString(), URI.create("http://192.0.2.1:8080"), expectedVersion, false),
+                new InternalNode(UUID.randomUUID().toString(), URI.create("http://192.0.2.3"), expectedVersion, false),
                 coordinator);
         inactiveNodes = ImmutableSet.of(
-                new PrestoNode(UUID.randomUUID().toString(), URI.create("https://192.0.3.9"), NodeVersion.UNKNOWN, false),
-                new PrestoNode(UUID.randomUUID().toString(), URI.create("https://192.0.4.9"), new NodeVersion("2"), false));
+                new InternalNode(UUID.randomUUID().toString(), URI.create("https://192.0.3.9"), NodeVersion.UNKNOWN, false),
+                new InternalNode(UUID.randomUUID().toString(), URI.create("https://192.0.4.9"), new NodeVersion("2"), false));
 
         selector.announceNodes(activeNodes, inactiveNodes);
     }
@@ -91,22 +90,22 @@ public class TestDiscoveryNodeManager
         try {
             AllNodes allNodes = manager.getAllNodes();
 
-            Set<Node> activeNodes = allNodes.getActiveNodes();
+            Set<InternalNode> activeNodes = allNodes.getActiveNodes();
             assertEqualsIgnoreOrder(activeNodes, this.activeNodes);
 
-            for (Node actual : activeNodes) {
-                for (Node expected : this.activeNodes) {
+            for (InternalNode actual : activeNodes) {
+                for (InternalNode expected : this.activeNodes) {
                     assertNotSame(actual, expected);
                 }
             }
 
             assertEqualsIgnoreOrder(activeNodes, manager.getNodes(ACTIVE));
 
-            Set<Node> inactiveNodes = allNodes.getInactiveNodes();
+            Set<InternalNode> inactiveNodes = allNodes.getInactiveNodes();
             assertEqualsIgnoreOrder(inactiveNodes, this.inactiveNodes);
 
-            for (Node actual : inactiveNodes) {
-                for (Node expected : this.inactiveNodes) {
+            for (InternalNode actual : inactiveNodes) {
+                for (InternalNode expected : this.inactiveNodes) {
                     assertNotSame(actual, expected);
                 }
             }
@@ -188,14 +187,14 @@ public class TestDiscoveryNodeManager
         @GuardedBy("this")
         private List<ServiceDescriptor> descriptors = ImmutableList.of();
 
-        private synchronized void announceNodes(Set<Node> activeNodes, Set<Node> inactiveNodes)
+        private synchronized void announceNodes(Set<InternalNode> activeNodes, Set<InternalNode> inactiveNodes)
         {
             ImmutableList.Builder<ServiceDescriptor> descriptors = ImmutableList.builder();
-            for (Node node : Iterables.concat(activeNodes, inactiveNodes)) {
+            for (InternalNode node : Iterables.concat(activeNodes, inactiveNodes)) {
                 descriptors.add(serviceDescriptor("presto")
                         .setNodeId(node.getNodeIdentifier())
-                        .addProperty("http", node.getHttpUri().toString())
-                        .addProperty("node_version", ((PrestoNode) node).getNodeVersion().toString())
+                        .addProperty("http", node.getInternalUri().toString())
+                        .addProperty("node_version", node.getNodeVersion().toString())
                         .addProperty("coordinator", String.valueOf(node.isCoordinator()))
                         .build());
             }

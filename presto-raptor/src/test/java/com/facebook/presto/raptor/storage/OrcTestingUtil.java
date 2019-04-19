@@ -13,12 +13,17 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.orc.FileOrcDataSource;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcPredicate;
 import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.orc.OrcRecordReader;
+import com.facebook.presto.orc.OrcWriterStats;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
 import org.joda.time.DateTimeZone;
@@ -95,5 +100,15 @@ final class OrcTestingUtil
     {
         checkArgument((b >= 0) && (b <= 0xFF), "octet not in range: %s", b);
         return (byte) b;
+    }
+
+    public static FileWriter createFileWriter(List<Long> columnIds, List<Type> columnTypes, File file, boolean useOptimizedOrcWriter)
+    {
+        if (useOptimizedOrcWriter) {
+            TypeRegistry typeManager = new TypeRegistry();
+            new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+            return new OrcFileWriter(columnIds, columnTypes, file, true, true, new OrcWriterStats(), typeManager);
+        }
+        return new OrcRecordWriter(columnIds, columnTypes, file, true);
     }
 }

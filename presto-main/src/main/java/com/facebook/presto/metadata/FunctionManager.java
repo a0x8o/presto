@@ -61,21 +61,6 @@ public class FunctionManager
         return staticFunctionNamespace.listFunctions();
     }
 
-    public FunctionMetadata getFunctionMetadata(FunctionHandle functionHandle)
-    {
-        return staticFunctionNamespace.getFunctionMetadata(functionHandle);
-    }
-
-    /**
-     * Lookup up a function with a fully qualified name and fully bound types.
-     *
-     * @throws PrestoException if function could not be found
-     */
-    public FunctionHandle lookupFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
-    {
-        return staticFunctionNamespace.lookupFunction(name, parameterTypes);
-    }
-
     /**
      * Resolves a function using the SQL path, and implicit type coercions.
      *
@@ -89,6 +74,11 @@ public class FunctionManager
         // SQL path. As a result, session is not used here. We still add this to distinguish the two versions of resolveFunction
         // while the refactoring is on-going.
         return staticFunctionNamespace.resolveFunction(name, parameterTypes);
+    }
+
+    public FunctionMetadata getFunctionMetadata(FunctionHandle functionHandle)
+    {
+        return staticFunctionNamespace.getFunctionMetadata(functionHandle);
     }
 
     public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
@@ -114,6 +104,17 @@ public class FunctionManager
     public FunctionHandle resolveOperator(OperatorType operatorType, List<TypeSignatureProvider> argumentTypes)
     {
         return staticFunctionNamespace.resolveOperator(operatorType, argumentTypes);
+    }
+
+    /**
+     * Lookup up a function with name and fully bound types. This can only be used for builtin functions. {@link #resolveFunction(Session, QualifiedName, List)}
+     * should be used for dynamically registered functions.
+     *
+     * @throws PrestoException if function could not be found
+     */
+    public FunctionHandle lookupFunction(String name, List<TypeSignatureProvider> parameterTypes)
+    {
+        return staticFunctionNamespace.lookupFunction(QualifiedName.of(name), parameterTypes);
     }
 
     public FunctionHandle lookupCast(CastType castType, TypeSignature fromType, TypeSignature toType)
