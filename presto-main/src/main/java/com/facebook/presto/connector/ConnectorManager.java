@@ -50,6 +50,7 @@ import com.facebook.presto.split.RecordPageSourceProvider;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.sql.relational.ConnectorRowExpressionService;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -321,6 +322,8 @@ public class ConnectorManager
         ConnectorContext context = new ConnectorContextInstance(
                 new ConnectorAwareNodeManager(nodeManager, nodeInfo.getEnvironment(), connectorId),
                 typeManager,
+                metadataManager.getFunctionManager(),
+                new FunctionResolution(metadataManager.getFunctionManager()),
                 pageSorter,
                 pageIndexerFactory,
                 new ConnectorRowExpressionService(domainTranslator));

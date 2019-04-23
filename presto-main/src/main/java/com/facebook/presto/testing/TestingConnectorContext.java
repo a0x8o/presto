@@ -27,11 +27,14 @@ import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.PageIndexerFactory;
 import com.facebook.presto.spi.PageSorter;
 import com.facebook.presto.spi.connector.ConnectorContext;
+import com.facebook.presto.spi.function.FunctionMetadataManager;
+import com.facebook.presto.spi.function.StandardFunctionResolution;
 import com.facebook.presto.spi.relation.DomainTranslator;
 import com.facebook.presto.spi.relation.RowExpressionService;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.sql.relational.RowExpressionDomainTranslator;
 import com.facebook.presto.type.TypeRegistry;
 
@@ -40,16 +43,12 @@ public class TestingConnectorContext
 {
     private final NodeManager nodeManager = new ConnectorAwareNodeManager(new InMemoryNodeManager(), "testenv", new ConnectorId("test"));
     private final TypeManager typeManager = new TypeRegistry();
+    private final FunctionManager functionManager = new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+    private final StandardFunctionResolution functionResolution = new FunctionResolution(functionManager);
     private final PageSorter pageSorter = new PagesIndexPageSorter(new PagesIndex.TestingFactory(false));
     private final PageIndexerFactory pageIndexerFactory = new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig()));
     private final Metadata metadata = MetadataManager.createTestMetadataManager();
     private final DomainTranslator domainTranslator = new RowExpressionDomainTranslator(metadata);
-
-    public TestingConnectorContext()
-    {
-        // associate typeManager with a function manager
-        new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
-    }
 
     @Override
     public NodeManager getNodeManager()
@@ -61,6 +60,18 @@ public class TestingConnectorContext
     public TypeManager getTypeManager()
     {
         return typeManager;
+    }
+
+    @Override
+    public FunctionMetadataManager getFunctionMetadataManager()
+    {
+        return functionManager;
+    }
+
+    @Override
+    public StandardFunctionResolution getStandardFunctionResolution()
+    {
+        return functionResolution;
     }
 
     @Override

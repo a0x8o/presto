@@ -11,22 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.metadata;
+package com.facebook.presto.spi.function;
 
-import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.function.FunctionMetadata;
-import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
-import com.facebook.presto.sql.tree.QualifiedName;
-
-import java.util.List;
-
-public interface FunctionNamespace
+public interface FunctionMetadataManager
 {
-    void addFunctions(List<? extends SqlFunction> functions);
-
-    List<SqlFunction> listFunctions();
-
-    FunctionHandle resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes);
-
     FunctionMetadata getFunctionMetadata(FunctionHandle functionHandle);
 }

@@ -14,12 +14,12 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.client.FailureInfo;
-import com.facebook.presto.metadata.FunctionMetadata;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.RowBlockBuilder;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
@@ -36,7 +36,8 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.InterpretedFunctionInvoker;
 import com.facebook.presto.sql.planner.Interpreters.LambdaSymbolResolver;
-import com.facebook.presto.sql.relational.StandardFunctionResolution;
+import com.facebook.presto.sql.relational.FunctionResolution;
+import com.facebook.presto.sql.relational.optimizer.ExpressionOptimizer;
 import com.facebook.presto.util.Failures;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -106,7 +107,7 @@ public class RowExpressionInterpreter
     private final boolean optimize;
     private final InterpretedFunctionInvoker functionInvoker;
     private final com.facebook.presto.sql.relational.DeterminismEvaluator determinismEvaluator;
-    private final StandardFunctionResolution resolution;
+    private final FunctionResolution resolution;
 
     private final Visitor visitor;
 
@@ -131,7 +132,7 @@ public class RowExpressionInterpreter
         this.optimize = optimize;
         this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionManager());
         this.determinismEvaluator = new com.facebook.presto.sql.relational.DeterminismEvaluator(metadata.getFunctionManager());
-        this.resolution = new StandardFunctionResolution(metadata.getFunctionManager());
+        this.resolution = new FunctionResolution(metadata.getFunctionManager());
 
         this.visitor = new Visitor();
     }
@@ -150,7 +151,7 @@ public class RowExpressionInterpreter
     public Object optimize()
     {
         checkState(optimize, "optimize() not allowed for interpreter");
-        return expression.accept(visitor, null);
+        return optimize(null);
     }
 
     /**
@@ -160,7 +161,13 @@ public class RowExpressionInterpreter
     public Object optimize(SymbolResolver inputs)
     {
         checkState(optimize, "optimize(SymbolResolver) not allowed for interpreter");
-        return expression.accept(visitor, inputs);
+        Object result = expression.accept(visitor, inputs);
+
+        if (!(result instanceof RowExpression)) {
+            // constant folding
+            return result;
+        }
+        return new ExpressionOptimizer(metadata.getFunctionManager(), session).optimize((RowExpression) result);
     }
 
     private class Visitor
@@ -719,7 +726,7 @@ public class RowExpressionInterpreter
 
         private SpecialCallResult tryHandleLike(CallExpression callExpression, List<Object> argumentValues, List<Type> argumentTypes, Object context)
         {
-            StandardFunctionResolution resolution = new StandardFunctionResolution(metadata.getFunctionManager());
+            FunctionResolution resolution = new FunctionResolution(metadata.getFunctionManager());
             checkArgument(resolution.isLikeFunction(callExpression.getFunctionHandle()));
             checkArgument(callExpression.getArguments().size() == 2);
             RowExpression likePatternExpression = callExpression.getArguments().get(1);

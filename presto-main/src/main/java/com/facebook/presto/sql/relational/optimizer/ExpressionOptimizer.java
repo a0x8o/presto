@@ -13,12 +13,11 @@
  */
 package com.facebook.presto.sql.relational.optimizer;
 
-import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.metadata.FunctionMetadata;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
@@ -62,10 +61,10 @@ public class ExpressionOptimizer
     private final FunctionManager functionManager;
     private final ConnectorSession session;
 
-    public ExpressionOptimizer(FunctionManager functionManager, Session session)
+    public ExpressionOptimizer(FunctionManager functionManager, ConnectorSession session)
     {
         this.functionManager = functionManager;
-        this.session = session.toConnectorSession();
+        this.session = session;
     }
 
     public RowExpression optimize(RowExpression expression)
