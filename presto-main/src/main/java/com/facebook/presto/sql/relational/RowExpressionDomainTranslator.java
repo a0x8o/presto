@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.sql.relational;
 
-import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.FunctionMetadata;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
@@ -33,6 +33,7 @@ import com.facebook.presto.spi.predicate.Utils;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.DomainTranslator;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -48,6 +49,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.PeekingIterator;
 
 import javax.annotation.Nullable;
+import javax.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -87,18 +89,23 @@ import static java.util.stream.Collectors.collectingAndThen;
 import static java.util.stream.Collectors.toList;
 
 public final class RowExpressionDomainTranslator
+        implements DomainTranslator
 {
     private final FunctionManager functionManager;
     private final LogicalRowExpressions logicalRowExpressions;
     private final StandardFunctionResolution functionResolution;
+    private final Metadata metadata;
 
-    public RowExpressionDomainTranslator(FunctionManager functionManager)
+    @Inject
+    public RowExpressionDomainTranslator(Metadata metadata)
     {
-        this.functionManager = requireNonNull(functionManager, "functionManager is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.functionManager = metadata.getFunctionManager();
         this.logicalRowExpressions = new LogicalRowExpressions(functionManager);
         this.functionResolution = new StandardFunctionResolution(functionManager);
     }
 
+    @Override
     public RowExpression toPredicate(TupleDomain<VariableReferenceExpression> tupleDomain)
     {
         if (tupleDomain.isNone()) {
@@ -110,6 +117,12 @@ public final class RowExpressionDomainTranslator
                 .sorted(comparing(entry -> entry.getKey().getName()))
                 .map(entry -> toPredicate(entry.getValue(), entry.getKey()))
                 .collect(collectingAndThen(toImmutableList(), logicalRowExpressions::combineConjuncts));
+    }
+
+    @Override
+    public ExtractionResult fromPredicate(ConnectorSession session, RowExpression predicate)
+    {
+        return predicate.accept(new Visitor(metadata, session), false);
     }
 
     private RowExpression toPredicate(Domain domain, VariableReferenceExpression reference)
@@ -276,29 +289,18 @@ public final class RowExpressionDomainTranslator
                 && !range.getHigh().isUpperUnbounded() && range.getHigh().getBound() == Marker.Bound.EXACTLY;
     }
 
-    /**
-     * Convert an Expression predicate into an ExtractionResult consisting of:
-     * 1) A successfully extracted TupleDomain
-     * 2) An Expression fragment which represents the part of the original Expression that will need to be re-evaluated
-     * after filtering with the TupleDomain.
-     */
-    public static ExtractionResult fromPredicate(Metadata metadata, Session session, RowExpression predicate)
-    {
-        return predicate.accept(new Visitor(metadata, session), false);
-    }
-
     private static class Visitor
             implements RowExpressionVisitor<ExtractionResult, Boolean>
     {
         private final InterpretedFunctionInvoker functionInvoker;
         private final Metadata metadata;
-        private final Session session;
+        private final ConnectorSession session;
         private final FunctionManager functionManager;
         private final LogicalRowExpressions logicalRowExpressions;
         private final DeterminismEvaluator determinismEvaluator;
         private final StandardFunctionResolution resolution;
 
-        private Visitor(Metadata metadata, Session session)
+        private Visitor(Metadata metadata, ConnectorSession session)
         {
             this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionManager());
             this.metadata = metadata;
@@ -329,12 +331,12 @@ public final class RowExpressionDomainTranslator
                     ExtractionResult extractionResult = or(disjuncts.build()).accept(this, complement);
 
                     // preserve original IN predicate as remaining predicate
-                    if (extractionResult.tupleDomain.isAll()) {
+                    if (extractionResult.getTupleDomain().isAll()) {
                         RowExpression originalPredicate = node;
                         if (complement) {
                             originalPredicate = not(resolution, originalPredicate);
                         }
-                        return new ExtractionResult(extractionResult.tupleDomain, originalPredicate);
+                        return new ExtractionResult(extractionResult.getTupleDomain(), originalPredicate);
                     }
                     return extractionResult;
                 }
@@ -547,7 +549,7 @@ public final class RowExpressionDomainTranslator
         private Optional<Object> floorValue(Type fromType, Type toType, Object value)
         {
             return getSaturatedFloorCastOperator(fromType, toType)
-                    .map((operator) -> functionInvoker.invoke(operator, session.toConnectorSession(), value));
+                    .map((operator) -> functionInvoker.invoke(operator, session, value));
         }
 
         private Optional<FunctionHandle> getSaturatedFloorCastOperator(Type fromType, Type toType)
@@ -563,7 +565,7 @@ public final class RowExpressionDomainTranslator
         private int compareOriginalValueToCoerced(Type originalValueType, Object originalValue, Type coercedValueType, Object coercedValue)
         {
             FunctionHandle castToOriginalTypeOperator = metadata.getFunctionManager().lookupCast(CAST, coercedValueType.getTypeSignature(), originalValueType.getTypeSignature());
-            Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session.toConnectorSession(), coercedValue);
+            Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session, coercedValue);
             Block originalValueBlock = Utils.nativeValueToBlock(originalValueType, originalValue);
             Block coercedValueBlock = Utils.nativeValueToBlock(originalValueType, coercedValueInOriginalType);
             return originalValueType.compareTo(originalValueBlock, 0, coercedValueBlock, 0);
@@ -878,28 +880,6 @@ public final class RowExpressionDomainTranslator
         public NullableValue getValue()
         {
             return value;
-        }
-    }
-
-    public static class ExtractionResult
-    {
-        private final TupleDomain<VariableReferenceExpression> tupleDomain;
-        private final RowExpression remainingExpression;
-
-        public ExtractionResult(TupleDomain<VariableReferenceExpression> tupleDomain, RowExpression remainingExpression)
-        {
-            this.tupleDomain = requireNonNull(tupleDomain, "tupleDomain is null");
-            this.remainingExpression = requireNonNull(remainingExpression, "remainingExpression is null");
-        }
-
-        public TupleDomain<VariableReferenceExpression> getTupleDomain()
-        {
-            return tupleDomain;
-        }
-
-        public RowExpression getRemainingExpression()
-        {
-            return remainingExpression;
         }
     }
 }
