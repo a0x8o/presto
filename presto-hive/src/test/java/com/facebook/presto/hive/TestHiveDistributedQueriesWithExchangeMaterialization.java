@@ -98,94 +98,97 @@ public class TestHiveDistributedQueriesWithExchangeMaterialization
         // Unsupported Hive type: unknown
     }
 
-    @Override
-    public void testApproxSetBigintGroupBy()
+    @Test
+    public void testExchangeMaterializationWithConstantFolding()
     {
-        // Unsupported Hive type: HyperLogLog
-    }
+        try {
+            assertUpdate(
+                    // bucket count has to be different from materialized bucket number
+                    "CREATE TABLE test_constant_folding_lineitem_bucketed\n" +
+                            "WITH (bucket_count = 17, bucketed_by = ARRAY['partkey_mod_9', 'partkey', 'suppkey', 'suppkey_varchar']) AS\n" +
+                            "SELECT partkey % 9 partkey_mod_9, partkey, suppkey, CAST(suppkey AS VARCHAR) suppkey_varchar, comment FROM lineitem",
+                    "SELECT count(*) from lineitem");
+            assertUpdate(
+                    "CREATE TABLE test_constant_folding_partsupp_unbucketed AS\n" +
+                            "SELECT partkey % 9 partkey_mod_9, partkey, suppkey, CAST(suppkey AS VARCHAR) suppkey_varchar, comment FROM partsupp",
+                    "SELECT count(*) from partsupp");
 
-    @Override
-    public void testApproxSetVarcharGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
+            // one constant, third position (suppkey BIGINT)
+            assertQuery(
+                    getSession(),
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM test_constant_folding_lineitem_bucketed lineitem JOIN test_constant_folding_partsupp_unbucketed partsupp\n" +
+                            "ON\n" +
+                            "  lineitem.partkey = partsupp.partkey AND\n" +
+                            "  lineitem.partkey_mod_9 = partsupp.partkey_mod_9 AND\n" +
+                            "  lineitem.suppkey = partsupp.suppkey AND\n" +
+                            "  lineitem.suppkey_varchar = partsupp.suppkey_varchar\n" +
+                            "WHERE lineitem.suppkey = 42",
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM lineitem JOIN partsupp\n" +
+                            "ON lineitem.partkey = partsupp.partkey AND\n" +
+                            "lineitem.suppkey = partsupp.suppkey\n" +
+                            "WHERE lineitem.suppkey = 42",
+                    assertRemoteMaterializedExchangesCount(1));
 
-    @Override
-    public void testApproxSetDoubleGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
+            // one constant, fourth position (suppkey_varchar VARCHAR)
+            assertQuery(
+                    getSession(),
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM test_constant_folding_lineitem_bucketed lineitem JOIN test_constant_folding_partsupp_unbucketed partsupp\n" +
+                            "ON\n" +
+                            "  lineitem.partkey = partsupp.partkey AND\n" +
+                            "  lineitem.partkey_mod_9 = partsupp.partkey_mod_9 AND\n" +
+                            "  lineitem.suppkey = partsupp.suppkey AND\n" +
+                            "  lineitem.suppkey_varchar = partsupp.suppkey_varchar\n" +
+                            "WHERE lineitem.suppkey_varchar = '42'",
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM lineitem JOIN partsupp\n" +
+                            "ON lineitem.partkey = partsupp.partkey AND\n" +
+                            "lineitem.suppkey = partsupp.suppkey\n" +
+                            "WHERE lineitem.suppkey = 42",
+                    assertRemoteMaterializedExchangesCount(1));
 
-    @Override
-    public void testApproxSetGroupByWithOnlyNullsInOneGroup()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
+            // two constants, first and third position (partkey_mod_9 BIGINT, suppkey BIGINT)
+            assertQuery(
+                    getSession(),
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                    "FROM test_constant_folding_lineitem_bucketed lineitem JOIN test_constant_folding_partsupp_unbucketed partsupp\n" +
+                    "ON\n" +
+                    "  lineitem.partkey = partsupp.partkey AND\n" +
+                    "  lineitem.partkey_mod_9 = partsupp.partkey_mod_9 AND\n" +
+                    "  lineitem.suppkey = partsupp.suppkey AND\n" +
+                    "  lineitem.suppkey_varchar = partsupp.suppkey_varchar\n" +
+                    "WHERE lineitem.partkey_mod_9 = 7 AND lineitem.suppkey = 42",
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM lineitem JOIN partsupp\n" +
+                            "ON lineitem.partkey = partsupp.partkey AND\n" +
+                            "lineitem.suppkey = partsupp.suppkey\n" +
+                            "WHERE lineitem.partkey % 9 = 7 AND lineitem.suppkey = 42",
+                    assertRemoteMaterializedExchangesCount(1));
 
-    @Override
-    public void testApproxSetGroupByWithNulls()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testMergeHyperLogLogGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testMergeHyperLogLogGroupByWithNulls()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testP4ApproxSetBigintGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testP4ApproxSetVarcharGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testP4ApproxSetDoubleGroupBy()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testP4ApproxSetGroupByWithOnlyNullsInOneGroup()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testP4ApproxSetGroupByWithNulls()
-    {
-        // Unsupported Hive type: HyperLogLog
-    }
-
-    @Override
-    public void testHaving3()
-    {
-        // Anonymous row type is not supported in Hive
-    }
-
-    @Override
-    public void testJoinCoercionOnEqualityComparison()
-    {
-        // Anonymous row type is not supported in Hive
-    }
-
-    @Override
-    public void testCorrelatedScalarSubqueriesWithScalarAggregation()
-    {
-        // Anonymous row type is not supported in Hive
+            // two constants, first and forth position (partkey_mod_9 BIGINT, suppkey_varchar VARCHAR)
+            assertQuery(
+                    getSession(),
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                    "FROM test_constant_folding_lineitem_bucketed lineitem JOIN test_constant_folding_partsupp_unbucketed partsupp\n" +
+                    "ON\n" +
+                    "  lineitem.partkey = partsupp.partkey AND\n" +
+                    "  lineitem.partkey_mod_9 = partsupp.partkey_mod_9 AND\n" +
+                    "  lineitem.suppkey = partsupp.suppkey AND\n" +
+                    "  lineitem.suppkey_varchar = partsupp.suppkey_varchar\n" +
+                    "WHERE lineitem.partkey_mod_9 = 7 AND lineitem.suppkey_varchar = '42'",
+                    "SELECT lineitem.partkey, lineitem.suppkey, lineitem.comment lineitem_comment, partsupp.comment partsupp_comment\n" +
+                            "FROM lineitem JOIN partsupp\n" +
+                            "ON lineitem.partkey = partsupp.partkey AND\n" +
+                            "lineitem.suppkey = partsupp.suppkey\n" +
+                            "WHERE lineitem.partkey % 9 = 7 AND lineitem.suppkey = 42",
+                    assertRemoteMaterializedExchangesCount(1));
+        }
+        finally {
+            assertUpdate("DROP TABLE IF EXISTS test_constant_folding_lineitem_bucketed");
+            assertUpdate("DROP TABLE IF EXISTS test_constant_folding_partsupp_unbucketed");
+        }
     }
 
     @Test
