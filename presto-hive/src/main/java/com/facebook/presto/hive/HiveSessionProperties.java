@@ -79,10 +79,10 @@ public final class HiveSessionProperties
     private static final String S3_SELECT_PUSHDOWN_ENABLED = "s3_select_pushdown_enabled";
     private static final String TEMPORARY_STAGING_DIRECTORY_ENABLED = "temporary_staging_directory_enabled";
     private static final String TEMPORARY_STAGING_DIRECTORY_PATH = "temporary_staging_directory_path";
-    private static final String PRELOAD_SPLITS_FOR_GROUPED_EXECUTION = "preload_splits_for_grouped_execution";
     public static final String WRITING_STAGING_FILES_ENABLED = "writing_staging_files_enabled";
     private static final String TEMPORARY_TABLE_SCHEMA = "temporary_table_schema";
     private static final String TEMPORARY_TABLE_STORAGE_FORMAT = "temporary_table_storage_format";
+    public static final String USE_REWINDABLE_SPLIT_SOURCE = "use_rewindable_split_source";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -320,11 +320,6 @@ public final class HiveSessionProperties
                         hiveClientConfig.getTemporaryStagingDirectoryPath(),
                         false),
                 booleanProperty(
-                        PRELOAD_SPLITS_FOR_GROUPED_EXECUTION,
-                        "Preload splits before scheduling for grouped execution",
-                        hiveClientConfig.isPreloadSplitsForGroupedExecution(),
-                        false),
-                booleanProperty(
                         WRITING_STAGING_FILES_ENABLED,
                         "Experimental: Write table to staging files and rename to target files when commit",
                         hiveClientConfig.isWritingStagingFilesEnabled(),
@@ -342,7 +337,12 @@ public final class HiveSessionProperties
                         hiveClientConfig.getTemporaryTableStorageFormat(),
                         false,
                         value -> HiveStorageFormat.valueOf(((String) value).toUpperCase()),
-                        HiveStorageFormat::name));
+                        HiveStorageFormat::name),
+                booleanProperty(
+                        USE_REWINDABLE_SPLIT_SOURCE,
+                        "Use rewindable hive split source",
+                        hiveClientConfig.isUseRewindableSplitSource(),
+                        false));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -556,11 +556,6 @@ public final class HiveSessionProperties
         return session.getProperty(TEMPORARY_STAGING_DIRECTORY_PATH, String.class);
     }
 
-    public static boolean isPreloadSplitsForGroupedExecution(ConnectorSession session)
-    {
-        return session.getProperty(PRELOAD_SPLITS_FOR_GROUPED_EXECUTION, Boolean.class);
-    }
-
     public static boolean isWritingStagingFilesEnabled(ConnectorSession session)
     {
         return session.getProperty(WRITING_STAGING_FILES_ENABLED, Boolean.class);
@@ -574,6 +569,11 @@ public final class HiveSessionProperties
     public static HiveStorageFormat getTemporaryTableStorageFormat(ConnectorSession session)
     {
         return session.getProperty(TEMPORARY_TABLE_STORAGE_FORMAT, HiveStorageFormat.class);
+    }
+
+    public static boolean isUseRewindableSplitSource(ConnectorSession session)
+    {
+        return session.getProperty(USE_REWINDABLE_SPLIT_SOURCE, Boolean.class);
     }
 
     public static PropertyMetadata<DataSize> dataSizeSessionProperty(String name, String description, DataSize defaultValue, boolean hidden)

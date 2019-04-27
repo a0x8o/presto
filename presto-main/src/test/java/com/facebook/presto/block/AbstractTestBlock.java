@@ -14,6 +14,7 @@
 package com.facebook.presto.block;
 
 import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.block.AbstractMapBlock.HashTables;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
@@ -70,6 +71,9 @@ public abstract class AbstractTestBlock
 
     protected <T> void assertBlock(Block block, Supplier<BlockBuilder> newBlockBuilder, T[] expectedValues)
     {
+        assertBlockSize(block);
+        assertRetainedSize(block);
+
         assertBlockPositions(block, newBlockBuilder, expectedValues);
         assertBlockPositions(copyBlockViaBlockSerde(block), newBlockBuilder, expectedValues);
         assertBlockPositions(copyBlockViaWritePositionTo(block, newBlockBuilder), newBlockBuilder, expectedValues);
@@ -153,6 +157,9 @@ public abstract class AbstractTestBlock
                 }
                 else if (type == DictionaryId.class) {
                     retainedSize += ClassLayout.parseClass(DictionaryId.class).instanceSize();
+                }
+                else if (type == HashTables.class) {
+                    retainedSize += ((HashTables) field.get(block)).getRetainedSizeInBytes();
                 }
                 else if (type == MethodHandle.class) {
                     // MethodHandles are only used in MapBlock/MapBlockBuilder,
@@ -279,28 +286,20 @@ public abstract class AbstractTestBlock
         if (expectedValue instanceof Slice) {
             Slice expectedSliceValue = (Slice) expectedValue;
 
-            if (isByteAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_BYTE; offset++) {
-                    assertEquals(block.getByte(position, offset), expectedSliceValue.getByte(offset));
-                }
+            if (isByteAccessSupported() && expectedSliceValue.length() >= SIZE_OF_BYTE) {
+                assertEquals(block.getByte(position), expectedSliceValue.getByte(0));
             }
 
-            if (isShortAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_SHORT; offset++) {
-                    assertEquals(block.getShort(position, offset), expectedSliceValue.getShort(offset));
-                }
+            if (isShortAccessSupported() && expectedSliceValue.length() >= SIZE_OF_SHORT) {
+                assertEquals(block.getShort(position), expectedSliceValue.getShort(0));
             }
 
-            if (isIntAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_INT; offset++) {
-                    assertEquals(block.getInt(position, offset), expectedSliceValue.getInt(offset));
-                }
+            if (isIntAccessSupported() && expectedSliceValue.length() >= SIZE_OF_INT) {
+                assertEquals(block.getInt(position), expectedSliceValue.getInt(0));
             }
 
-            if (isLongAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_LONG; offset++) {
-                    assertEquals(block.getLong(position, offset), expectedSliceValue.getLong(offset));
-                }
+            if (isIntAccessSupported() && expectedSliceValue.length() >= SIZE_OF_LONG) {
+                assertEquals(block.getLong(position), expectedSliceValue.getLong(0));
             }
 
             if (isAlignedLongAccessSupported()) {

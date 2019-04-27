@@ -154,11 +154,10 @@ public class HiveClientConfig
     private boolean isTemporaryStagingDirectoryEnabled = true;
     private String temporaryStagingDirectoryPath = "/tmp/presto-${USER}";
 
-    private boolean preloadSplitsForGroupedExecution;
-
     private boolean writingStagingFilesEnabled;
     private String temporaryTableSchema = "default";
     private HiveStorageFormat temporaryTableStorageFormat = ORC;
+    private boolean useRewindableSplitSource;
 
     public int getMaxInitialSplits()
     {
@@ -1256,19 +1255,6 @@ public class HiveClientConfig
         return this;
     }
 
-    public boolean isPreloadSplitsForGroupedExecution()
-    {
-        return preloadSplitsForGroupedExecution;
-    }
-
-    @Config("hive.preload-splits-for-grouped-execution")
-    @ConfigDescription("Preload splits before scheduling for grouped execution")
-    public HiveClientConfig setPreloadSplitsForGroupedExecution(boolean preloadSplitsForGroupedExecution)
-    {
-        this.preloadSplitsForGroupedExecution = preloadSplitsForGroupedExecution;
-        return this;
-    }
-
     public boolean isWritingStagingFilesEnabled()
     {
         return writingStagingFilesEnabled;
@@ -1305,6 +1291,19 @@ public class HiveClientConfig
     public HiveClientConfig setTemporaryTableStorageFormat(HiveStorageFormat temporaryTableStorageFormat)
     {
         this.temporaryTableStorageFormat = temporaryTableStorageFormat;
+        return this;
+    }
+
+    public boolean isUseRewindableSplitSource()
+    {
+        return useRewindableSplitSource;
+    }
+
+    @Config("hive.use-rewindable-split-source")
+    @ConfigDescription("Use rewindable hive split source")
+    public HiveClientConfig setUseRewindableSplitSource(boolean useRewindableSplitSource)
+    {
+        this.useRewindableSplitSource = useRewindableSplitSource;
         return this;
     }
 }
