@@ -36,7 +36,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.planner.PartitioningHandle;
-import com.facebook.presto.sql.tree.QualifiedName;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
@@ -62,12 +61,6 @@ public abstract class AbstractMockMetadata
 
     @Override
     public Type getType(TypeSignature signature)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public boolean isAggregationFunction(QualifiedName name)
     {
         throw new UnsupportedOperationException();
     }
@@ -115,19 +108,19 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public List<TableLayoutResult> getLayouts(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
+    public TableLayoutResult getLayout(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public TableLayout getLayout(Session session, TableLayoutHandle handle)
+    public TableLayout getLayout(Session session, TableHandle handle)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle)
+    public TableHandle getAlternativeTableHandle(Session session, TableHandle tableHandle, PartitioningHandle partitioningHandle)
     {
         throw new UnsupportedOperationException();
     }
@@ -139,13 +132,19 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
+    public boolean isRefinedPartitioningOver(Session session, PartitioningHandle a, PartitioningHandle b)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public PartitioningHandle getPartitioningHandleForExchange(Session session, String catalogName, int partitionCount, List<Type> partitionTypes)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Optional<Object> getInfo(Session session, TableLayoutHandle handle)
+    public Optional<Object> getInfo(Session session, TableHandle handle)
     {
         throw new UnsupportedOperationException();
     }
@@ -319,13 +318,13 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public OptionalLong metadataDelete(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }

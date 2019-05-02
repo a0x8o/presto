@@ -17,7 +17,6 @@ import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.function.FunctionHandle;
@@ -86,11 +85,17 @@ import static org.testng.Assert.assertEquals;
 @Test(singleThreaded = true)
 public class TestEffectivePredicateExtractor
 {
-    private static final TableHandle DUAL_TABLE_HANDLE = new TableHandle(new ConnectorId("test"), new TestingTableHandle());
-    private static final TableLayoutHandle TESTING_TABLE_LAYOUT = new TableLayoutHandle(
-            new ConnectorId("x"),
+    private static final TableHandle DUAL_TABLE_HANDLE = new TableHandle(
+            new ConnectorId("test"),
+            new TestingTableHandle(),
             TestingTransactionHandle.create(),
-            TestingHandle.INSTANCE);
+            Optional.empty());
+
+    private static final TableHandle DUAL_TABLE_HANDLE_WITH_LAYOUT = new TableHandle(
+            new ConnectorId("test"),
+            new TestingTableHandle(),
+            TestingTransactionHandle.create(),
+            Optional.of(TestingHandle.INSTANCE));
 
     private static final Symbol A = new Symbol("a");
     private static final Symbol B = new Symbol("b");
@@ -332,10 +337,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                DUAL_TABLE_HANDLE_WITH_LAYOUT,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.none(),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -343,10 +347,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                DUAL_TABLE_HANDLE_WITH_LAYOUT,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.withColumnDomains(ImmutableMap.of(scanAssignments.get(A), Domain.singleValue(BIGINT, 1L))),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -354,10 +357,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                DUAL_TABLE_HANDLE_WITH_LAYOUT,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.withColumnDomains(ImmutableMap.of(
                         scanAssignments.get(A), Domain.singleValue(BIGINT, 1L),
                         scanAssignments.get(B), Domain.singleValue(BIGINT, 2L))),
@@ -370,7 +372,6 @@ public class TestEffectivePredicateExtractor
                 DUAL_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.empty(),
                 TupleDomain.all(),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -709,7 +710,6 @@ public class TestEffectivePredicateExtractor
                 DUAL_TABLE_HANDLE,
                 ImmutableList.copyOf(scanAssignments.keySet()),
                 scanAssignments,
-                Optional.empty(),
                 TupleDomain.all(),
                 TupleDomain.all());
     }

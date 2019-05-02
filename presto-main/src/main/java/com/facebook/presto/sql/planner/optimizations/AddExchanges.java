@@ -22,6 +22,7 @@ import com.facebook.presto.spi.GroupingProperty;
 import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SortingProperty;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.LiteralEncoder;
@@ -32,7 +33,6 @@ import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
-import com.facebook.presto.sql.planner.iterative.rule.PickTableLayout;
 import com.facebook.presto.sql.planner.optimizations.PreferredProperties.PartitioningProperties;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
@@ -83,7 +83,6 @@ import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.SetMultimap;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -95,6 +94,7 @@ import java.util.function.Function;
 
 import static com.facebook.presto.SystemSessionProperties.getExchangeMaterializationStrategy;
 import static com.facebook.presto.SystemSessionProperties.getHashPartitionCount;
+import static com.facebook.presto.SystemSessionProperties.getPartialMergePushdownStrategy;
 import static com.facebook.presto.SystemSessionProperties.getPartitioningProviderCatalog;
 import static com.facebook.presto.SystemSessionProperties.isColocatedJoinEnabled;
 import static com.facebook.presto.SystemSessionProperties.isDistributedIndexJoinEnabled;
@@ -103,12 +103,14 @@ import static com.facebook.presto.SystemSessionProperties.isForceSingleNodeOutpu
 import static com.facebook.presto.SystemSessionProperties.isRedistributeWrites;
 import static com.facebook.presto.SystemSessionProperties.isScaleWriters;
 import static com.facebook.presto.SystemSessionProperties.preferStreamingOperators;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy.PUSH_THROUGH_LOW_MEMORY_OPERATORS;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.getNumberOfTableScans;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.hasMultipleTableScans;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_ARBITRARY_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SCALED_WRITER_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
+import static com.facebook.presto.sql.planner.iterative.rule.PickTableLayout.pushPredicateIntoTableScan;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.partitionedOn;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.singleStreamPartition;
 import static com.facebook.presto.sql.planner.optimizations.LocalProperties.grouped;
@@ -163,6 +165,7 @@ public class AddExchanges
         private final boolean preferStreamingOperators;
         private final boolean redistributeWrites;
         private final boolean scaleWriters;
+        private final PartialMergePushdownStrategy partialMergePushdownStrategy;
         private final String partitioningProviderCatalog;
         private final int hashPartitionCount;
         private final ExchangeMaterializationStrategy exchangeMaterializationStrategy;
@@ -176,6 +179,7 @@ public class AddExchanges
             this.distributedIndexJoins = isDistributedIndexJoinEnabled(session);
             this.redistributeWrites = isRedistributeWrites(session);
             this.scaleWriters = isScaleWriters(session);
+            this.partialMergePushdownStrategy = getPartialMergePushdownStrategy(session);
             this.preferStreamingOperators = preferStreamingOperators(session);
             this.partitioningProviderCatalog = getPartitioningProviderCatalog(session);
             this.hashPartitionCount = getHashPartitionCount(session);
@@ -524,7 +528,7 @@ public class AddExchanges
         public PlanWithProperties visitFilter(FilterNode node, PreferredProperties preferredProperties)
         {
             if (node.getSource() instanceof TableScanNode) {
-                return planTableScan((TableScanNode) node.getSource(), castToExpression(node.getPredicate()), preferredProperties);
+                return planTableScan((TableScanNode) node.getSource(), castToExpression(node.getPredicate()));
             }
 
             return rebaseAndDeriveProperties(node, planChild(node, preferredProperties));
@@ -533,7 +537,7 @@ public class AddExchanges
         @Override
         public PlanWithProperties visitTableScan(TableScanNode node, PreferredProperties preferredProperties)
         {
-            return planTableScan(node, TRUE_LITERAL, preferredProperties);
+            return planTableScan(node, TRUE_LITERAL);
         }
 
         @Override
@@ -551,7 +555,11 @@ public class AddExchanges
                 }
             }
 
-            if (partitioningScheme.isPresent() && !source.getProperties().isCompatibleTablePartitioningWith(partitioningScheme.get().getPartitioning(), false, metadata, session)) {
+            if (partitioningScheme.isPresent() &&
+                    // TODO: Deprecate compatible table partitioning
+                    !source.getProperties().isCompatibleTablePartitioningWith(partitioningScheme.get().getPartitioning(), false, metadata, session) &&
+                    !(source.getProperties().isRefinedPartitioningOver(partitioningScheme.get().getPartitioning(), false, metadata, session) &&
+                            canPushdownPartialMerge(source.getNode(), partialMergePushdownStrategy))) {
                 source = withDerivedProperties(
                         partitionedExchange(
                                 idAllocator.getNextId(),
@@ -563,28 +571,11 @@ public class AddExchanges
             return rebaseAndDeriveProperties(node, source);
         }
 
-        private PlanWithProperties planTableScan(TableScanNode node, Expression predicate, PreferredProperties preferredProperties)
+        private PlanWithProperties planTableScan(TableScanNode node, Expression predicate)
         {
-            List<PlanNode> possiblePlans = PickTableLayout.listTableLayouts(node, predicate, true, session, types, idAllocator, metadata, parser, domainTranslator);
-            List<PlanWithProperties> possiblePlansWithProperties = possiblePlans.stream()
-                    .map(planNode -> new PlanWithProperties(planNode, derivePropertiesRecursively(planNode)))
-                    .collect(toImmutableList());
-            return pickPlan(possiblePlansWithProperties, preferredProperties);
-        }
-
-        /**
-         * possiblePlans should be provided in layout preference order
-         */
-        private PlanWithProperties pickPlan(List<PlanWithProperties> possiblePlans, PreferredProperties preferredProperties)
-        {
-            checkArgument(!possiblePlans.isEmpty());
-
-            if (preferStreamingOperators) {
-                possiblePlans = new ArrayList<>(possiblePlans);
-                Collections.sort(possiblePlans, Comparator.comparing(PlanWithProperties::getProperties, streamingExecutionPreference(preferredProperties))); // stable sort; is Collections.min() guaranteed to be stable?
-            }
-
-            return possiblePlans.get(0);
+            PlanNode plan = pushPredicateIntoTableScan(node, predicate, true, session, types, idAllocator, metadata, parser, domainTranslator);
+            // TODO: Support selecting layout with best local property once connector can participate in query optimization.
+            return new PlanWithProperties(plan, derivePropertiesRecursively(plan));
         }
 
         @Override
@@ -716,7 +707,10 @@ public class AddExchanges
             if (left.getProperties().isNodePartitionedOn(leftSymbols) && !left.getProperties().isSingleNode()) {
                 Partitioning rightPartitioning = left.getProperties().translate(createTranslator(leftToRight)).getNodePartitioning().get();
                 right = node.getRight().accept(this, PreferredProperties.partitioned(rightPartitioning));
-                if (!right.getProperties().isCompatibleTablePartitioningWith(left.getProperties(), rightToLeft::get, metadata, session)) {
+                if (!right.getProperties().isCompatibleTablePartitioningWith(left.getProperties(), rightToLeft::get, metadata, session) &&
+                        // TODO: Deprecate compatible table partitioning
+                        !(right.getProperties().isRefinedPartitioningOver(left.getProperties(), rightToLeft::get, metadata, session) &&
+                                canPushdownPartialMerge(right.getNode(), partialMergePushdownStrategy))) {
                     right = withDerivedProperties(
                             partitionedExchange(
                                     idAllocator.getNextId(),
@@ -759,7 +753,9 @@ public class AddExchanges
                 }
             }
 
-            verify(left.getProperties().isCompatibleTablePartitioningWith(right.getProperties(), leftToRight::get, metadata, session));
+            // TODO: Deprecate compatible table partitioning
+            verify(left.getProperties().isCompatibleTablePartitioningWith(right.getProperties(), leftToRight::get, metadata, session) ||
+                    (right.getProperties().isRefinedPartitioningOver(left.getProperties(), rightToLeft::get, metadata, session) && canPushdownPartialMerge(right.getNode(), partialMergePushdownStrategy)));
 
             // if colocated joins are disabled, force redistribute when using a custom partitioning
             if (!isColocatedJoinEnabled(session) && hasMultipleTableScans(left.getNode(), right.getNode())) {
@@ -875,7 +871,10 @@ public class AddExchanges
                 if (source.getProperties().isNodePartitionedOn(sourceSymbols) && !source.getProperties().isSingleNode()) {
                     Partitioning filteringPartitioning = source.getProperties().translate(createTranslator(sourceToFiltering)).getNodePartitioning().get();
                     filteringSource = node.getFilteringSource().accept(this, PreferredProperties.partitionedWithNullsAndAnyReplicated(filteringPartitioning));
-                    if (!source.getProperties().withReplicatedNulls(true).isCompatibleTablePartitioningWith(filteringSource.getProperties(), sourceToFiltering::get, metadata, session)) {
+                    // TODO: Deprecate compatible table partitioning
+                    if (!source.getProperties().withReplicatedNulls(true).isCompatibleTablePartitioningWith(filteringSource.getProperties(), sourceToFiltering::get, metadata, session) &&
+                            !(filteringSource.getProperties().withReplicatedNulls(true).isRefinedPartitioningOver(source.getProperties(), filteringToSource::get, metadata, session) &&
+                                    canPushdownPartialMerge(filteringSource.getNode(), partialMergePushdownStrategy))) {
                         filteringSource = withDerivedProperties(
                                 partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, filteringSource.getNode(), new PartitioningScheme(
                                         filteringPartitioning,
@@ -910,7 +909,9 @@ public class AddExchanges
                     }
                 }
 
-                verify(source.getProperties().withReplicatedNulls(true).isCompatibleTablePartitioningWith(filteringSource.getProperties(), sourceToFiltering::get, metadata, session));
+                verify(source.getProperties().withReplicatedNulls(true).isCompatibleTablePartitioningWith(filteringSource.getProperties(), sourceToFiltering::get, metadata, session) ||
+                        // TODO: Deprecate compatible table partitioning
+                        (filteringSource.getProperties().withReplicatedNulls(true).isRefinedPartitioningOver(source.getProperties(), filteringToSource::get, metadata, session) && canPushdownPartialMerge(filteringSource.getNode(), partialMergePushdownStrategy)));
 
                 // if colocated joins are disabled, force redistribute when using a custom partitioning
                 if (!isColocatedJoinEnabled(session) && hasMultipleTableScans(source.getNode(), filteringSource.getNode())) {
@@ -1077,7 +1078,9 @@ public class AddExchanges
                             .build();
 
                     PlanWithProperties source = node.getSources().get(sourceIndex).accept(this, childPreferred);
-                    if (!source.getProperties().isCompatibleTablePartitioningWith(childPartitioning, nullsAndAnyReplicated, metadata, session)) {
+                    // TODO: Deprecate compatible table partitioning
+                    if (!source.getProperties().isCompatibleTablePartitioningWith(childPartitioning, nullsAndAnyReplicated, metadata, session) &&
+                            !(source.getProperties().isRefinedPartitioningOver(childPartitioning, nullsAndAnyReplicated, metadata, session) && canPushdownPartialMerge(source.getNode(), partialMergePushdownStrategy))) {
                         source = withDerivedProperties(
                                 partitionedExchange(
                                         idAllocator.getNextId(),
@@ -1306,6 +1309,39 @@ public class AddExchanges
                     throw new IllegalStateException("Unexpected exchange materialization strategy: " + exchangeMaterializationStrategy);
             }
         }
+    }
+
+    private boolean canPushdownPartialMerge(PlanNode node, PartialMergePushdownStrategy strategy)
+    {
+        switch (strategy) {
+            case NONE:
+                return false;
+            case PUSH_THROUGH_LOW_MEMORY_OPERATORS:
+                return canPushdownPartialMergeThroughLowMemoryOperators(node);
+            default:
+                throw new UnsupportedOperationException("Unsupported PartialMergePushdownStrategy: " + strategy);
+        }
+    }
+
+    private boolean canPushdownPartialMergeThroughLowMemoryOperators(PlanNode node)
+    {
+        if (node instanceof TableScanNode) {
+            return true;
+        }
+        if (node instanceof ExchangeNode && ((ExchangeNode) node).getScope() == REMOTE_MATERIALIZED) {
+            return true;
+        }
+
+        // Don't pushdown partial merge through join and aggregations
+        // since execution might requires more distributed memory.
+        if (node instanceof JoinNode ||
+                node instanceof AggregationNode ||
+                node instanceof SemiJoinNode) {
+            return false;
+        }
+
+        return node.getSources().stream()
+                .allMatch(this::canPushdownPartialMergeThroughLowMemoryOperators);
     }
 
     private static Map<Symbol, Symbol> computeIdentityTranslations(Assignments assignments)

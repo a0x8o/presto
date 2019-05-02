@@ -55,6 +55,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
 import static com.facebook.presto.sql.ExpressionUtils.combineConjuncts;
 import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.WindowType.RANGE;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
@@ -303,7 +304,6 @@ public class IndexJoinOptimizer
                     idAllocator.getNextId(),
                     resolvedIndex.getIndexHandle(),
                     node.getTable(),
-                    node.getLayout(),
                     context.getLookupSymbols(),
                     node.getOutputSymbols(),
                     node.getAssignments(),
@@ -352,8 +352,7 @@ public class IndexJoinOptimizer
         public PlanNode visitWindow(WindowNode node, RewriteContext<Context> context)
         {
             if (!node.getWindowFunctions().values().stream()
-                    .map(function -> function.getFunctionCall().getName())
-                    .allMatch(metadata.getFunctionManager()::isAggregationFunction)) {
+                    .allMatch(function -> metadata.getFunctionManager().getFunctionMetadata(function.getFunctionHandle()).getFunctionKind() == AGGREGATE)) {
                 return node;
             }
 

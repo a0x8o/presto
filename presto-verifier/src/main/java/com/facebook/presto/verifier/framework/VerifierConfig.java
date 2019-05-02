@@ -71,7 +71,9 @@ public class VerifierConfig
     private int queryRepetitions = 1;
 
     private double relativeErrorMargin = 1e-4;
+    private double absoluteErrorMargin = 1e-12;
     private boolean runTearDownOnResultMismatch;
+    private boolean failureResolverEnabled = true;
 
     @NotNull
     public Optional<String> getAdditionalJdbcDriverPath()
@@ -486,10 +488,25 @@ public class VerifierConfig
         return relativeErrorMargin;
     }
 
+    @ConfigDescription("The maximum tolerable relative error between the sum of two floating point columns.")
     @Config("relative-error-margin")
     public VerifierConfig setRelativeErrorMargin(double relativeErrorMargin)
     {
         this.relativeErrorMargin = relativeErrorMargin;
+        return this;
+    }
+
+    @Min(0)
+    public double getAbsoluteErrorMargin()
+    {
+        return absoluteErrorMargin;
+    }
+
+    @ConfigDescription("The maximum tolerable difference between the mean of two floating point columns. Applicable when one mean value is 0.")
+    @Config("absolute-error-margin")
+    public VerifierConfig setAbsoluteErrorMargin(double absoluteErrorMargin)
+    {
+        this.absoluteErrorMargin = absoluteErrorMargin;
         return this;
     }
 
@@ -503,6 +520,18 @@ public class VerifierConfig
     public VerifierConfig setRunTearDownOnResultMismatch(boolean runTearDownOnResultMismatch)
     {
         this.runTearDownOnResultMismatch = runTearDownOnResultMismatch;
+        return this;
+    }
+
+    public boolean isFailureResolverEnabled()
+    {
+        return failureResolverEnabled;
+    }
+
+    @Config("failure-resolver.enabled")
+    public VerifierConfig setFailureResolverEnabled(boolean failureResolverEnabled)
+    {
+        this.failureResolverEnabled = failureResolverEnabled;
         return this;
     }
 }

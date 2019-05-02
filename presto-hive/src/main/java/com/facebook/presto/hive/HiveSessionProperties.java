@@ -61,6 +61,7 @@ public final class HiveSessionProperties
     private static final String ORC_OPTIMIZED_WRITER_MAX_STRIPE_ROWS = "orc_optimized_writer_max_stripe_rows";
     private static final String ORC_OPTIMIZED_WRITER_MAX_DICTIONARY_MEMORY = "orc_optimized_writer_max_dictionary_memory";
     private static final String HIVE_STORAGE_FORMAT = "hive_storage_format";
+    private static final String COMPRESSION_CODEC = "compression_codec";
     private static final String RESPECT_TABLE_FORMAT = "respect_table_format";
     private static final String PARQUET_USE_COLUMN_NAME = "parquet_use_column_names";
     private static final String PARQUET_FAIL_WITH_CORRUPTED_STATISTICS = "parquet_fail_with_corrupted_statistics";
@@ -82,6 +83,7 @@ public final class HiveSessionProperties
     public static final String WRITING_STAGING_FILES_ENABLED = "writing_staging_files_enabled";
     private static final String TEMPORARY_TABLE_SCHEMA = "temporary_table_schema";
     private static final String TEMPORARY_TABLE_STORAGE_FORMAT = "temporary_table_storage_format";
+    private static final String TEMPORARY_TABLE_COMPRESSION_CODEC = "temporary_table_compression_codec";
     public static final String USE_REWINDABLE_SPLIT_SOURCE = "use_rewindable_split_source";
 
     private final List<PropertyMetadata<?>> sessionProperties;
@@ -229,6 +231,15 @@ public final class HiveSessionProperties
                         "Default storage format for new tables or partitions",
                         hiveClientConfig.getHiveStorageFormat().toString(),
                         false),
+                new PropertyMetadata<>(
+                        COMPRESSION_CODEC,
+                        "The compression codec to use when writing files",
+                        VARCHAR,
+                        HiveCompressionCodec.class,
+                        hiveClientConfig.getCompressionCodec(),
+                        false,
+                        value -> HiveCompressionCodec.valueOf(((String) value).toUpperCase()),
+                        HiveCompressionCodec::name),
                 booleanProperty(
                         RESPECT_TABLE_FORMAT,
                         "Write new partitions using table format rather than default storage format",
@@ -338,6 +349,15 @@ public final class HiveSessionProperties
                         false,
                         value -> HiveStorageFormat.valueOf(((String) value).toUpperCase()),
                         HiveStorageFormat::name),
+                new PropertyMetadata<>(
+                        TEMPORARY_TABLE_COMPRESSION_CODEC,
+                        "Compression codec used to store data in temporary tables",
+                        VARCHAR,
+                        HiveCompressionCodec.class,
+                        hiveClientConfig.getTemporaryTableCompressionCodec(),
+                        false,
+                        value -> HiveCompressionCodec.valueOf(((String) value).toUpperCase()),
+                        HiveCompressionCodec::name),
                 booleanProperty(
                         USE_REWINDABLE_SPLIT_SOURCE,
                         "Use rewindable hive split source",
@@ -462,6 +482,11 @@ public final class HiveSessionProperties
         return HiveStorageFormat.valueOf(session.getProperty(HIVE_STORAGE_FORMAT, String.class).toUpperCase(ENGLISH));
     }
 
+    public static HiveCompressionCodec getCompressionCodec(ConnectorSession session)
+    {
+        return session.getProperty(COMPRESSION_CODEC, HiveCompressionCodec.class);
+    }
+
     public static boolean isRespectTableFormat(ConnectorSession session)
     {
         return session.getProperty(RESPECT_TABLE_FORMAT, Boolean.class);
@@ -541,6 +566,7 @@ public final class HiveSessionProperties
         return session.getProperty(COLLECT_COLUMN_STATISTICS_ON_WRITE, Boolean.class);
     }
 
+    @Deprecated
     public static boolean isOptimizedMismatchedBucketCount(ConnectorSession session)
     {
         return session.getProperty(OPTIMIZE_MISMATCHED_BUCKET_COUNT, Boolean.class);
@@ -569,6 +595,11 @@ public final class HiveSessionProperties
     public static HiveStorageFormat getTemporaryTableStorageFormat(ConnectorSession session)
     {
         return session.getProperty(TEMPORARY_TABLE_STORAGE_FORMAT, HiveStorageFormat.class);
+    }
+
+    public static HiveCompressionCodec getTemporaryTableCompressionCodec(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_TABLE_COMPRESSION_CODEC, HiveCompressionCodec.class);
     }
 
     public static boolean isUseRewindableSplitSource(ConnectorSession session)

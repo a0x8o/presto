@@ -39,16 +39,12 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import io.airlift.event.client.EventClient;
 import io.airlift.units.DataSize;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.FileUtils;
-import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat;
-import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.JobConf;
-import org.apache.hive.common.util.ReflectionUtil;
 
 import java.io.IOException;
 import java.security.Principal;
@@ -63,6 +59,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.function.Consumer;
 
+import static com.facebook.presto.hive.HiveCompressionCodec.NONE;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_READ_ONLY;
@@ -78,7 +75,7 @@ import static com.facebook.presto.hive.PartitionUpdate.FileWriteInfo;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getHiveSchema;
 import static com.facebook.presto.hive.metastore.PrestoTableType.TEMPORARY_TABLE;
 import static com.facebook.presto.hive.metastore.StorageFormat.fromHiveStorageFormat;
-import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
+import static com.facebook.presto.hive.util.ConfigurationUtils.configureCompression;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -92,7 +89,6 @@ import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
-import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.COMPRESSRESULT;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMNS;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMN_TYPES;
 
@@ -112,6 +108,7 @@ public class HiveWriterFactory
 
     private final HiveStorageFormat tableStorageFormat;
     private final HiveStorageFormat partitionStorageFormat;
+    private final HiveCompressionCodec compressionCodec;
     private final LocationHandle locationHandle;
     private final LocationService locationService;
     private final String filePrefix;
@@ -148,6 +145,7 @@ public class HiveWriterFactory
             List<HiveColumnHandle> inputColumns,
             HiveStorageFormat tableStorageFormat,
             HiveStorageFormat partitionStorageFormat,
+            HiveCompressionCodec compressionCodec,
             OptionalInt bucketCount,
             List<SortingColumn> sortedBy,
             LocationHandle locationHandle,
@@ -173,6 +171,7 @@ public class HiveWriterFactory
 
         this.tableStorageFormat = requireNonNull(tableStorageFormat, "tableStorageFormat is null");
         this.partitionStorageFormat = requireNonNull(partitionStorageFormat, "partitionStorageFormat is null");
+        this.compressionCodec = requireNonNull(compressionCodec, "compressionCodec is null");
         this.locationHandle = requireNonNull(locationHandle, "locationHandle is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
         this.filePrefix = requireNonNull(filePrefix, "filePrefix is null");
@@ -242,8 +241,7 @@ public class HiveWriterFactory
                 .collect(toImmutableMap(PropertyMetadata::getName,
                         entry -> session.getProperty(entry.getName(), entry.getJavaType()).toString()));
 
-        Configuration conf = hdfsEnvironment.getConfiguration(new HdfsContext(session, schemaName, tableName), writePath);
-        this.conf = toJobConf(conf);
+        this.conf = configureCompression(hdfsEnvironment.getConfiguration(new HdfsContext(session, schemaName, tableName), writePath), compressionCodec);
 
         // make sure the FileSystem is created with the correct Configuration object
         try {
@@ -423,7 +421,7 @@ public class HiveWriterFactory
 
         validateSchema(partitionName, schema);
 
-        String extension = getFileExtension(conf, outputStorageFormat);
+        String extension = getFileExtension(outputStorageFormat, compressionCodec);
         String targetFileName;
         if (bucketNumber.isPresent()) {
             targetFileName = computeBucketedFileName(filePrefix, bucketNumber.getAsInt()) + extension;
@@ -606,27 +604,22 @@ public class HiveWriterFactory
         return filePrefix + "_bucket-" + Strings.padStart(Integer.toString(bucket), BUCKET_NUMBER_PADDING, '0');
     }
 
-    public static String getFileExtension(JobConf conf, StorageFormat storageFormat)
+    public static String getFileExtension(StorageFormat storageFormat, HiveCompressionCodec compressionCodec)
     {
         // text format files must have the correct extension when compressed
-        if (!HiveConf.getBoolVar(conf, COMPRESSRESULT) || !HiveIgnoreKeyTextOutputFormat.class.getName().equals(storageFormat.getOutputFormat())) {
+        if (compressionCodec == NONE || !HiveIgnoreKeyTextOutputFormat.class.getName().equals(storageFormat.getOutputFormat())) {
             return "";
         }
 
-        String compressionCodecClass = conf.get("mapred.output.compression.codec");
-        if (compressionCodecClass == null) {
+        if (!compressionCodec.getCodec().isPresent()) {
             return new DefaultCodec().getDefaultExtension();
         }
 
         try {
-            Class<? extends CompressionCodec> codecClass = conf.getClassByName(compressionCodecClass).asSubclass(CompressionCodec.class);
-            return ReflectionUtil.newInstance(codecClass, conf).getDefaultExtension();
+            return compressionCodec.getCodec().get().getConstructor().newInstance().getDefaultExtension();
         }
-        catch (ClassNotFoundException e) {
-            throw new PrestoException(HIVE_UNSUPPORTED_FORMAT, "Compression codec not found: " + compressionCodecClass, e);
-        }
-        catch (RuntimeException e) {
-            throw new PrestoException(HIVE_UNSUPPORTED_FORMAT, "Failed to load compression codec: " + compressionCodecClass, e);
+        catch (ReflectiveOperationException e) {
+            throw new PrestoException(HIVE_UNSUPPORTED_FORMAT, "Failed to load compression codec: " + compressionCodec.getCodec().get(), e);
         }
     }
 

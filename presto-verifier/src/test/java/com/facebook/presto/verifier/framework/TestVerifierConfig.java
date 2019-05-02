@@ -61,7 +61,9 @@ public class TestVerifierConfig
                 .setSuiteRepetitions(1)
                 .setQueryRepetitions(1)
                 .setRelativeErrorMargin(1e-4)
-                .setRunTearDownOnResultMismatch(false));
+                .setAbsoluteErrorMargin(1e-12)
+                .setRunTearDownOnResultMismatch(false)
+                .setFailureResolverEnabled(true));
     }
 
     @Test
@@ -98,7 +100,9 @@ public class TestVerifierConfig
                 .put("suite-repetitions", "2")
                 .put("query-repetitions", "3")
                 .put("relative-error-margin", "2e-5")
+                .put("absolute-error-margin", "1e-14")
                 .put("run-teardown-on-result-mismatch", "true")
+                .put("failure-resolver.enabled", "false")
                 .build();
         VerifierConfig expected = new VerifierConfig()
                 .setAdditionalJdbcDriverPath("/path/to/file")
@@ -131,7 +135,9 @@ public class TestVerifierConfig
                 .setSuiteRepetitions(2)
                 .setQueryRepetitions(3)
                 .setRelativeErrorMargin(2e-5)
-                .setRunTearDownOnResultMismatch(true);
+                .setAbsoluteErrorMargin(1e-14)
+                .setRunTearDownOnResultMismatch(true)
+                .setFailureResolverEnabled(false);
 
         assertFullMapping(properties, expected);
     }

@@ -47,7 +47,6 @@ import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -67,13 +66,10 @@ import static com.facebook.presto.sql.planner.plan.Patterns.tableScan;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
-import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.intersection;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toList;
 
 /**
  * These rules should not be run after AddExchanges so as not to overwrite the TableLayout
@@ -107,7 +103,7 @@ public class PickTableLayout
 
     public PickTableLayoutWithoutPredicate pickTableLayoutWithoutPredicate()
     {
-        return new PickTableLayoutWithoutPredicate(metadata, parser, domainTranslator);
+        return new PickTableLayoutWithoutPredicate(metadata);
     }
 
     private static final class PickTableLayoutForPredicate
@@ -146,7 +142,16 @@ public class PickTableLayout
         {
             TableScanNode tableScan = captures.get(TABLE_SCAN);
 
-            PlanNode rewritten = planTableScan(tableScan, castToExpression(filterNode.getPredicate()), context.getSession(), context.getSymbolAllocator().getTypes(), context.getIdAllocator(), metadata, parser, domainTranslator);
+            PlanNode rewritten = pushPredicateIntoTableScan(
+                    tableScan,
+                    castToExpression(filterNode.getPredicate()),
+                    false,
+                    context.getSession(),
+                    context.getSymbolAllocator().getTypes(),
+                    context.getIdAllocator(),
+                    metadata,
+                    parser,
+                    domainTranslator);
 
             if (arePlansSame(filterNode, tableScan, rewritten)) {
                 return Result.empty();
@@ -172,7 +177,7 @@ public class PickTableLayout
 
             TableScanNode rewrittenTableScan = (TableScanNode) rewrittenFilter.getSource();
 
-            if (!tableScan.getLayout().isPresent() && rewrittenTableScan.getLayout().isPresent()) {
+            if (!tableScan.getTable().equals(rewrittenTableScan.getTable())) {
                 return false;
             }
 
@@ -185,14 +190,10 @@ public class PickTableLayout
             implements Rule<TableScanNode>
     {
         private final Metadata metadata;
-        private final SqlParser parser;
-        private final ExpressionDomainTranslator domainTranslator;
 
-        private PickTableLayoutWithoutPredicate(Metadata metadata, SqlParser parser, ExpressionDomainTranslator domainTranslator)
+        private PickTableLayoutWithoutPredicate(Metadata metadata)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
-            this.parser = requireNonNull(parser, "parser is null");
-            this.domainTranslator = requireNonNull(domainTranslator, "domainTranslator is null");
         }
 
         private static final Pattern<TableScanNode> PATTERN = tableScan();
@@ -212,38 +213,33 @@ public class PickTableLayout
         @Override
         public Result apply(TableScanNode tableScanNode, Captures captures, Context context)
         {
-            if (tableScanNode.getLayout().isPresent()) {
+            if (tableScanNode.getTable().getLayout().isPresent()) {
                 return Result.empty();
             }
 
-            return Result.ofPlanNode(planTableScan(tableScanNode, TRUE_LITERAL, context.getSession(), context.getSymbolAllocator().getTypes(), context.getIdAllocator(), metadata, parser, domainTranslator));
+            TableLayoutResult layout = metadata.getLayout(
+                    context.getSession(),
+                    tableScanNode.getTable(),
+                    Constraint.alwaysTrue(),
+                    Optional.of(tableScanNode.getOutputSymbols().stream()
+                            .map(tableScanNode.getAssignments()::get)
+                            .collect(toImmutableSet())));
+
+            if (layout.getLayout().getPredicate().isNone()) {
+                return Result.ofPlanNode(new ValuesNode(context.getIdAllocator().getNextId(), tableScanNode.getOutputSymbols(), ImmutableList.of()));
+            }
+
+            return Result.ofPlanNode(new TableScanNode(
+                    tableScanNode.getId(),
+                    layout.getLayout().getNewTableHandle(),
+                    tableScanNode.getOutputSymbols(),
+                    tableScanNode.getAssignments(),
+                    layout.getLayout().getPredicate(),
+                    TupleDomain.all()));
         }
     }
 
-    private static PlanNode planTableScan(
-            TableScanNode node,
-            Expression predicate,
-            Session session,
-            TypeProvider types,
-            PlanNodeIdAllocator idAllocator,
-            Metadata metadata,
-            SqlParser parser,
-            ExpressionDomainTranslator domainTranslator)
-    {
-        return listTableLayouts(
-                node,
-                predicate,
-                false,
-                session,
-                types,
-                idAllocator,
-                metadata,
-                parser,
-                domainTranslator)
-                .get(0);
-    }
-
-    public static List<PlanNode> listTableLayouts(
+    public static PlanNode pushPredicateIntoTableScan(
             TableScanNode node,
             Expression predicate,
             boolean pruneWithPredicateExpression,
@@ -289,9 +285,12 @@ public class PickTableLayout
             // TODO invoke the interpreter unconditionally when the interpreter becomes cheap enough.
             constraint = new Constraint<>(newDomain);
         }
+        if (constraint.getSummary().isNone()) {
+            return new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of());
+        }
 
         // Layouts will be returned in order of the connector's preference
-        List<TableLayoutResult> layouts = metadata.getLayouts(
+        TableLayoutResult layout = metadata.getLayout(
                 session,
                 node.getTable(),
                 constraint,
@@ -299,51 +298,35 @@ public class PickTableLayout
                         .map(node.getAssignments()::get)
                         .collect(toImmutableSet())));
 
-        if (layouts.isEmpty()) {
-            return ImmutableList.of(new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of()));
+        if (layout.getLayout().getPredicate().isNone()) {
+            return new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of());
         }
 
-        // Filter out layouts that cannot supply all the required columns
-        layouts = layouts.stream()
-                .filter(layout -> layout.hasAllOutputs(node))
-                .collect(toList());
-        checkState(!layouts.isEmpty(), "No usable layouts for %s", node);
+        TableScanNode tableScan = new TableScanNode(
+                node.getId(),
+                layout.getLayout().getNewTableHandle(),
+                node.getOutputSymbols(),
+                node.getAssignments(),
+                layout.getLayout().getPredicate(),
+                computeEnforced(newDomain, layout.getUnenforcedConstraint()));
 
-        if (layouts.stream().anyMatch(layout -> layout.getLayout().getPredicate().isNone())) {
-            return ImmutableList.of(new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of()));
+        // The order of the arguments to combineConjuncts matters:
+        // * Unenforced constraints go first because they can only be simple column references,
+        //   which are not prone to logic errors such as out-of-bound access, div-by-zero, etc.
+        // * Conjuncts in non-deterministic expressions and non-TupleDomain-expressible expressions should
+        //   retain their original (maybe intermixed) order from the input predicate. However, this is not implemented yet.
+        // * Short of implementing the previous bullet point, the current order of non-deterministic expressions
+        //   and non-TupleDomain-expressible expressions should be retained. Changing the order can lead
+        //   to failures of previously successful queries.
+        Expression resultingPredicate = combineConjuncts(
+                domainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(assignments::get)),
+                filterNonDeterministicConjuncts(predicate),
+                decomposedPredicate.getRemainingExpression());
+
+        if (!TRUE_LITERAL.equals(resultingPredicate)) {
+            return new FilterNode(idAllocator.getNextId(), tableScan, castToRowExpression(resultingPredicate));
         }
-
-        return layouts.stream()
-                .map(layout -> {
-                    TableScanNode tableScan = new TableScanNode(
-                            node.getId(),
-                            node.getTable(),
-                            node.getOutputSymbols(),
-                            node.getAssignments(),
-                            Optional.of(layout.getLayout().getHandle()),
-                            layout.getLayout().getPredicate(),
-                            computeEnforced(newDomain, layout.getUnenforcedConstraint()));
-
-                    // The order of the arguments to combineConjuncts matters:
-                    // * Unenforced constraints go first because they can only be simple column references,
-                    //   which are not prone to logic errors such as out-of-bound access, div-by-zero, etc.
-                    // * Conjuncts in non-deterministic expressions and non-TupleDomain-expressible expressions should
-                    //   retain their original (maybe intermixed) order from the input predicate. However, this is not implemented yet.
-                    // * Short of implementing the previous bullet point, the current order of non-deterministic expressions
-                    //   and non-TupleDomain-expressible expressions should be retained. Changing the order can lead
-                    //   to failures of previously successful queries.
-                    Expression resultingPredicate = combineConjuncts(
-                            domainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(assignments::get)),
-                            filterNonDeterministicConjuncts(predicate),
-                            decomposedPredicate.getRemainingExpression());
-
-                    if (!TRUE_LITERAL.equals(resultingPredicate)) {
-                        return new FilterNode(idAllocator.getNextId(), tableScan, castToRowExpression(resultingPredicate));
-                    }
-
-                    return tableScan;
-                })
-                .collect(toImmutableList());
+        return tableScan;
     }
 
     private static class LayoutConstraintEvaluator

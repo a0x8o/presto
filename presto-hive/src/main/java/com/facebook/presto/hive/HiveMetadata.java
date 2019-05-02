@@ -137,7 +137,9 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_CLOSE_ERROR;
 import static com.facebook.presto.hive.HivePartition.UNPARTITIONED_ID;
 import static com.facebook.presto.hive.HivePartitionManager.extractPartitionValues;
+import static com.facebook.presto.hive.HiveSessionProperties.getCompressionCodec;
 import static com.facebook.presto.hive.HiveSessionProperties.getHiveStorageFormat;
+import static com.facebook.presto.hive.HiveSessionProperties.getTemporaryTableCompressionCodec;
 import static com.facebook.presto.hive.HiveSessionProperties.getTemporaryTableSchema;
 import static com.facebook.presto.hive.HiveSessionProperties.getTemporaryTableStorageFormat;
 import static com.facebook.presto.hive.HiveSessionProperties.isBucketExecutionEnabled;
@@ -177,6 +179,7 @@ import static com.facebook.presto.hive.HiveUtil.verifyPartitionTypeSupported;
 import static com.facebook.presto.hive.HiveWriteUtils.checkTableIsWritable;
 import static com.facebook.presto.hive.HiveWriteUtils.initializeSerializer;
 import static com.facebook.presto.hive.HiveWriteUtils.isWritableType;
+import static com.facebook.presto.hive.HiveWriterFactory.getFileExtension;
 import static com.facebook.presto.hive.PartitionUpdate.UpdateMode.APPEND;
 import static com.facebook.presto.hive.PartitionUpdate.UpdateMode.NEW;
 import static com.facebook.presto.hive.PartitionUpdate.UpdateMode.OVERWRITE;
@@ -192,7 +195,7 @@ import static com.facebook.presto.hive.metastore.StorageFormat.VIEW_STORAGE_FORM
 import static com.facebook.presto.hive.metastore.StorageFormat.fromHiveStorageFormat;
 import static com.facebook.presto.hive.metastore.thrift.ThriftMetastoreUtil.listEnabledPrincipals;
 import static com.facebook.presto.hive.security.SqlStandardAccessControl.ADMIN_ROLE_NAME;
-import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
+import static com.facebook.presto.hive.util.ConfigurationUtils.configureCompression;
 import static com.facebook.presto.hive.util.Statistics.ReduceOperator.ADD;
 import static com.facebook.presto.hive.util.Statistics.createComputedStatisticsToPartitionMap;
 import static com.facebook.presto.hive.util.Statistics.createEmptyPartitionStatistics;
@@ -1121,6 +1124,7 @@ public class HiveMetadata
                 locationHandle,
                 tableStorageFormat,
                 partitionStorageFormat,
+                getCompressionCodec(session),
                 partitionedBy,
                 bucketProperty,
                 session.getUser(),
@@ -1170,7 +1174,13 @@ public class HiveMetadata
             partitionUpdates = PartitionUpdate.mergePartitionUpdates(Iterables.concat(partitionUpdates, partitionUpdatesForMissingBuckets));
             for (PartitionUpdate partitionUpdate : partitionUpdatesForMissingBuckets) {
                 Optional<Partition> partition = table.getPartitionColumns().isEmpty() ? Optional.empty() : Optional.of(buildPartitionObject(session, table, partitionUpdate));
-                createEmptyFile(session, partitionUpdate.getWritePath(), table, partition, getTargetFileNames(partitionUpdate.getFileWriteInfos()));
+                createEmptyFile(
+                        session,
+                        partitionUpdate.getWritePath(),
+                        table,
+                        partition,
+                        getTargetFileNames(partitionUpdate.getFileWriteInfos()),
+                        handle.getCompressionCodec());
             }
         }
 
@@ -1234,10 +1244,8 @@ public class HiveMetadata
             int bucketCount = handle.getBucketProperty().get().getBucketCount();
             LocationHandle locationHandle = handle.getLocationHandle();
             List<String> fileNamesForMissingBuckets = computeFileNamesForMissingBuckets(
-                    session,
-                    table,
                     storageFormat,
-                    locationHandle.getTargetPath(),
+                    handle.getCompressionCodec(),
                     handle.getFilePrefix(),
                     bucketCount,
                     ImmutableSet.of());
@@ -1259,10 +1267,8 @@ public class HiveMetadata
             int bucketCount = handle.getBucketProperty().get().getBucketCount();
 
             List<String> fileNamesForMissingBuckets = computeFileNamesForMissingBuckets(
-                    session,
-                    table,
                     storageFormat,
-                    partitionUpdate.getTargetPath(),
+                    handle.getCompressionCodec(),
                     handle.getFilePrefix(),
                     bucketCount,
                     ImmutableSet.copyOf(getTargetFileNames(partitionUpdate.getFileWriteInfos())));
@@ -1282,10 +1288,8 @@ public class HiveMetadata
     }
 
     private List<String> computeFileNamesForMissingBuckets(
-            ConnectorSession session,
-            Table table,
             HiveStorageFormat storageFormat,
-            Path targetPath,
+            HiveCompressionCodec compressionCodec,
             String filePrefix,
             int bucketCount,
             Set<String> existingFileNames)
@@ -1294,9 +1298,7 @@ public class HiveMetadata
             // fast path for common case
             return ImmutableList.of();
         }
-        HdfsContext hdfsContext = new HdfsContext(session, table.getDatabaseName(), table.getTableName());
-        JobConf conf = toJobConf(hdfsEnvironment.getConfiguration(hdfsContext, targetPath));
-        String fileExtension = HiveWriterFactory.getFileExtension(conf, fromHiveStorageFormat(storageFormat));
+        String fileExtension = getFileExtension(fromHiveStorageFormat(storageFormat), compressionCodec);
         ImmutableList.Builder<String> missingFileNamesBuilder = ImmutableList.builder();
         for (int i = 0; i < bucketCount; i++) {
             String targetFileName = HiveWriterFactory.computeBucketedFileName(filePrefix, i) + fileExtension;
@@ -1309,9 +1311,16 @@ public class HiveMetadata
         return missingFileNames;
     }
 
-    private void createEmptyFile(ConnectorSession session, Path path, Table table, Optional<Partition> partition, List<String> fileNames)
+    private void createEmptyFile(
+            ConnectorSession session,
+            Path path,
+            Table table,
+            Optional<Partition> partition,
+            List<String> fileNames,
+            HiveCompressionCodec compressionCodec)
     {
-        JobConf conf = toJobConf(hdfsEnvironment.getConfiguration(new HdfsContext(session, table.getDatabaseName(), table.getTableName()), path));
+        HdfsContext hdfsContext = new HdfsContext(session, table.getDatabaseName(), table.getTableName());
+        JobConf conf = configureCompression(hdfsEnvironment.getConfiguration(hdfsContext, path), compressionCodec);
 
         Properties schema;
         StorageFormat format;
@@ -1371,7 +1380,8 @@ public class HiveMetadata
 
         HiveStorageFormat tableStorageFormat = extractHiveStorageFormat(table.get());
         LocationHandle locationHandle;
-        if (table.get().getTableType().equals(TEMPORARY_TABLE)) {
+        boolean isTemporaryTable = table.get().getTableType().equals(TEMPORARY_TABLE);
+        if (isTemporaryTable) {
             locationHandle = locationService.forTemporaryTable(metastore, session, table.get());
         }
         else {
@@ -1386,7 +1396,8 @@ public class HiveMetadata
                 locationHandle,
                 table.get().getStorage().getBucketProperty(),
                 tableStorageFormat,
-                isRespectTableFormat(session) ? tableStorageFormat : HiveSessionProperties.getHiveStorageFormat(session));
+                isRespectTableFormat(session) ? tableStorageFormat : HiveSessionProperties.getHiveStorageFormat(session),
+                isTemporaryTable ? getTemporaryTableCompressionCodec(session) : getCompressionCodec(session));
 
         WriteInfo writeInfo = locationService.getQueryWriteInfo(locationHandle);
         metastore.declareIntentionToWrite(session, writeInfo.getWriteMode(), writeInfo.getWritePath(), result.getFilePrefix(), tableName);
@@ -1424,7 +1435,13 @@ public class HiveMetadata
             partitionUpdates = PartitionUpdate.mergePartitionUpdates(Iterables.concat(partitionUpdates, partitionUpdatesForMissingBuckets));
             for (PartitionUpdate partitionUpdate : partitionUpdatesForMissingBuckets) {
                 Optional<Partition> partition = table.get().getPartitionColumns().isEmpty() ? Optional.empty() : Optional.of(buildPartitionObject(session, table.get(), partitionUpdate));
-                createEmptyFile(session, partitionUpdate.getWritePath(), table.get(), partition, getTargetFileNames(partitionUpdate.getFileWriteInfos()));
+                createEmptyFile(
+                        session,
+                        partitionUpdate.getWritePath(),
+                        table.get(),
+                        partition,
+                        getTargetFileNames(partitionUpdate.getFileWriteInfos()),
+                        handle.getCompressionCodec());
             }
         }
 
@@ -1725,7 +1742,7 @@ public class HiveMetadata
     }
 
     @Override
-    public boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorTableLayoutHandle tableLayoutHandle)
+    public boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         return true;
     }
@@ -1837,6 +1854,25 @@ public class HiveMetadata
                 smallerBucketCount,
                 leftHandle.getHiveTypes(),
                 maxCompatibleBucketCount));
+    }
+
+    @Override
+    public boolean isRefinedPartitioningOver(ConnectorSession session, ConnectorPartitioningHandle left, ConnectorPartitioningHandle right)
+    {
+        HivePartitioningHandle leftHandle = (HivePartitioningHandle) left;
+        HivePartitioningHandle rightHandle = (HivePartitioningHandle) right;
+
+        if (!leftHandle.getHiveTypes().equals(rightHandle.getHiveTypes())) {
+            return false;
+        }
+
+        int leftBucketCount = leftHandle.getBucketCount();
+        int rightBucketCount = rightHandle.getBucketCount();
+        return leftBucketCount == rightBucketCount || // must be evenly divisible
+                (leftBucketCount % rightBucketCount == 0 &&
+                        // ratio must be power of two
+                        // TODO: this can be relaxed
+                        Integer.bitCount(leftBucketCount / rightBucketCount) == 1);
     }
 
     private static OptionalInt min(OptionalInt left, OptionalInt right)

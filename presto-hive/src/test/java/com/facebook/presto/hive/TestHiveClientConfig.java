@@ -30,6 +30,8 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.hive.HiveCompressionCodec.NONE;
+import static com.facebook.presto.hive.HiveCompressionCodec.SNAPPY;
 import static com.facebook.presto.hive.HiveStorageFormat.DWRF;
 import static com.facebook.presto.hive.HiveStorageFormat.ORC;
 import static com.facebook.presto.hive.TestHiveUtil.nonDefaultTimeZone;
@@ -73,7 +75,7 @@ public class TestHiveClientConfig
                 .setS3FileSystemType(S3FileSystemType.PRESTO)
                 .setResourceConfigFiles("")
                 .setHiveStorageFormat(ORC)
-                .setHiveCompressionCodec(HiveCompressionCodec.GZIP)
+                .setCompressionCodec(HiveCompressionCodec.GZIP)
                 .setRespectTableFormat(true)
                 .setImmutablePartitions(false)
                 .setSortedWritingEnabled(true)
@@ -125,6 +127,7 @@ public class TestHiveClientConfig
                 .setWritingStagingFilesEnabled(false)
                 .setTemporaryTableSchema("default")
                 .setTemporaryTableStorageFormat(ORC)
+                .setTemporaryTableCompressionCodec(SNAPPY)
                 .setUseRewindableSplitSource(false));
     }
 
@@ -216,6 +219,7 @@ public class TestHiveClientConfig
                 .put("hive.writing-staging-files-enabled", "true")
                 .put("hive.temporary-table-schema", "other")
                 .put("hive.temporary-table-storage-format", "DWRF")
+                .put("hive.temporary-table-compression-codec", "NONE")
                 .put("hive.use-rewindable-split-source", "true")
                 .build();
 
@@ -251,7 +255,7 @@ public class TestHiveClientConfig
                 .setVerifyChecksum(false)
                 .setResourceConfigFiles(ImmutableList.of("/foo.xml", "/bar.xml"))
                 .setHiveStorageFormat(HiveStorageFormat.SEQUENCEFILE)
-                .setHiveCompressionCodec(HiveCompressionCodec.NONE)
+                .setCompressionCodec(HiveCompressionCodec.NONE)
                 .setRespectTableFormat(false)
                 .setImmutablePartitions(true)
                 .setMaxPartitionsPerWriter(222)
@@ -305,6 +309,7 @@ public class TestHiveClientConfig
                 .setWritingStagingFilesEnabled(true)
                 .setTemporaryTableSchema("other")
                 .setTemporaryTableStorageFormat(DWRF)
+                .setTemporaryTableCompressionCodec(NONE)
                 .setUseRewindableSplitSource(true);
 
         ConfigAssertions.assertFullMapping(properties, expected);

@@ -63,7 +63,6 @@ import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.FunctionCall;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -323,7 +322,7 @@ public class PruneUnreferencedOutputs
             Map<Symbol, ColumnHandle> newAssignments = newOutputSymbols.stream()
                     .collect(Collectors.toMap(Function.identity(), node.getAssignments()::get));
 
-            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), node.getLayout(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
+            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
         }
 
         @Override
@@ -389,9 +388,7 @@ public class PruneUnreferencedOutputs
                 WindowNode.Function function = entry.getValue();
 
                 if (context.get().contains(symbol)) {
-                    FunctionCall call = function.getFunctionCall();
-                    expectedInputs.addAll(SymbolsExtractor.extractUnique(call));
-
+                    expectedInputs.addAll(WindowNodeUtil.extractWindowFunctionUnique(function));
                     functionsBuilder.put(symbol, entry.getValue());
                 }
             }
@@ -429,7 +426,6 @@ public class PruneUnreferencedOutputs
                     node.getTable(),
                     newOutputs,
                     newAssignments,
-                    node.getLayout(),
                     node.getCurrentConstraint(),
                     node.getEnforcedConstraint());
         }

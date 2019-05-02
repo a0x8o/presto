@@ -90,7 +90,7 @@ public class HiveClientConfig
     private S3FileSystemType s3FileSystemType = S3FileSystemType.PRESTO;
 
     private HiveStorageFormat hiveStorageFormat = ORC;
-    private HiveCompressionCodec hiveCompressionCodec = HiveCompressionCodec.GZIP;
+    private HiveCompressionCodec compressionCodec = HiveCompressionCodec.GZIP;
     private boolean respectTableFormat = true;
     private boolean immutablePartitions;
     private int maxPartitionsPerWriter = 100;
@@ -157,6 +157,7 @@ public class HiveClientConfig
     private boolean writingStagingFilesEnabled;
     private String temporaryTableSchema = "default";
     private HiveStorageFormat temporaryTableStorageFormat = ORC;
+    private HiveCompressionCodec temporaryTableCompressionCodec = HiveCompressionCodec.SNAPPY;
     private boolean useRewindableSplitSource;
 
     public int getMaxInitialSplits()
@@ -569,15 +570,15 @@ public class HiveClientConfig
         return this;
     }
 
-    public HiveCompressionCodec getHiveCompressionCodec()
+    public HiveCompressionCodec getCompressionCodec()
     {
-        return hiveCompressionCodec;
+        return compressionCodec;
     }
 
     @Config("hive.compression-codec")
-    public HiveClientConfig setHiveCompressionCodec(HiveCompressionCodec hiveCompressionCodec)
+    public HiveClientConfig setCompressionCodec(HiveCompressionCodec compressionCodec)
     {
-        this.hiveCompressionCodec = hiveCompressionCodec;
+        this.compressionCodec = compressionCodec;
         return this;
     }
 
@@ -930,11 +931,13 @@ public class HiveClientConfig
         return this;
     }
 
+    @Deprecated
     public boolean isOptimizeMismatchedBucketCount()
     {
         return optimizeMismatchedBucketCount;
     }
 
+    @Deprecated
     @Config("hive.optimize-mismatched-bucket-count")
     public HiveClientConfig setOptimizeMismatchedBucketCount(boolean optimizeMismatchedBucketCount)
     {
@@ -1291,6 +1294,19 @@ public class HiveClientConfig
     public HiveClientConfig setTemporaryTableStorageFormat(HiveStorageFormat temporaryTableStorageFormat)
     {
         this.temporaryTableStorageFormat = temporaryTableStorageFormat;
+        return this;
+    }
+
+    @NotNull
+    public HiveCompressionCodec getTemporaryTableCompressionCodec()
+    {
+        return temporaryTableCompressionCodec;
+    }
+
+    @Config("hive.temporary-table-compression-codec")
+    public HiveClientConfig setTemporaryTableCompressionCodec(HiveCompressionCodec temporaryTableCompressionCodec)
+    {
+        this.temporaryTableCompressionCodec = temporaryTableCompressionCodec;
         return this;
     }
 

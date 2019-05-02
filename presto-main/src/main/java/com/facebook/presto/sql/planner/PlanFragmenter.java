@@ -25,9 +25,7 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.NewTableLayout;
 import com.facebook.presto.metadata.PartitioningMetadata;
 import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.metadata.TableLayout;
 import com.facebook.presto.metadata.TableLayout.TablePartitioning;
-import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.metadata.TableLayoutResult;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnHandle;
@@ -364,12 +362,10 @@ public class PlanFragmenter
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<FragmentProperties> context)
         {
-            PartitioningHandle partitioning = node.getLayout()
-                    .map(layout -> metadata.getLayout(session, layout))
-                    .flatMap(TableLayout::getTablePartitioning)
+            PartitioningHandle partitioning = metadata.getLayout(session, node.getTable())
+                    .getTablePartitioning()
                     .map(TablePartitioning::getPartitioningHandle)
                     .orElse(SOURCE_DISTRIBUTION);
-
             context.get().addSourceDistribution(node.getId(), partitioning, metadata, session);
             return context.defaultRewrite(node, context.get());
         }
@@ -537,9 +533,7 @@ public class PlanFragmenter
                     .map(columnHandles::get)
                     .collect(toImmutableSet());
 
-            List<TableLayoutResult> layouts = metadata.getLayouts(session, tableHandle, Constraint.alwaysTrue(), Optional.of(outputColumnHandles));
-            checkArgument(layouts.size() == 1, "temporary table is expected to have exactly one layout");
-            TableLayoutResult selectedLayout = getOnlyElement(layouts);
+            TableLayoutResult selectedLayout = metadata.getLayout(session, tableHandle, Constraint.alwaysTrue(), Optional.of(outputColumnHandles));
             verify(selectedLayout.getUnenforcedConstraint().equals(TupleDomain.all()), "temporary table layout shouldn't enforce any constraints");
             verify(!selectedLayout.getLayout().getColumns().isPresent(), "temporary table layout must provide all the columns");
             TablePartitioning expectedPartitioning = new TablePartitioning(
@@ -549,16 +543,14 @@ public class PlanFragmenter
                             .collect(toImmutableList()));
             verify(selectedLayout.getLayout().getTablePartitioning().equals(Optional.of(expectedPartitioning)), "invalid temporary table partitioning");
 
-            TableLayoutHandle layoutHandle = selectedLayout.getLayout().getHandle();
             Map<Symbol, ColumnHandle> assignments = outputSymbols.stream()
                     .collect(toImmutableMap(identity(), symbol -> columnHandles.get(outputColumns.get(symbol).getName())));
 
             return new TableScanNode(
                     idAllocator.getNextId(),
-                    tableHandle,
+                    selectedLayout.getLayout().getNewTableHandle(),
                     outputSymbols,
                     assignments,
-                    Optional.of(layoutHandle),
                     TupleDomain.all(),
                     TupleDomain.all(),
                     true);
@@ -744,6 +736,10 @@ public class PlanFragmenter
             Optional<PartitioningHandle> commonPartitioning = metadata.getCommonPartitioning(session, currentPartitioning, distribution);
             if (commonPartitioning.isPresent()) {
                 partitioningHandle = commonPartitioning;
+                return this;
+            }
+
+            if (metadata.isRefinedPartitioningOver(session, distribution, currentPartitioning)) {
                 return this;
             }
 
@@ -952,7 +948,7 @@ public class PlanFragmenter
         @Override
         public GroupedExecutionProperties visitTableScan(TableScanNode node, Void context)
         {
-            Optional<TablePartitioning> tablePartitioning = metadata.getLayout(session, node.getLayout().get()).getTablePartitioning();
+            Optional<TablePartitioning> tablePartitioning = metadata.getLayout(session, node.getTable()).getTablePartitioning();
             if (!tablePartitioning.isPresent()) {
                 return GroupedExecutionProperties.notCapable();
             }
@@ -1057,23 +1053,22 @@ public class PlanFragmenter
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<Void> context)
         {
-            PartitioningHandle partitioning = node.getLayout()
-                    .map(layout -> metadata.getLayout(session, layout))
-                    .flatMap(TableLayout::getTablePartitioning)
+            PartitioningHandle partitioning = metadata.getLayout(session, node.getTable())
+                    .getTablePartitioning()
                     .map(TablePartitioning::getPartitioningHandle)
                     .orElse(SOURCE_DISTRIBUTION);
+
             if (partitioning.equals(fragmentPartitioningHandle)) {
                 // do nothing if the current scan node's partitioning matches the fragment's
                 return node;
             }
 
-            TableLayoutHandle newTableLayoutHandle = metadata.getAlternativeLayoutHandle(session, node.getLayout().get(), fragmentPartitioningHandle);
+            TableHandle newTableHandle = metadata.getAlternativeTableHandle(session, node.getTable(), fragmentPartitioningHandle);
             return new TableScanNode(
                     node.getId(),
-                    node.getTable(),
+                    newTableHandle,
                     node.getOutputSymbols(),
                     node.getAssignments(),
-                    Optional.of(newTableLayoutHandle),
                     node.getCurrentConstraint(),
                     node.getEnforcedConstraint(),
                     node.isTemporaryTable());
