@@ -77,13 +77,8 @@ public class DetermineJoinDistributionType
         return Result.ofPlanNode(getSyntacticOrderJoin(joinNode, context, joinDistributionType));
     }
 
-    public static boolean canReplicate(JoinNode joinNode, Context context)
+    public static boolean isBelowMaxBroadcastSize(JoinNode joinNode, Context context)
     {
-        JoinDistributionType joinDistributionType = getJoinDistributionType(context.getSession());
-        if (!joinDistributionType.canReplicate()) {
-            return false;
-        }
-
         Optional<DataSize> joinMaxBroadcastTableSize = getJoinMaxBroadcastTableSize(context.getSession());
         if (!joinMaxBroadcastTableSize.isPresent()) {
             return true;
@@ -113,10 +108,11 @@ public class DetermineJoinDistributionType
 
     private void addJoinsWithDifferentDistributions(JoinNode joinNode, List<PlanNodeWithCost> possibleJoinNodes, Context context)
     {
-        if (!mustPartition(joinNode) && canReplicate(joinNode, context)) {
+        if (!mustPartition(joinNode) && isBelowMaxBroadcastSize(joinNode, context)) {
             possibleJoinNodes.add(getJoinNodeWithCost(context, joinNode.withDistributionType(REPLICATED)));
         }
-        if (!mustReplicate(joinNode, context)) {
+        // don't consider partitioned inequality joins because they execute on a single node.
+        if (!mustReplicate(joinNode, context) && !joinNode.getCriteria().isEmpty()) {
             possibleJoinNodes.add(getJoinNodeWithCost(context, joinNode.withDistributionType(PARTITIONED)));
         }
     }

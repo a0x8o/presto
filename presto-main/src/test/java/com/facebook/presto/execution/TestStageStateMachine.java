@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.scheduler.SplitSchedulerStats;
 import com.facebook.presto.operator.StageExecutionDescriptor;
+import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanFragment;
@@ -42,13 +43,12 @@ import static com.facebook.presto.sql.relational.Expressions.constant;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
 public class TestStageStateMachine
 {
-    private static final StageId STAGE_ID = new StageId("query", 0);
+    private static final StageId STAGE_ID = new StageId(new QueryId("query"), 0);
     private static final URI LOCATION = URI.create("fake://fake-stage");
     private static final PlanFragment PLAN_FRAGMENT = createValuesPlan();
     private static final SQLException FAILED_CAUSE = new SQLException("FAILED");
@@ -299,18 +299,18 @@ public class TestStageStateMachine
         assertEquals(stageInfo.getSubStages(), ImmutableList.of());
         assertEquals(stageInfo.getTasks(), ImmutableList.of());
         assertEquals(stageInfo.getTypes(), ImmutableList.of(VARCHAR));
-        assertSame(stageInfo.getPlan(), PLAN_FRAGMENT);
+        assertSame(stageInfo.getPlan().get(), PLAN_FRAGMENT);
 
         assertEquals(stateMachine.getState(), expectedState);
         assertEquals(stageInfo.getState(), expectedState);
 
         if (expectedState == StageState.FAILED) {
-            ExecutionFailureInfo failure = stageInfo.getFailureCause();
+            ExecutionFailureInfo failure = stageInfo.getFailureCause().get();
             assertEquals(failure.getMessage(), FAILED_CAUSE.getMessage());
             assertEquals(failure.getType(), FAILED_CAUSE.getClass().getName());
         }
         else {
-            assertNull(stageInfo.getFailureCause());
+            assertFalse(stageInfo.getFailureCause().isPresent());
         }
     }
 

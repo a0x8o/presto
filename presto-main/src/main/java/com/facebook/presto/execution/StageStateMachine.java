@@ -219,7 +219,7 @@ public class StageStateMachine
         requireNonNull(finalTaskInfos, "finalTaskInfos is null");
         checkState(stageState.get().isDone());
         StageInfo stageInfo = getStageInfo(() -> finalTaskInfos);
-        checkArgument(stageInfo.isCompleteInfo(), "finalTaskInfos are not all done");
+        checkArgument(stageInfo.isFinalStageInfo(), "finalTaskInfos are not all done");
         finalStageInfo.compareAndSet(Optional.empty(), Optional.of(stageInfo));
     }
 
@@ -494,14 +494,14 @@ public class StageStateMachine
 
                 ImmutableList.copyOf(operatorToStats.values()));
 
-        ExecutionFailureInfo failureInfo = null;
+        Optional<ExecutionFailureInfo> failureInfo = Optional.empty();
         if (state == FAILED) {
-            failureInfo = failureCause.get();
+            failureInfo = Optional.of(failureCause.get());
         }
         return new StageInfo(stageId,
                 state,
                 location,
-                fragment,
+                Optional.of(fragment),
                 fragment.getTypes(),
                 stageStats,
                 taskInfos,

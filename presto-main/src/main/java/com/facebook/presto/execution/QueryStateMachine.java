@@ -370,7 +370,7 @@ public class QueryStateMachine
             }
         }
 
-        boolean completeInfo = getAllStages(rootStage).stream().allMatch(StageInfo::isCompleteInfo);
+        boolean completeInfo = getAllStages(rootStage).stream().allMatch(StageInfo::isFinalStageInfo);
         boolean isScheduled = isScheduled(rootStage);
 
         return new QueryInfo(
@@ -466,8 +466,8 @@ public class QueryStateMachine
                 blockedReasons.addAll(stageStats.getBlockedReasons());
             }
 
-            PlanFragment plan = stageInfo.getPlan();
-            if (plan != null && plan.getPartitionedSourceNodes().stream().anyMatch(TableScanNode.class::isInstance)) {
+            Optional<PlanFragment> plan = stageInfo.getPlan();
+            if (plan.isPresent() && plan.get().getPartitionedSourceNodes().stream().anyMatch(TableScanNode.class::isInstance)) {
                 rawInputDataSize += stageStats.getRawInputDataSize().toBytes();
                 rawInputPositions += stageStats.getRawInputPositions();
 
@@ -479,7 +479,7 @@ public class QueryStateMachine
 
             stageGcStatistics.add(stageStats.getGcInfo());
 
-            completeInfo = completeInfo && stageInfo.isCompleteInfo();
+            completeInfo = completeInfo && stageInfo.isFinalStageInfo();
             operatorStatsSummary.addAll(stageInfo.getStageStats().getOperatorSummaries());
         }
 
@@ -922,7 +922,7 @@ public class QueryStateMachine
                 outputStage.getStageId(),
                 outputStage.getState(),
                 outputStage.getSelf(),
-                null, // Remove the plan
+                Optional.empty(), // Remove the plan
                 outputStage.getTypes(),
                 outputStage.getStageStats(),
                 ImmutableList.of(), // Remove the tasks
