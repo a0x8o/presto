@@ -27,11 +27,13 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode.DistributionType;
 import com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause;
 import com.facebook.presto.sql.planner.plan.PlanNode;
+import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -72,6 +74,7 @@ import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.PAR
 import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.REPLICATED;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.EQUAL;
@@ -97,7 +100,7 @@ public class ReorderJoins
     private static final Pattern<JoinNode> PATTERN = join().matching(
             joinNode -> !joinNode.getDistributionType().isPresent()
                     && joinNode.getType() == INNER
-                    && isDeterministic(joinNode.getFilter().orElse(TRUE_LITERAL)));
+                    && isDeterministic(joinNode.getFilter().map(OriginalExpressionUtils::castToExpression).orElse(TRUE_LITERAL)));
 
     private final CostComparator costComparator;
 
@@ -297,7 +300,7 @@ public class ReorderJoins
                     right,
                     joinConditions,
                     sortedOutputSymbols,
-                    joinFilters.isEmpty() ? Optional.empty() : Optional.of(and(joinFilters)),
+                    joinFilters.isEmpty() ? Optional.empty() : Optional.of(castToRowExpression(and(joinFilters))),
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty()));
@@ -515,7 +518,7 @@ public class ReorderJoins
                 }
 
                 JoinNode joinNode = (JoinNode) resolved;
-                if (joinNode.getType() != INNER || !isDeterministic(joinNode.getFilter().orElse(TRUE_LITERAL)) || joinNode.getDistributionType().isPresent()) {
+                if (joinNode.getType() != INNER || !isDeterministic(joinNode.getFilter().map(OriginalExpressionUtils::castToExpression).orElse(TRUE_LITERAL)) || joinNode.getDistributionType().isPresent()) {
                     sources.add(node);
                     return;
                 }
@@ -524,9 +527,9 @@ public class ReorderJoins
                 flattenNode(joinNode.getLeft(), limit - 1);
                 flattenNode(joinNode.getRight(), limit);
                 joinNode.getCriteria().stream()
-                        .map(EquiJoinClause::toExpression)
+                        .map(JoinNodeUtils::toExpression)
                         .forEach(filters::add);
-                joinNode.getFilter().ifPresent(filters::add);
+                joinNode.getFilter().ifPresent(filter -> filters.add(castToExpression(filter)));
             }
 
             MultiJoinNode toMultiJoinNode()

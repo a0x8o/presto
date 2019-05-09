@@ -34,6 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static com.facebook.presto.execution.buffer.TestingPagesSerdeFactory.testingPagesSerde;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
@@ -49,6 +50,7 @@ import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -316,9 +318,7 @@ public class TestExchangeClient
 
         // close client while pages are still available
         exchangeClient.close();
-        while (!exchangeClient.isFinished()) {
-            MILLISECONDS.sleep(10);
-        }
+        waitUntilEquals(exchangeClient::isFinished, true, new Duration(5, SECONDS));
         assertEquals(exchangeClient.isClosed(), true);
         assertNull(exchangeClient.pollPage());
         assertEquals(exchangeClient.getStatus().getBufferedPages(), 0);
@@ -358,22 +358,23 @@ public class TestExchangeClient
         exchangeClient.addLocation(location1, taskId1);
         exchangeClient.addLocation(location2, taskId2);
 
-        // fetch a page
         assertEquals(exchangeClient.isClosed(), false);
-        assertPageEquals(getNextPage(exchangeClient), createPage(1));
 
-        // remove remote source while pages are still available
+        // Wait until exactly one page is buffered:
+        //  * We cannot call ExchangeClient#pollPage() directly, since it will schedule the next request to buffer data,
+        //    and this request to buffer data could win the race against the request to remove remote source.
+        //  * Buffer capacity is set to 1 byte, so only one page can be buffered.
+        waitUntilEquals(() -> exchangeClient.getStatus().getBufferedPages(), 1, new Duration(5, SECONDS));
+        assertEquals(exchangeClient.getStatus().getBufferedPages(), 1);
+
+        // remove remote source
         exchangeClient.removeRemoteSource(taskId1);
 
-        SerializedPage nextPage = exchangeClient.pollPage();
-        if (nextPage != null) {
-            // After the first page get polled, it is possible for the second page get buffered
-            // before remote source get removed.
-            assertPageEquals(nextPage, createPage(2));
-            // Buffer capacity is set to 1 byte, so the third page cannot be buffered.
-            // Client should not receive any further pages from removed remote source.
-            assertNull(exchangeClient.pollPage());
-        }
+        // the previously buffered page will still be read out
+        assertPageEquals(getNextPage(exchangeClient), createPage(1));
+
+        // client should not receive any further pages from removed remote source
+        assertNull(exchangeClient.pollPage());
         assertEquals(exchangeClient.getStatus().getBufferedPages(), 0);
 
         // add pages to another source
@@ -450,5 +451,22 @@ public class TestExchangeClient
         assertEquals(clientStatus.getRequestsScheduled(), requestsScheduled, "requestsScheduled");
         assertEquals(clientStatus.getRequestsCompleted(), requestsCompleted, "requestsCompleted");
         assertEquals(clientStatus.getHttpRequestState(), httpRequestState, "httpRequestState");
+    }
+
+    private <T> void waitUntilEquals(Supplier<T> actualSupplier, T expected, Duration timeout)
+    {
+        long nanoUntil = System.nanoTime() + timeout.toMillis() * 1_000_000;
+        while (System.nanoTime() - nanoUntil < 0) {
+            if (expected.equals(actualSupplier.get())) {
+                return;
+            }
+            try {
+                Thread.sleep(10);
+            }
+            catch (InterruptedException e) {
+                // do nothing
+            }
+        }
+        assertEquals(actualSupplier.get(), expected);
     }
 }

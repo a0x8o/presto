@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
@@ -31,6 +32,7 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -228,7 +230,7 @@ public class EffectivePredicateExtractor
             Expression rightPredicate = node.getRight().accept(this, context);
 
             List<Expression> joinConjuncts = node.getCriteria().stream()
-                    .map(JoinNode.EquiJoinClause::toExpression)
+                    .map(JoinNodeUtils::toExpression)
                     .collect(toImmutableList());
 
             switch (node.getType()) {
@@ -237,7 +239,7 @@ public class EffectivePredicateExtractor
                             .add(leftPredicate)
                             .add(rightPredicate)
                             .add(combineConjuncts(joinConjuncts))
-                            .add(node.getFilter().orElse(TRUE_LITERAL))
+                            .add(node.getFilter().map(OriginalExpressionUtils::castToExpression).orElse(TRUE_LITERAL))
                             .build()), node.getOutputSymbols());
                 case LEFT:
                     return combineConjuncts(ImmutableList.<Expression>builder()

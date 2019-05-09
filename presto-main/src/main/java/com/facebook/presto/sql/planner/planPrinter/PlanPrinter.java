@@ -44,6 +44,7 @@ import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
+import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
@@ -361,11 +362,11 @@ public class PlanPrinter
         @Override
         public Void visitJoin(JoinNode node, Void context)
         {
-            List<Expression> joinExpressions = new ArrayList<>();
+            List<String> joinExpressions = new ArrayList<>();
             for (JoinNode.EquiJoinClause clause : node.getCriteria()) {
-                joinExpressions.add(clause.toExpression());
+                joinExpressions.add(JoinNodeUtils.toExpression(clause).toString());
             }
-            node.getFilter().ifPresent(joinExpressions::add);
+            node.getFilter().map(formatter::formatRowExpression).ifPresent(joinExpressions::add);
 
             NodeRepresentation nodeOutput;
             if (node.isCrossJoin()) {
@@ -379,7 +380,8 @@ public class PlanPrinter
             }
 
             node.getDistributionType().ifPresent(distributionType -> nodeOutput.appendDetails("Distribution: %s", distributionType));
-            node.getSortExpressionContext().ifPresent(sortContext -> nodeOutput.appendDetails("SortExpression[%s]", sortContext.getSortExpression()));
+            node.getSortExpressionContext(functionManager)
+                    .ifPresent(sortContext -> nodeOutput.appendDetails("SortExpression[%s]", formatter.formatRowExpression(sortContext.getSortExpression())));
             node.getLeft().accept(this, context);
             node.getRight().accept(this, context);
 
