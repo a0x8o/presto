@@ -34,9 +34,11 @@ import com.facebook.presto.spi.predicate.Utils;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.DeterminismEvaluator;
 import com.facebook.presto.spi.relation.DomainTranslator;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
+import com.facebook.presto.spi.relation.LogicalRowExpressions;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.RowExpressionVisitor;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
@@ -67,6 +69,10 @@ import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.spi.relation.LogicalRowExpressions.FALSE;
+import static com.facebook.presto.spi.relation.LogicalRowExpressions.TRUE;
+import static com.facebook.presto.spi.relation.LogicalRowExpressions.and;
+import static com.facebook.presto.spi.relation.LogicalRowExpressions.or;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.AND;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IN;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
@@ -75,10 +81,6 @@ import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.planner.LiteralEncoder.toRowExpression;
 import static com.facebook.presto.sql.relational.Expressions.call;
-import static com.facebook.presto.sql.relational.LogicalRowExpressions.FALSE;
-import static com.facebook.presto.sql.relational.LogicalRowExpressions.TRUE;
-import static com.facebook.presto.sql.relational.LogicalRowExpressions.and;
-import static com.facebook.presto.sql.relational.LogicalRowExpressions.or;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -102,7 +104,7 @@ public final class RowExpressionDomainTranslator
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.functionManager = metadata.getFunctionManager();
-        this.logicalRowExpressions = new LogicalRowExpressions(functionManager);
+        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager));
         this.functionResolution = new FunctionResolution(functionManager);
     }
 
@@ -308,8 +310,8 @@ public final class RowExpressionDomainTranslator
             this.metadata = metadata;
             this.session = session;
             this.functionManager = metadata.getFunctionManager();
-            this.logicalRowExpressions = new LogicalRowExpressions(functionManager);
-            this.determinismEvaluator = new DeterminismEvaluator(functionManager);
+            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager));
+            this.determinismEvaluator = new RowExpressionDeterminismEvaluator(functionManager);
             this.resolution = new FunctionResolution(functionManager);
             this.columnExtractor = requireNonNull(columnExtractor, "columnExtractor is null");
         }

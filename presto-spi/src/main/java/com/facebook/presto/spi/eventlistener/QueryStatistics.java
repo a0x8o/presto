@@ -35,8 +35,9 @@ public class QueryStatistics
     private final long totalRows;
     private final long outputBytes;
     private final long outputRows;
-    private final long writtenBytes;
-    private final long writtenRows;
+    private final long writtenOutputBytes;
+    private final long writtenOutputRows;
+    private final long writtenIntermediateBytes;
 
     private final double cumulativeMemory;
 
@@ -62,8 +63,9 @@ public class QueryStatistics
             long totalRows,
             long outputBytes,
             long outputRows,
-            long writtenBytes,
-            long writtenRows,
+            long writtenOutputBytes,
+            long writtenOutputRows,
+            long writtenIntermediateBytes,
             double cumulativeMemory,
             List<StageGcStatistics> stageGcStatistics,
             int completedSplits,
@@ -83,8 +85,9 @@ public class QueryStatistics
         this.totalRows = totalRows;
         this.outputBytes = outputBytes;
         this.outputRows = outputRows;
-        this.writtenBytes = writtenBytes;
-        this.writtenRows = writtenRows;
+        this.writtenOutputBytes = writtenOutputBytes;
+        this.writtenOutputRows = writtenOutputRows;
+        this.writtenIntermediateBytes = writtenIntermediateBytes;
         this.cumulativeMemory = cumulativeMemory;
         this.stageGcStatistics = requireNonNull(stageGcStatistics, "stageGcStatistics is null");
         this.completedSplits = completedSplits;
@@ -153,14 +156,19 @@ public class QueryStatistics
         return outputRows;
     }
 
-    public long getWrittenBytes()
+    public long getWrittenOutputBytes()
     {
-        return writtenBytes;
+        return writtenOutputBytes;
     }
 
-    public long getWrittenRows()
+    public long getWrittenOutputRows()
     {
-        return writtenRows;
+        return writtenOutputRows;
+    }
+
+    public long getWrittenIntermediateBytes()
+    {
+        return writtenIntermediateBytes;
     }
 
     public double getCumulativeMemory()

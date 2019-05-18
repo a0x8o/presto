@@ -82,8 +82,10 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractUnique;
 import static com.facebook.presto.sql.planner.optimizations.QueryCardinalityUtil.isScalar;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.concat;
@@ -261,8 +263,15 @@ public class PruneUnreferencedOutputs
         @Override
         public PlanNode visitSpatialJoin(SpatialJoinNode node, RewriteContext<Set<Symbol>> context)
         {
+            Set<Symbol> filterSymbols;
+            if (isExpression(node.getFilter())) {
+                filterSymbols = SymbolsExtractor.extractUnique(castToExpression(node.getFilter()));
+            }
+            else {
+                filterSymbols = SymbolsExtractor.extractUnique(node.getFilter());
+            }
             Set<Symbol> requiredInputs = ImmutableSet.<Symbol>builder()
-                    .addAll(SymbolsExtractor.extractUnique(node.getFilter()))
+                    .addAll(filterSymbols)
                     .addAll(context.get())
                     .build();
 
@@ -340,7 +349,7 @@ public class PruneUnreferencedOutputs
 
                 if (context.get().contains(symbol)) {
                     Aggregation aggregation = entry.getValue();
-                    expectedInputs.addAll(SymbolsExtractor.extractUnique(aggregation.getCall()));
+                    expectedInputs.addAll(extractUnique(aggregation));
                     aggregation.getMask().ifPresent(expectedInputs::add);
                     aggregations.put(symbol, aggregation);
                 }
@@ -636,7 +645,7 @@ public class PruneUnreferencedOutputs
             if (node.getStatisticsAggregation().isPresent()) {
                 StatisticAggregations aggregations = node.getStatisticsAggregation().get();
                 expectedInputs.addAll(aggregations.getGroupingSymbols());
-                aggregations.getAggregations().values().forEach(aggregation -> expectedInputs.addAll(SymbolsExtractor.extractUnique(aggregation.getCall())));
+                aggregations.getAggregations().values().forEach(aggregation -> expectedInputs.addAll(extractUnique(aggregation)));
             }
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
             return new TableWriterNode(

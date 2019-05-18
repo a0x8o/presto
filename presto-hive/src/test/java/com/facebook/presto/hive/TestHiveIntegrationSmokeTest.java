@@ -34,6 +34,10 @@ import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
+import com.facebook.presto.sql.planner.plan.RowNumberNode;
+import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
+import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.planner.planPrinter.IOPlanPrinter.ColumnConstraint;
 import com.facebook.presto.sql.planner.planPrinter.IOPlanPrinter.FormattedDomain;
 import com.facebook.presto.sql.planner.planPrinter.IOPlanPrinter.FormattedMarker;
@@ -80,7 +84,6 @@ import static com.facebook.presto.hive.HiveQueryRunner.createMaterializeExchange
 import static com.facebook.presto.hive.HiveQueryRunner.createQueryRunner;
 import static com.facebook.presto.hive.HiveQueryRunner.createRewindableSplitSourceSession;
 import static com.facebook.presto.hive.HiveSessionProperties.RCFILE_OPTIMIZED_WRITER_ENABLED;
-import static com.facebook.presto.hive.HiveSessionProperties.WRITING_STAGING_FILES_ENABLED;
 import static com.facebook.presto.hive.HiveSessionProperties.getInsertExistingPartitionsBehavior;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
@@ -2632,6 +2635,13 @@ public class TestHiveIntegrationSmokeTest
         assertQuery(materializeExchangesSession, "SELECT distinct orderkey FROM lineitem", assertRemoteMaterializedExchangesCount(1));
         // more complex aggregation
         assertQuery(materializeExchangesSession, "SELECT custkey, orderstatus, COUNT(DISTINCT orderkey) FROM orders GROUP BY custkey, orderstatus", assertRemoteMaterializedExchangesCount(2));
+        // mark distinct
+        assertQuery(
+                materializeExchangesSession,
+                "SELECT custkey, COUNT(DISTINCT orderstatus), COUNT(DISTINCT orderkey) FROM orders GROUP BY custkey",
+                assertRemoteMaterializedExchangesCount(3)
+                        // make sure that the count distinct has been planned as a MarkDistinctNode
+                        .andThen(plan -> assertTrue(searchFrom(plan.getRoot()).where(node -> node instanceof MarkDistinctNode).matches())));
 
         // join
         assertQuery(materializeExchangesSession, "SELECT * FROM (lineitem JOIN orders ON lineitem.orderkey = orders.orderkey) x", assertRemoteMaterializedExchangesCount(2));
@@ -2719,6 +2729,29 @@ public class TestHiveIntegrationSmokeTest
             assertUpdate("DROP TABLE IF EXISTS test_bucketed_lineitem1");
             assertUpdate("DROP TABLE IF EXISTS test_bucketed_lineitem2");
         }
+
+        // Window functions
+        assertQuery(
+                materializeExchangesSession,
+                "SELECT sum(rn) FROM (SELECT row_number() OVER(PARTITION BY orderkey ORDER BY linenumber) as rn FROM lineitem) WHERE rn > 5",
+                "SELECT 41137",
+                assertRemoteMaterializedExchangesCount(1)
+                        // make sure that the window function has been planned as a WindowNode
+                        .andThen(plan -> assertTrue(searchFrom(plan.getRoot()).where(node -> node instanceof WindowNode).matches())));
+        assertQuery(
+                materializeExchangesSession,
+                "SELECT sum(rn) FROM (SELECT row_number() OVER(PARTITION BY orderkey) as rn FROM lineitem)",
+                "SELECT 180782",
+                assertRemoteMaterializedExchangesCount(1)
+                        // make sure that the window function has been planned as a RowNumberNode
+                        .andThen(plan -> assertTrue(searchFrom(plan.getRoot()).where(node -> node instanceof RowNumberNode).matches())));
+        assertQuery(
+                materializeExchangesSession,
+                "SELECT sum(rn) FROM (SELECT row_number() OVER(PARTITION BY orderkey ORDER BY linenumber) as rn FROM lineitem) WHERE rn < 5",
+                "SELECT 107455",
+                assertRemoteMaterializedExchangesCount(1)
+                        // make sure that the window function has been planned as a TopNRowNumberNode
+                        .andThen(plan -> assertTrue(searchFrom(plan.getRoot()).where(node -> node instanceof TopNRowNumberNode).matches())));
     }
 
     public static Consumer<Plan> assertRemoteMaterializedExchangesCount(int expectedRemoteExchangesCount)
@@ -3280,71 +3313,6 @@ public class TestHiveIntegrationSmokeTest
                         formattedPlan));
             }
         };
-    }
-
-    @Test
-    public void testInsertAndCreateTableWithWritingStagingFileEnabled()
-    {
-        try {
-            Session session = Session.builder(getSession())
-                    .setCatalogSessionProperty(catalog, WRITING_STAGING_FILES_ENABLED, "true")
-                    .build();
-
-            // Test CREATE TABLE AS
-            assertUpdate(
-                    session,
-                    "CREATE TABLE test_write_staging_files_for_create_unbucketed_table_as\n" +
-                            "WITH (partitioned_by = ARRAY['partition_key']) AS\n" +
-                            "SELECT comment value, orderstatus partition_key FROM orders",
-                    15000);
-            assertQuery("SELECT value, partition_key FROM test_write_staging_files_for_create_unbucketed_table_as",
-                    "SELECT comment value, orderstatus partition_key FROM orders");
-
-            assertUpdate(
-                    session,
-                    "CREATE TABLE test_write_staging_files_for_create_bucketed_table_as\n" +
-                            "WITH (partitioned_by = ARRAY['partition_key'], bucket_count = 13, bucketed_by = ARRAY['bucket_key']) AS\n" +
-                            "SELECT custkey bucket_key, comment value, orderstatus partition_key FROM orders",
-                    15000);
-            assertQuery("SELECT bucket_key, value, partition_key FROM test_write_staging_files_for_create_bucketed_table_as",
-                    "SELECT custkey bucket_key, comment value, orderstatus partition_key FROM orders");
-
-            // Test INSERT
-            assertUpdate(
-                    session,
-                    "CREATE TABLE test_write_staging_files_for_insert_unbucketed_table (" +
-                            "  value VARCHAR,\n" +
-                            "  partition_key VARCHAR)\n" +
-                            "WITH (partitioned_by = ARRAY['partition_key'])");
-            assertUpdate(
-                    session,
-                    "INSERT INTO test_write_staging_files_for_insert_unbucketed_table\n" +
-                            "SELECT comment value, orderstatus partition_key FROM orders",
-                    15000);
-            assertQuery("SELECT value, partition_key FROM test_write_staging_files_for_insert_unbucketed_table",
-                    "SELECT comment value, orderstatus partition_key FROM orders");
-
-            assertUpdate(
-                    session,
-                    "CREATE TABLE test_write_staging_files_for_insert_bucketed_table (" +
-                            "  bucket_key BIGINT,\n" +
-                            "  value VARCHAR,\n" +
-                            "  partition_key VARCHAR)\n" +
-                            "WITH (partitioned_by = ARRAY['partition_key'], bucket_count = 13, bucketed_by = ARRAY['bucket_key'])");
-            assertUpdate(
-                    session,
-                    "INSERT INTO test_write_staging_files_for_insert_bucketed_table\n" +
-                            "SELECT orderkey bucket_key, comment value, orderstatus partition_key FROM orders",
-                    15000);
-            assertQuery("SELECT bucket_key, value, partition_key FROM test_write_staging_files_for_insert_bucketed_table",
-                    "SELECT orderkey bucket_key, comment value, orderstatus partition_key FROM orders");
-        }
-        finally {
-            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_create_unbucketed_table_as");
-            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_create_bucketed_table_as");
-            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_insert_unbucketed_table");
-            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_insert_bucketed_table");
-        }
     }
 
     @Test

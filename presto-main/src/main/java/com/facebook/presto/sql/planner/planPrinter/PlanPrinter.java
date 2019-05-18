@@ -164,7 +164,7 @@ public class PlanPrinter
                 .sum(), MILLISECONDS));
 
         this.representation = new PlanRepresentation(planRoot, types, totalCpuTime, totalScheduledTime);
-        this.formatter = new RowExpressionFormatter(session.toConnectorSession());
+        this.formatter = new RowExpressionFormatter(session.toConnectorSession(), functionManager);
 
         Visitor visitor = new Visitor(stageExecutionStrategy, types, estimatedStatsAndCosts, session, stats);
         planRoot.accept(visitor, null);
@@ -313,7 +313,7 @@ public class PlanPrinter
         return builder.toString();
     }
 
-    public static String graphvizLogicalPlan(PlanNode plan, TypeProvider types, Session session)
+    public static String graphvizLogicalPlan(PlanNode plan, TypeProvider types, Session session, FunctionManager functionManager)
     {
         // TODO: This should move to something like GraphvizRenderer
         PlanFragment fragment = new PlanFragment(
@@ -324,14 +324,15 @@ public class PlanPrinter
                 ImmutableList.of(plan.getId()),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getOutputSymbols()),
                 StageExecutionDescriptor.ungroupedExecution(),
+                false,
                 StatsAndCosts.empty(),
                 Optional.empty());
-        return GraphvizPrinter.printLogical(ImmutableList.of(fragment), session);
+        return GraphvizPrinter.printLogical(ImmutableList.of(fragment), session, functionManager);
     }
 
-    public static String graphvizDistributedPlan(SubPlan plan, Session session)
+    public static String graphvizDistributedPlan(SubPlan plan, Session session, FunctionManager functionManager)
     {
-        return GraphvizPrinter.printDistributed(plan, session);
+        return GraphvizPrinter.printDistributed(plan, session, functionManager);
     }
 
     private class Visitor
@@ -393,7 +394,7 @@ public class PlanPrinter
         {
             NodeRepresentation nodeOutput = addNode(node,
                     node.getType().getJoinLabel(),
-                    format("[%s]", node.getFilter()));
+                    format("[%s]", formatter.formatRowExpression(node.getFilter())));
 
             nodeOutput.appendDetailsLine("Distribution: %s", node.getDistributionType());
             node.getLeft().accept(this, context);
@@ -489,15 +490,21 @@ public class PlanPrinter
                     format("Aggregate%s%s%s", type, key, formatHash(node.getHashSymbol())));
 
             for (Map.Entry<Symbol, AggregationNode.Aggregation> entry : node.getAggregations().entrySet()) {
-                if (entry.getValue().getMask().isPresent()) {
-                    nodeOutput.appendDetailsLine("%s := %s (mask = %s)", entry.getKey(), entry.getValue().getCall(), entry.getValue().getMask().get());
-                }
-                else {
-                    nodeOutput.appendDetailsLine("%s := %s", entry.getKey(), entry.getValue().getCall());
-                }
+                nodeOutput.appendDetailsLine("%s := %s", entry.getKey(), formatAggregation(entry.getValue()));
             }
 
             return processChildren(node, context);
+        }
+
+        private String formatAggregation(AggregationNode.Aggregation aggregation)
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.append(functionManager.getFunctionMetadata(aggregation.getFunctionHandle()).getName());
+            builder.append("(" + Joiner.on(",").join(aggregation.getArguments().stream().map(Object::toString).collect(toImmutableList())) + ")");
+            aggregation.getFilter().ifPresent(filter -> builder.append(" WHERE " + filter));
+            aggregation.getOrderBy().ifPresent(orderingScheme -> builder.append(" ORDER BY " + orderingScheme.toString()));
+            aggregation.getMask().ifPresent(mask -> builder.append(" (mask = " + mask + ")"));
+            return builder.toString();
         }
 
         @Override

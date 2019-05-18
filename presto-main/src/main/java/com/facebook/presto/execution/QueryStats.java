@@ -15,7 +15,6 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.operator.BlockedReason;
 import com.facebook.presto.operator.OperatorStats;
-import com.facebook.presto.operator.TableWriterOperator;
 import com.facebook.presto.spi.eventlistener.StageGcStatistics;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -88,7 +87,11 @@ public class QueryStats
     private final DataSize outputDataSize;
     private final long outputPositions;
 
-    private final DataSize physicalWrittenDataSize;
+    private final long writtenOutputPositions;
+    private final DataSize writtenOutputLogicalDataSize;
+    private final DataSize writtenOutputPhysicalDataSize;
+
+    private final DataSize writtenIntermediatePhysicalDataSize;
 
     private final List<StageGcStatistics> stageGcStatistics;
 
@@ -143,7 +146,11 @@ public class QueryStats
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
 
-            @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
+            @JsonProperty("writtenOutputPositions") long writtenOutputPositions,
+            @JsonProperty("writtenOutputLogicalDataSize") DataSize writtenOutputLogicalDataSize,
+            @JsonProperty("writtenOutputPhysicalDataSize") DataSize writtenOutputPhysicalDataSize,
+
+            @JsonProperty("writtenIntermediatePhysicalDataSize") DataSize writtenIntermediatePhysicalDataSize,
 
             @JsonProperty("stageGcStatistics") List<StageGcStatistics> stageGcStatistics,
 
@@ -206,7 +213,11 @@ public class QueryStats
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
 
-        this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "physicalWrittenDataSize is null");
+        checkArgument(writtenOutputPositions >= 0, "writtenOutputPositions is negative: %s", writtenOutputPositions);
+        this.writtenOutputPositions = writtenOutputPositions;
+        this.writtenOutputLogicalDataSize = requireNonNull(writtenOutputLogicalDataSize, "writtenOutputLogicalDataSize is null");
+        this.writtenOutputPhysicalDataSize = requireNonNull(writtenOutputPhysicalDataSize, "writtenOutputPhysicalDataSize is null");
+        this.writtenIntermediatePhysicalDataSize = requireNonNull(writtenIntermediatePhysicalDataSize, "writtenIntermediatePhysicalDataSize is null");
 
         this.stageGcStatistics = ImmutableList.copyOf(requireNonNull(stageGcStatistics, "stageGcStatistics is null"));
 
@@ -255,6 +266,9 @@ public class QueryStats
                 0,
                 new DataSize(0, BYTE),
                 0,
+                0,
+                new DataSize(0, BYTE),
+                new DataSize(0, BYTE),
                 new DataSize(0, BYTE),
                 ImmutableList.of(),
                 ImmutableList.of());
@@ -490,28 +504,27 @@ public class QueryStats
     }
 
     @JsonProperty
-    public DataSize getPhysicalWrittenDataSize()
+    public long getWrittenOutputPositions()
     {
-        return physicalWrittenDataSize;
+        return writtenOutputPositions;
     }
 
     @JsonProperty
-    public long getWrittenPositions()
+    public DataSize getWrittenOutputLogicalDataSize()
     {
-        return operatorSummaries.stream()
-                .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
-                .mapToLong(OperatorStats::getInputPositions)
-                .sum();
+        return writtenOutputLogicalDataSize;
     }
 
     @JsonProperty
-    public DataSize getLogicalWrittenDataSize()
+    public DataSize getWrittenOutputPhysicalDataSize()
     {
-        return succinctBytes(
-                operatorSummaries.stream()
-                        .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
-                        .mapToLong(stats -> stats.getInputDataSize().toBytes())
-                        .sum());
+        return writtenOutputPhysicalDataSize;
+    }
+
+    @JsonProperty
+    public DataSize getWrittenIntermediatePhysicalDataSize()
+    {
+        return writtenIntermediatePhysicalDataSize;
     }
 
     @JsonProperty

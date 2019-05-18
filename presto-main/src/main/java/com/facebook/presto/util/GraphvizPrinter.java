@@ -14,6 +14,7 @@
 package com.facebook.presto.util;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.sql.planner.Partitioning.ArgumentBinding;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.SubPlan;
@@ -134,7 +135,7 @@ public final class GraphvizPrinter
 
     private GraphvizPrinter() {}
 
-    public static String printLogical(List<PlanFragment> fragments, Session session)
+    public static String printLogical(List<PlanFragment> fragments, Session session, FunctionManager functionManager)
     {
         Map<PlanFragmentId, PlanFragment> fragmentsById = Maps.uniqueIndex(fragments, PlanFragment::getId);
         PlanNodeIdGenerator idGenerator = new PlanNodeIdGenerator();
@@ -143,7 +144,7 @@ public final class GraphvizPrinter
         output.append("digraph logical_plan {\n");
 
         for (PlanFragment fragment : fragments) {
-            printFragmentNodes(output, fragment, idGenerator, session);
+            printFragmentNodes(output, fragment, idGenerator, session, functionManager);
         }
 
         for (PlanFragment fragment : fragments) {
@@ -155,7 +156,7 @@ public final class GraphvizPrinter
         return output.toString();
     }
 
-    public static String printDistributed(SubPlan plan, Session session)
+    public static String printDistributed(SubPlan plan, Session session, FunctionManager functionManager)
     {
         List<PlanFragment> fragments = plan.getAllFragments();
         Map<PlanFragmentId, PlanFragment> fragmentsById = Maps.uniqueIndex(fragments, PlanFragment::getId);
@@ -164,25 +165,31 @@ public final class GraphvizPrinter
         StringBuilder output = new StringBuilder();
         output.append("digraph distributed_plan {\n");
 
-        printSubPlan(plan, fragmentsById, idGenerator, output, session);
+        printSubPlan(plan, fragmentsById, idGenerator, output, session, functionManager);
 
         output.append("}\n");
 
         return output.toString();
     }
 
-    private static void printSubPlan(SubPlan plan, Map<PlanFragmentId, PlanFragment> fragmentsById, PlanNodeIdGenerator idGenerator, StringBuilder output, Session session)
+    private static void printSubPlan(
+            SubPlan plan,
+            Map<PlanFragmentId, PlanFragment> fragmentsById,
+            PlanNodeIdGenerator idGenerator,
+            StringBuilder output,
+            Session session,
+            FunctionManager functionManager)
     {
         PlanFragment fragment = plan.getFragment();
-        printFragmentNodes(output, fragment, idGenerator, session);
+        printFragmentNodes(output, fragment, idGenerator, session, functionManager);
         fragment.getRoot().accept(new EdgePrinter(output, fragmentsById, idGenerator), null);
 
         for (SubPlan child : plan.getChildren()) {
-            printSubPlan(child, fragmentsById, idGenerator, output, session);
+            printSubPlan(child, fragmentsById, idGenerator, output, session, functionManager);
         }
     }
 
-    private static void printFragmentNodes(StringBuilder output, PlanFragment fragment, PlanNodeIdGenerator idGenerator, Session session)
+    private static void printFragmentNodes(StringBuilder output, PlanFragment fragment, PlanNodeIdGenerator idGenerator, Session session, FunctionManager functionManager)
     {
         String clusterId = "cluster_" + fragment.getId();
         output.append("subgraph ")
@@ -194,7 +201,7 @@ public final class GraphvizPrinter
                 .append('\n');
 
         PlanNode plan = fragment.getRoot();
-        plan.accept(new NodePrinter(output, idGenerator, session), null);
+        plan.accept(new NodePrinter(output, idGenerator, session, functionManager), null);
 
         output.append("}")
                 .append('\n');
@@ -207,12 +214,14 @@ public final class GraphvizPrinter
         private final StringBuilder output;
         private final PlanNodeIdGenerator idGenerator;
         private final RowExpressionFormatter formatter;
+        private final FunctionManager functionManager;
 
-        public NodePrinter(StringBuilder output, PlanNodeIdGenerator idGenerator, Session session)
+        public NodePrinter(StringBuilder output, PlanNodeIdGenerator idGenerator, Session session, FunctionManager functionManager)
         {
             this.output = output;
             this.idGenerator = idGenerator;
-            this.formatter = new RowExpressionFormatter(session.toConnectorSession());
+            this.formatter = new RowExpressionFormatter(session.toConnectorSession(), functionManager);
+            this.functionManager = functionManager;
         }
 
         @Override
@@ -342,15 +351,20 @@ public final class GraphvizPrinter
         {
             StringBuilder builder = new StringBuilder();
             for (Map.Entry<Symbol, Aggregation> entry : node.getAggregations().entrySet()) {
-                if (entry.getValue().getMask().isPresent()) {
-                    builder.append(format("%s := %s (mask = %s)\\n", entry.getKey(), entry.getValue().getCall(), entry.getValue().getMask().get()));
-                }
-                else {
-                    builder.append(format("%s := %s\\n", entry.getKey(), entry.getValue().getCall()));
-                }
+                builder.append(format("%s := %s\\n", entry.getKey(), formatAggregation(entry.getValue())));
             }
             printNode(node, format("Aggregate[%s]", node.getStep()), builder.toString(), NODE_COLORS.get(NodeType.AGGREGATE));
             return node.getSource().accept(this, context);
+        }
+
+        private String formatAggregation(AggregationNode.Aggregation aggregation)
+        {
+            return String.format("%s(%s)%s%s%s",
+                    functionManager.getFunctionMetadata(aggregation.getFunctionHandle()).getName(),
+                    Joiner.on(",").join(aggregation.getArguments().stream().map(Expression::toString).collect(toImmutableList())),
+                    aggregation.getFilter().map(filter -> format(" WHERE %s", filter)).orElse(""),
+                    aggregation.getOrderBy().map(orderingScheme -> format(" ORDER BY %s", orderingScheme)).orElse(""),
+                    aggregation.getMask().map(mask -> format(" (mask = %s)", mask)).orElse(""));
         }
 
         @Override
@@ -486,7 +500,7 @@ public final class GraphvizPrinter
         @Override
         public Void visitSpatialJoin(SpatialJoinNode node, Void context)
         {
-            printNode(node, node.getType().getJoinLabel(), node.getFilter().toString(), NODE_COLORS.get(NodeType.JOIN));
+            printNode(node, node.getType().getJoinLabel(), formatter.formatRowExpression(node.getFilter()), NODE_COLORS.get(NodeType.JOIN));
 
             node.getLeft().accept(this, context);
             node.getRight().accept(this, context);

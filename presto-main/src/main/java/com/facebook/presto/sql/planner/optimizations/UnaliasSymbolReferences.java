@@ -18,7 +18,7 @@ import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
-import com.facebook.presto.sql.planner.DeterminismEvaluator;
+import com.facebook.presto.sql.planner.ExpressionDeterminismEvaluator;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
@@ -559,7 +559,7 @@ public class UnaliasSymbolReferences
             PlanNode left = context.rewrite(node.getLeft());
             PlanNode right = context.rewrite(node.getRight());
 
-            return new SpatialJoinNode(node.getId(), node.getType(), left, right, canonicalizeAndDistinct(node.getOutputSymbols()), canonicalize(node.getFilter()), canonicalize(node.getLeftPartitionSymbol()), canonicalize(node.getRightPartitionSymbol()), node.getKdbTree());
+            return new SpatialJoinNode(node.getId(), node.getType(), left, right, canonicalizeAndDistinct(node.getOutputSymbols()), castToRowExpression(canonicalize(castToExpression(node.getFilter()))), canonicalize(node.getLeftPartitionSymbol()), canonicalize(node.getRightPartitionSymbol()), node.getKdbTree());
         }
 
         @Override
@@ -638,7 +638,7 @@ public class UnaliasSymbolReferences
                         map(entry.getKey(), symbol);
                     }
                 }
-                else if (DeterminismEvaluator.isDeterministic(expression) && !(expression instanceof NullLiteral)) {
+                else if (ExpressionDeterminismEvaluator.isDeterministic(expression) && !(expression instanceof NullLiteral)) {
                     // Try to map same deterministic expressions within a projection into the same symbol
                     // Omit NullLiterals since those have ambiguous types
                     Symbol computedSymbol = computedExpressions.get(expression);

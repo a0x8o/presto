@@ -26,7 +26,7 @@ import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.DeterminismEvaluator;
+import com.facebook.presto.sql.planner.ExpressionDeterminismEvaluator;
 import com.facebook.presto.sql.planner.LiteralEncoder;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
@@ -107,7 +107,8 @@ public class MetadataQueryOptimizer
         {
             // supported functions are only MIN/MAX/APPROX_DISTINCT or distinct aggregates
             for (Aggregation aggregation : node.getAggregations().values()) {
-                if (!ALLOWED_FUNCTIONS.contains(aggregation.getCall().getName().toString()) && !aggregation.getCall().isDistinct()) {
+                String functionName = metadata.getFunctionManager().getFunctionMetadata(aggregation.getFunctionHandle()).getName();
+                if (!ALLOWED_FUNCTIONS.contains(functionName) && !aggregation.isDistinct()) {
                     return context.defaultRewrite(node);
                 }
             }
@@ -197,7 +198,7 @@ public class MetadataQueryOptimizer
                 else if (source instanceof ProjectNode) {
                     // verify projections are deterministic
                     ProjectNode project = (ProjectNode) source;
-                    if (!Iterables.all(project.getAssignments().getExpressions(), DeterminismEvaluator::isDeterministic)) {
+                    if (!Iterables.all(project.getAssignments().getExpressions(), ExpressionDeterminismEvaluator::isDeterministic)) {
                         return Optional.empty();
                     }
                     source = project.getSource();

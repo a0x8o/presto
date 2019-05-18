@@ -103,7 +103,6 @@ import static com.facebook.presto.SystemSessionProperties.isForceSingleNodeOutpu
 import static com.facebook.presto.SystemSessionProperties.isRedistributeWrites;
 import static com.facebook.presto.SystemSessionProperties.isScaleWriters;
 import static com.facebook.presto.SystemSessionProperties.preferStreamingOperators;
-import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy.PUSH_THROUGH_LOW_MEMORY_OPERATORS;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.getNumberOfTableScans;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.hasMultipleTableScans;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_ARBITRARY_DISTRIBUTION;
@@ -338,7 +337,12 @@ public class AddExchanges
                 }
                 else {
                     child = withDerivedProperties(
-                            partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, child.getNode(), createPartitioning(node.getPartitionBy()), node.getHashSymbol()),
+                            partitionedExchange(
+                                    idAllocator.getNextId(),
+                                    selectExchangeScopeForPartitionedRemoteExchange(child.getNode()),
+                                    child.getNode(),
+                                    createPartitioning(node.getPartitionBy()),
+                                    node.getHashSymbol()),
                             child.getProperties());
                 }
             }
@@ -372,7 +376,7 @@ public class AddExchanges
                 child = withDerivedProperties(
                         partitionedExchange(
                                 idAllocator.getNextId(),
-                                REMOTE_STREAMING,
+                                selectExchangeScopeForPartitionedRemoteExchange(child.getNode()),
                                 child.getNode(),
                                 createPartitioning(node.getPartitionBy()),
                                 node.getHashSymbol()),
@@ -397,7 +401,12 @@ public class AddExchanges
             else {
                 preferredChildProperties = PreferredProperties.partitionedWithLocal(ImmutableSet.copyOf(node.getPartitionBy()), grouped(node.getPartitionBy()))
                         .mergeWithParent(preferredProperties);
-                addExchange = partial -> partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, partial, createPartitioning(node.getPartitionBy()), node.getHashSymbol());
+                addExchange = partial -> partitionedExchange(
+                        idAllocator.getNextId(),
+                        selectExchangeScopeForPartitionedRemoteExchange(partial),
+                        partial,
+                        createPartitioning(node.getPartitionBy()),
+                        node.getHashSymbol());
             }
 
             PlanWithProperties child = planChild(node, preferredChildProperties);

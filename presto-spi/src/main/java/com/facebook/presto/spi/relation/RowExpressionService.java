@@ -21,4 +21,8 @@ public interface RowExpressionService
     DomainTranslator getDomainTranslator();
 
     ExpressionOptimizer getExpressionOptimizer();
+
+    PredicateCompiler getPredicateCompiler();
+
+    DeterminismEvaluator getDeterminismEvaluator();
 }
