@@ -37,6 +37,8 @@ import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
@@ -46,14 +48,13 @@ import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -80,6 +81,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 import static com.facebook.presto.SystemSessionProperties.getQueryMaxStageCount;
@@ -112,6 +114,8 @@ import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Maps.filterKeys;
+import static com.google.common.collect.Streams.stream;
+import static com.google.common.graph.Traverser.forTree;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
@@ -148,11 +152,10 @@ public class PlanFragmenter
                 warningCollector,
                 sqlParser,
                 idAllocator,
-                new SymbolAllocator(plan.getTypes().allTypes()));
+                new SymbolAllocator(plan.getTypes().allTypes()),
+                getTableWriterNodeIds(plan.getRoot()));
 
-        FragmentProperties properties = new FragmentProperties(
-                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getRoot().getOutputSymbols()),
-                false);
+        FragmentProperties properties = new FragmentProperties(new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getRoot().getOutputSymbols()));
         if (forceSingleNode || isForceSingleNodeOutput(session)) {
             properties = properties.setSingleNodeDistribution();
         }
@@ -195,10 +198,10 @@ public class PlanFragmenter
                     && isDynamicScheduleForGroupedExecution(session);
             BucketNodeMap bucketNodeMap = nodePartitioningManager.getBucketNodeMap(session, fragment.getPartitioning(), preferDynamic);
             if (bucketNodeMap.isDynamic()) {
-                fragment = fragment.withDynamicLifespanScheduleGroupedExecution(properties.getCapableTableScanNodes());
+                fragment = fragment.withDynamicLifespanScheduleGroupedExecution(properties.getCapableTableScanNodes(), properties.totalLifespans);
             }
             else {
-                fragment = fragment.withFixedLifespanScheduleGroupedExecution(properties.getCapableTableScanNodes());
+                fragment = fragment.withFixedLifespanScheduleGroupedExecution(properties.getCapableTableScanNodes(), properties.totalLifespans);
             }
         }
         ImmutableList.Builder<SubPlan> result = ImmutableList.builder();
@@ -234,7 +237,7 @@ public class PlanFragmenter
                 newRoot,
                 fragment.getSymbols(),
                 fragment.getPartitioning(),
-                fragment.getPartitionedSources(),
+                fragment.getTableScanSchedulingOrder(),
                 new PartitioningScheme(
                         newOutputPartitioning,
                         outputPartitioningScheme.getOutputLayout(),
@@ -242,7 +245,7 @@ public class PlanFragmenter
                         outputPartitioningScheme.isReplicateNullsAndAny(),
                         outputPartitioningScheme.getBucketToPartition()),
                 fragment.getStageExecutionDescriptor(),
-                fragment.isMaterializedExchangeSource(),
+                fragment.isOutputTableWriterFragment(),
                 fragment.getStatsAndCosts(),
                 fragment.getJsonRepresentation());
 
@@ -251,6 +254,14 @@ public class PlanFragmenter
             childrenBuilder.add(reassignPartitioningHandleIfNecessaryHelper(session, child, fragment.getPartitioning()));
         }
         return new SubPlan(newFragment, childrenBuilder.build());
+    }
+
+    private static Set<PlanNodeId> getTableWriterNodeIds(PlanNode plan)
+    {
+        return stream(forTree(PlanNode::getSources).depthFirstPreOrder(plan))
+                .filter(node -> node instanceof TableWriterNode)
+                .map(PlanNode::getId)
+                .collect(toImmutableSet());
     }
 
     private static class Fragmenter
@@ -267,6 +278,7 @@ public class PlanFragmenter
         private final WarningCollector warningCollector;
         private final SqlParser sqlParser;
         private final LiteralEncoder literalEncoder;
+        private final Set<PlanNodeId> outputTableWriterNodeIds;
         private int nextFragmentId = ROOT_FRAGMENT_ID + 1;
 
         public Fragmenter(
@@ -277,7 +289,8 @@ public class PlanFragmenter
                 WarningCollector warningCollector,
                 SqlParser sqlParser,
                 PlanNodeIdAllocator idAllocator,
-                SymbolAllocator symbolAllocator)
+                SymbolAllocator symbolAllocator,
+                Set<PlanNodeId> outputTableWriterNodeIds)
         {
             this.session = requireNonNull(session, "session is null");
             this.metadata = requireNonNull(metadata, "metadata is null");
@@ -288,6 +301,7 @@ public class PlanFragmenter
             this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
             this.symbolAllocator = requireNonNull(symbolAllocator, "symbolAllocator is null");
             this.literalEncoder = new LiteralEncoder(metadata.getBlockEncodingSerde());
+            this.outputTableWriterNodeIds = ImmutableSet.copyOf(requireNonNull(outputTableWriterNodeIds, "outputTableWriterNodeIds is null"));
         }
 
         public SubPlan buildRootFragment(PlanNode root, FragmentProperties properties)
@@ -311,6 +325,17 @@ public class PlanFragmenter
 
             Map<Symbol, Type> fragmentSymbolTypes = filterKeys(symbolAllocator.getTypes().allTypes(), in(extractOutputSymbols(root)));
             planSanityChecker.validatePlanFragment(root, session, metadata, sqlParser, TypeProvider.viewOf(fragmentSymbolTypes), warningCollector);
+
+            Set<PlanNodeId> tableWriterNodeIds = getTableWriterNodeIds(root);
+            boolean outputTableWriterFragment = tableWriterNodeIds.stream().anyMatch(outputTableWriterNodeIds::contains);
+            if (outputTableWriterFragment) {
+                verify(
+                        outputTableWriterNodeIds.containsAll(tableWriterNodeIds),
+                        "outputTableWriterNodeIds %s must include either all or none of tableWriterNodeIds %s",
+                        outputTableWriterNodeIds,
+                        tableWriterNodeIds);
+            }
+
             PlanFragment fragment = new PlanFragment(
                     fragmentId,
                     root,
@@ -319,7 +344,7 @@ public class PlanFragmenter
                     schedulingOrder,
                     properties.getPartitioningScheme(),
                     StageExecutionDescriptor.ungroupedExecution(),
-                    properties.isMaterializedExchangeSource(),
+                    outputTableWriterFragment,
                     statsAndCosts.getForSubplan(root),
                     Optional.of(jsonFragmentPlan(root, fragmentSymbolTypes, metadata.getFunctionManager(), session)));
 
@@ -421,9 +446,7 @@ public class PlanFragmenter
 
             ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
             for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
-                FragmentProperties childProperties = new FragmentProperties(
-                        partitioningScheme.translateOutputLayout(exchange.getInputs().get(sourceIndex)),
-                        context.get().isMaterializedExchangeSource());
+                FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(exchange.getInputs().get(sourceIndex)));
                 builder.add(buildSubPlan(exchange.getSources().get(sourceIndex), childProperties, context));
             }
 
@@ -483,9 +506,7 @@ public class PlanFragmenter
                     partitioningSymbolAssignments.getConstants(),
                     partitioningMetadata);
 
-            FragmentProperties writeProperties = new FragmentProperties(
-                    new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), write.getOutputSymbols()),
-                    true);
+            FragmentProperties writeProperties = new FragmentProperties(new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), write.getOutputSymbols()));
             writeProperties.setCoordinatorOnlyDistribution();
 
             List<SubPlan> children = ImmutableList.of(buildSubPlan(write, writeProperties, context));
@@ -653,6 +674,7 @@ public class PlanFragmenter
                                             insertHandle,
                                             symbolAllocator.newSymbol("partialrows", BIGINT),
                                             symbolAllocator.newSymbol("fragment", VARBINARY),
+                                            symbolAllocator.newSymbol("tablecommitcontext", VARBINARY),
                                             outputs,
                                             outputColumnNames,
                                             Optional.of(new PartitioningScheme(
@@ -682,15 +704,13 @@ public class PlanFragmenter
         private final List<SubPlan> children = new ArrayList<>();
 
         private final PartitioningScheme partitioningScheme;
-        private final boolean materializedExchangeSource;
 
         private Optional<PartitioningHandle> partitioningHandle = Optional.empty();
         private final Set<PlanNodeId> partitionedSources = new HashSet<>();
 
-        public FragmentProperties(PartitioningScheme partitioningScheme, boolean materializedExchangeSource)
+        public FragmentProperties(PartitioningScheme partitioningScheme)
         {
             this.partitioningScheme = partitioningScheme;
-            this.materializedExchangeSource = materializedExchangeSource;
         }
 
         public List<SubPlan> getChildren()
@@ -809,11 +829,6 @@ public class PlanFragmenter
             return partitioningScheme;
         }
 
-        public boolean isMaterializedExchangeSource()
-        {
-            return materializedExchangeSource;
-        }
-
         public PartitioningHandle getPartitioningHandle()
         {
             return partitioningHandle.get();
@@ -826,7 +841,7 @@ public class PlanFragmenter
     }
 
     private static class GroupedExecutionTagger
-            extends PlanVisitor<GroupedExecutionProperties, Void>
+            extends InternalPlanVisitor<GroupedExecutionProperties, Void>
     {
         private final Session session;
         private final Metadata metadata;
@@ -892,13 +907,15 @@ public class PlanFragmenter
                     return left;
                 case PARTITIONED:
                     if (left.currentNodeCapable && right.currentNodeCapable) {
+                        checkState(left.totalLifespans == right.totalLifespans, format("Mismatched number of lifespans on left(%s) and right(%s) side of join", left.totalLifespans, right.totalLifespans));
                         return new GroupedExecutionProperties(
                                 true,
                                 true,
                                 ImmutableList.<PlanNodeId>builder()
                                         .addAll(left.capableTableScanNodes)
                                         .addAll(right.capableTableScanNodes)
-                                        .build());
+                                        .build(),
+                                left.totalLifespans);
                     }
                     // right.subTreeUseful && !left.currentNodeCapable:
                     //   It's not particularly helpful to do grouped execution on the right side
@@ -923,7 +940,7 @@ public class PlanFragmenter
                 switch (node.getStep()) {
                     case SINGLE:
                     case FINAL:
-                        return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes);
+                        return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes, properties.totalLifespans);
                     case PARTIAL:
                     case INTERMEDIATE:
                         return properties;
@@ -954,7 +971,7 @@ public class PlanFragmenter
         {
             GroupedExecutionProperties properties = getOnlyElement(node.getSources()).accept(this, null);
             if (groupedExecutionForAggregation && properties.isCurrentNodeCapable()) {
-                return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes);
+                return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes, properties.totalLifespans);
             }
             return GroupedExecutionProperties.notCapable();
         }
@@ -964,7 +981,7 @@ public class PlanFragmenter
         {
             GroupedExecutionProperties properties = getOnlyElement(node.getSources()).accept(this, null);
             if (groupedExecutionForAggregation && properties.isCurrentNodeCapable()) {
-                return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes);
+                return new GroupedExecutionProperties(true, true, properties.capableTableScanNodes, properties.totalLifespans);
             }
             return GroupedExecutionProperties.notCapable();
         }
@@ -978,10 +995,10 @@ public class PlanFragmenter
             }
             List<ConnectorPartitionHandle> partitionHandles = nodePartitioningManager.listPartitionHandles(session, tablePartitioning.get().getPartitioningHandle());
             if (ImmutableList.of(NOT_PARTITIONED).equals(partitionHandles)) {
-                return new GroupedExecutionProperties(false, false, ImmutableList.of());
+                return new GroupedExecutionProperties(false, false, ImmutableList.of(), 1);
             }
             else {
-                return new GroupedExecutionProperties(true, false, ImmutableList.of(node.getId()));
+                return new GroupedExecutionProperties(true, false, ImmutableList.of(node.getId()), partitionHandles.size());
             }
         }
 
@@ -998,6 +1015,7 @@ public class PlanFragmenter
             //   * if any child is "capable and useful", return "capable and useful"
             //   * if no children is "capable and useful", return "capable but not useful"
             boolean anyUseful = false;
+            OptionalInt totalLifespans = OptionalInt.empty();
             ImmutableList.Builder<PlanNodeId> capableTableScanNodes = ImmutableList.builder();
             for (PlanNode source : node.getSources()) {
                 GroupedExecutionProperties properties = source.accept(this, null);
@@ -1005,9 +1023,16 @@ public class PlanFragmenter
                     return GroupedExecutionProperties.notCapable();
                 }
                 anyUseful |= properties.isSubTreeUseful();
+                if (!totalLifespans.isPresent()) {
+                    totalLifespans = OptionalInt.of(properties.totalLifespans);
+                }
+                else {
+                    checkState(totalLifespans.getAsInt() == properties.totalLifespans, format("Mismatched number of lifespans among children nodes. Expected: %s, actual: %s", totalLifespans.getAsInt(), properties.totalLifespans));
+                }
+
                 capableTableScanNodes.addAll(properties.capableTableScanNodes);
             }
-            return new GroupedExecutionProperties(true, anyUseful, capableTableScanNodes.build());
+            return new GroupedExecutionProperties(true, anyUseful, capableTableScanNodes.build(), totalLifespans.getAsInt());
         }
     }
 
@@ -1028,12 +1053,14 @@ public class PlanFragmenter
         private final boolean currentNodeCapable;
         private final boolean subTreeUseful;
         private final List<PlanNodeId> capableTableScanNodes;
+        private final int totalLifespans;
 
-        public GroupedExecutionProperties(boolean currentNodeCapable, boolean subTreeUseful, List<PlanNodeId> capableTableScanNodes)
+        public GroupedExecutionProperties(boolean currentNodeCapable, boolean subTreeUseful, List<PlanNodeId> capableTableScanNodes, int totalLifespans)
         {
             this.currentNodeCapable = currentNodeCapable;
             this.subTreeUseful = subTreeUseful;
             this.capableTableScanNodes = ImmutableList.copyOf(requireNonNull(capableTableScanNodes, "capableTableScanNodes is null"));
+            this.totalLifespans = totalLifespans;
             // Verify that `subTreeUseful` implies `currentNodeCapable`
             checkArgument(!subTreeUseful || currentNodeCapable);
             checkArgument(currentNodeCapable == !capableTableScanNodes.isEmpty());
@@ -1041,7 +1068,7 @@ public class PlanFragmenter
 
         public static GroupedExecutionProperties notCapable()
         {
-            return new GroupedExecutionProperties(false, false, ImmutableList.of());
+            return new GroupedExecutionProperties(false, false, ImmutableList.of(), 1);
         }
 
         public boolean isCurrentNodeCapable()
@@ -1057,6 +1084,11 @@ public class PlanFragmenter
         public List<PlanNodeId> getCapableTableScanNodes()
         {
             return capableTableScanNodes;
+        }
+
+        public int getTotalLifespans()
+        {
+            return totalLifespans;
         }
     }
 

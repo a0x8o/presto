@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -28,7 +29,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @Immutable
 public class ValuesNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final List<Symbol> outputSymbols;
     private final List<List<RowExpression>> rows;
@@ -68,7 +69,7 @@ public class ValuesNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitValues(this, context);
     }

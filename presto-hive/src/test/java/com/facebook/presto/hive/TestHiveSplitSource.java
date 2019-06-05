@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
+import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
 import java.util.List;
@@ -211,7 +212,9 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 EXECUTOR,
                 new CounterStat());
-        int testSplitSizeInBytes = new TestSplit(0).getEstimatedSizeInBytes();
+
+        TestSplit testSplit = new TestSplit(0);
+        int testSplitSizeInBytes = testSplit.getEstimatedSizeInBytes() + testSplit.getPartitionInfo().getEstimatedSizeInBytes();
 
         int maxSplitCount = toIntExact(maxOutstandingSplitsSize.toBytes()) / testSplitSizeInBytes;
         for (int i = 0; i < maxSplitCount; i++) {
@@ -431,21 +434,17 @@ public class TestHiveSplitSource
         private TestSplit(int id, OptionalInt bucketNumber)
         {
             super(
-                    "partition-name",
                     "path",
                     0,
                     100,
                     100,
-                    properties("id", String.valueOf(id)),
-                    ImmutableList.of(),
-                    ImmutableList.of(new InternalHiveBlock(0, 100, ImmutableList.of())),
+                    ImmutableList.of(new InternalHiveBlock(100, ImmutableList.of())),
                     bucketNumber,
                     bucketNumber,
                     true,
                     false,
-                    ImmutableMap.of(),
-                    Optional.empty(),
-                    false);
+                    false,
+                    new HiveSplitPartitionInfo(properties("id", String.valueOf(id)), new Path("path").toUri(), ImmutableList.of(), "partition-name", ImmutableMap.of(), Optional.empty()));
         }
 
         private static Properties properties(String key, String value)

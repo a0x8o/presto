@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -25,7 +26,7 @@ import java.util.List;
 import static java.util.Objects.requireNonNull;
 
 public class SortNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final OrderingScheme orderingScheme;
@@ -69,7 +70,7 @@ public class SortNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitSort(this, context);
     }

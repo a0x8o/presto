@@ -24,8 +24,8 @@ import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.split.SplitSource;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
@@ -173,6 +173,9 @@ public class FixedSourcePartitionedScheduler
                     .map(Optional::get)
                     .collect(toImmutableList());
             scheduledTasks = true;
+
+            // notify listeners that we have scheduled all tasks so they can set no more buffers or exchange splits
+            stage.transitionToSchedulingSplits();
         }
 
         boolean allBlocked = true;
@@ -226,10 +229,10 @@ public class FixedSourcePartitionedScheduler
         }
 
         if (allBlocked) {
-            return new ScheduleResult(sourceSchedulers.isEmpty(), newTasks, whenAnyComplete(blocked), blockedReason, splitsScheduled);
+            return ScheduleResult.blocked(sourceSchedulers.isEmpty(), newTasks, whenAnyComplete(blocked), blockedReason, splitsScheduled);
         }
         else {
-            return new ScheduleResult(sourceSchedulers.isEmpty(), newTasks, splitsScheduled);
+            return ScheduleResult.nonBlocked(sourceSchedulers.isEmpty(), newTasks, splitsScheduled);
         }
     }
 

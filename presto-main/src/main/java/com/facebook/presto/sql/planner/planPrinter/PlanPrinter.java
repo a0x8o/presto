@@ -27,6 +27,7 @@ import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.Marker;
 import com.facebook.presto.spi.predicate.NullableValue;
@@ -59,6 +60,7 @@ import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.IntersectNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
@@ -68,8 +70,6 @@ import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -336,7 +336,7 @@ public class PlanPrinter
     }
 
     private class Visitor
-            extends PlanVisitor<Void, Void>
+            extends InternalPlanVisitor<Void, Void>
     {
         private final Optional<StageExecutionDescriptor> stageExecutionStrategy;
         private final TypeProvider types;
@@ -499,8 +499,20 @@ public class PlanPrinter
         private String formatAggregation(AggregationNode.Aggregation aggregation)
         {
             StringBuilder builder = new StringBuilder();
+            builder.append("\"");
             builder.append(functionManager.getFunctionMetadata(aggregation.getFunctionHandle()).getName());
-            builder.append("(" + Joiner.on(",").join(aggregation.getArguments().stream().map(Object::toString).collect(toImmutableList())) + ")");
+            builder.append("\"");
+            builder.append("(");
+            if (aggregation.isDistinct()) {
+                builder.append("DISTINCT ");
+            }
+            if (aggregation.getArguments().isEmpty()) {
+                builder.append("*");
+            }
+            else {
+                builder.append(Joiner.on(",").join(aggregation.getArguments().stream().map(Object::toString).collect(toImmutableList())));
+            }
+            builder.append(")");
             aggregation.getFilter().ifPresent(filter -> builder.append(" WHERE " + filter));
             aggregation.getOrderBy().ifPresent(orderingScheme -> builder.append(" ORDER BY " + orderingScheme.toString()));
             aggregation.getMask().ifPresent(mask -> builder.append(" (mask = " + mask + ")"));

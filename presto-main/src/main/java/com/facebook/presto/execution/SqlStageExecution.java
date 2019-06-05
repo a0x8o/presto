@@ -22,10 +22,10 @@ import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.RemoteTransactionHandle;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.split.RemoteSplit;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -66,6 +66,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
@@ -90,6 +91,10 @@ public final class SqlStageExecution
     private final Set<TaskId> finishedTasks = newConcurrentHashSet();
     @GuardedBy("this")
     private final Set<TaskId> tasksWithFinalInfo = newConcurrentHashSet();
+
+    private final Set<Lifespan> finishedLifespans = ConcurrentHashMap.newKeySet();
+    private final int totalLifespans;
+
     @GuardedBy("this")
     private final AtomicBoolean splitsScheduled = new AtomicBoolean();
 
@@ -153,12 +158,14 @@ public final class SqlStageExecution
             }
         }
         this.exchangeSources = fragmentToExchangeSource.build();
+        this.totalLifespans = stateMachine.getFragment().getStageExecutionDescriptor().getTotalLifespans();
     }
 
     // this is a separate method to ensure that the `this` reference is not leaked during construction
     private void initialize()
     {
         stateMachine.addStateChangeListener(newState -> checkAllTaskFinal());
+        completedLifespansChangeListeners.addListener(lifespans -> finishedLifespans.addAll(lifespans));
     }
 
     public StageId getStageId()
@@ -229,8 +236,8 @@ public final class SqlStageExecution
             stateMachine.transitionToFinished();
         }
 
-        for (PlanNodeId partitionedSource : stateMachine.getFragment().getPartitionedSources()) {
-            schedulingComplete(partitionedSource);
+        for (PlanNodeId tableScanPlanNodeId : stateMachine.getFragment().getTableScanSchedulingOrder()) {
+            schedulingComplete(tableScanPlanNodeId);
         }
     }
 
@@ -279,7 +286,7 @@ public final class SqlStageExecution
 
     public StageInfo getStageInfo()
     {
-        return stateMachine.getStageInfo(this::getAllTaskInfo);
+        return stateMachine.getStageInfo(this::getAllTaskInfo, finishedLifespans.size(), totalLifespans);
     }
 
     private Iterable<TaskInfo> getAllTaskInfo()
@@ -380,7 +387,7 @@ public final class SqlStageExecution
         }
         splitsScheduled.set(true);
 
-        checkArgument(stateMachine.getFragment().getPartitionedSources().containsAll(splits.keySet()), "Invalid splits");
+        checkArgument(stateMachine.getFragment().getTableScanSchedulingOrder().containsAll(splits.keySet()), "Invalid splits");
 
         ImmutableSet.Builder<RemoteTask> newTasks = ImmutableSet.builder();
         Collection<RemoteTask> tasks = this.tasks.get(node);
@@ -522,10 +529,19 @@ public final class SqlStageExecution
     private synchronized void checkAllTaskFinal()
     {
         if (stateMachine.getState().isDone() && tasksWithFinalInfo.containsAll(allTasks)) {
+            if (getFragment().getStageExecutionDescriptor().isStageGroupedExecution()) {
+                // in case stage is CANCELLED/ABORTED/FAILED, number of finished lifespans can be less than total lifespans
+                checkState(finishedLifespans.size() <= totalLifespans, format("Number of finished lifespans (%s) exceeds number of total lifespans (%s)", finishedLifespans.size(), totalLifespans));
+            }
+            else {
+                // ungrouped execution will not update finished lifespans
+                checkState(finishedLifespans.isEmpty());
+            }
+
             List<TaskInfo> finalTaskInfos = getAllTasks().stream()
                     .map(RemoteTask::getTaskInfo)
                     .collect(toImmutableList());
-            stateMachine.setAllTasksFinal(finalTaskInfos);
+            stateMachine.setAllTasksFinal(finalTaskInfos, totalLifespans);
         }
     }
 

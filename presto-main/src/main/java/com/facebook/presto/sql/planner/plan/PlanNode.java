@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
@@ -21,6 +22,10 @@ import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * The basic component of a Presto IR (logic plan).
+ * An IR is a tree structure with each PlanNode performing a specific operation.
+ */
 @JsonTypeInfo(use = JsonTypeInfo.Id.MINIMAL_CLASS, property = "@type")
 public abstract class PlanNode
 {
@@ -38,12 +43,25 @@ public abstract class PlanNode
         return id;
     }
 
+    /**
+     * Get the upstream PlanNodes (i.e., children) of the current PlanNode.
+     */
     public abstract List<PlanNode> getSources();
 
+    /**
+     * The output from the upstream PlanNodes.
+     * It should serve as the input for the current PlanNode.
+     */
     public abstract List<Symbol> getOutputSymbols();
 
+    /**
+     * Alter the upstream PlanNodes of the current PlanNode.
+     */
     public abstract PlanNode replaceChildren(List<PlanNode> newChildren);
 
+    /**
+     * A visitor pattern interface to operate on IR.
+     */
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitPlan(this, context);

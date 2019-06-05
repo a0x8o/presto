@@ -16,9 +16,9 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.PartitioningScheme;
-import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
@@ -654,6 +654,7 @@ public class PruneUnreferencedOutputs
                     node.getTarget(),
                     node.getRowCountSymbol(),
                     node.getFragmentSymbol(),
+                    node.getTableCommitContextSymbol(),
                     node.getColumns(),
                     node.getColumnNames(),
                     node.getPartitioningScheme(),

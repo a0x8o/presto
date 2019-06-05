@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.tree.ExistsPredicate;
 import com.facebook.presto.sql.tree.Expression;
@@ -31,7 +32,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class ApplyNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode input;
     private final PlanNode subquery;
@@ -149,7 +150,7 @@ public class ApplyNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitApply(this, context);
     }

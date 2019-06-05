@@ -32,6 +32,7 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.Analysis;
@@ -452,6 +453,7 @@ public class LogicalPlanner
                     target,
                     symbolAllocator.newSymbol("partialrows", BIGINT),
                     symbolAllocator.newSymbol("fragment", VARBINARY),
+                    symbolAllocator.newSymbol("tablecommitcontext", VARBINARY),
                     symbols,
                     columnNames,
                     partitioningScheme,
@@ -477,6 +479,7 @@ public class LogicalPlanner
                         target,
                         symbolAllocator.newSymbol("partialrows", BIGINT),
                         symbolAllocator.newSymbol("fragment", VARBINARY),
+                        symbolAllocator.newSymbol("tablecommitcontext", VARBINARY),
                         symbols,
                         columnNames,
                         partitioningScheme,

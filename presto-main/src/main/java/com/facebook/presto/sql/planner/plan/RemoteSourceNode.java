@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -29,7 +30,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class RemoteSourceNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final List<PlanFragmentId> sourceFragmentIds;
     private final List<Symbol> outputs;
@@ -91,7 +92,7 @@ public class RemoteSourceNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitRemoteSource(this, context);
     }

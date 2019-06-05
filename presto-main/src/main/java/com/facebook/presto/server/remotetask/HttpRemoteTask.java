@@ -35,12 +35,13 @@ import com.facebook.presto.server.smile.BaseResponse;
 import com.facebook.presto.server.smile.Codec;
 import com.facebook.presto.server.smile.SmileCodec;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Ticker;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.common.util.concurrent.FutureCallback;
@@ -95,6 +96,7 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.util.concurrent.Futures.addCallback;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
@@ -122,6 +124,9 @@ public final class HttpRemoteTask
     private final String nodeId;
     private final PlanFragment planFragment;
     private final OptionalInt totalPartitions;
+
+    private final Set<PlanNodeId> tableScanPlanNodeIds;
+    private final Set<PlanNodeId> remoteSourcePlanNodeIds;
 
     private final AtomicLong nextSplitId = new AtomicLong();
 
@@ -173,7 +178,8 @@ public final class HttpRemoteTask
 
     private final boolean isBinaryTransportEnabled;
 
-    public HttpRemoteTask(Session session,
+    public HttpRemoteTask(
+            Session session,
             TaskId taskId,
             String nodeId,
             URI location,
@@ -232,11 +238,16 @@ public final class HttpRemoteTask
             this.stats = stats;
             this.isBinaryTransportEnabled = isBinaryTransportEnabled;
 
+            this.tableScanPlanNodeIds = ImmutableSet.copyOf(planFragment.getTableScanSchedulingOrder());
+            this.remoteSourcePlanNodeIds = planFragment.getRemoteSourceNodes().stream()
+                    .map(PlanNode::getId)
+                    .collect(toImmutableSet());
+
             for (Entry<PlanNodeId, Split> entry : requireNonNull(initialSplits, "initialSplits is null").entries()) {
                 ScheduledSplit scheduledSplit = new ScheduledSplit(nextSplitId.getAndIncrement(), entry.getKey(), entry.getValue());
                 pendingSplits.put(entry.getKey(), scheduledSplit);
             }
-            pendingSourceSplitCount = planFragment.getPartitionedSources().stream()
+            pendingSourceSplitCount = planFragment.getTableScanSchedulingOrder().stream()
                     .filter(initialSplits::containsKey)
                     .mapToInt(partitionedSource -> initialSplits.get(partitionedSource).size())
                     .sum();
@@ -348,7 +359,7 @@ public final class HttpRemoteTask
                     added++;
                 }
             }
-            if (planFragment.isPartitionedSources(sourceId)) {
+            if (tableScanPlanNodeIds.contains(sourceId)) {
                 pendingSourceSplitCount += added;
                 partitionedSplitCountTracker.setPartitionedSplitCount(getPartitionedSplitCount());
             }
@@ -554,7 +565,7 @@ public final class HttpRemoteTask
             for (Lifespan lifespan : source.getNoMoreSplitsForLifespan()) {
                 pendingNoMoreSplitsForLifespan.remove(planNodeId, lifespan);
             }
-            if (planFragment.isPartitionedSources(planNodeId)) {
+            if (tableScanPlanNodeIds.contains(planNodeId)) {
                 pendingSourceSplitCount -= removed;
             }
         }
@@ -637,9 +648,7 @@ public final class HttpRemoteTask
 
     private synchronized List<TaskSource> getSources()
     {
-        return Stream.concat(planFragment.getPartitionedSourceNodes().stream(), planFragment.getRemoteSourceNodes().stream())
-                .filter(Objects::nonNull)
-                .map(PlanNode::getId)
+        return Stream.concat(tableScanPlanNodeIds.stream(), remoteSourcePlanNodeIds.stream())
                 .map(this::getSource)
                 .filter(Objects::nonNull)
                 .collect(toImmutableList());

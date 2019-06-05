@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.SortExpressionContext;
 import com.facebook.presto.sql.planner.Symbol;
@@ -45,7 +46,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class JoinNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final Type type;
     private final PlanNode left;
@@ -262,7 +263,7 @@ public class JoinNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitJoin(this, context);
     }

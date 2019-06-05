@@ -30,6 +30,7 @@ import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
@@ -37,7 +38,6 @@ import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.testing.TestingHandle;
 import com.facebook.presto.testing.TestingMetadata.TestingColumnHandle;
@@ -65,7 +65,6 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -349,9 +348,10 @@ public class MockRemoteTaskFactory
         {
             noMoreSplits.add(sourceId);
 
-            boolean allSourcesComplete = Stream.concat(fragment.getPartitionedSourceNodes().stream(), fragment.getRemoteSourceNodes().stream())
-                    .filter(Objects::nonNull)
-                    .map(PlanNode::getId)
+            boolean allSourcesComplete = Stream.concat(
+                    fragment.getTableScanSchedulingOrder().stream(),
+                    fragment.getRemoteSourceNodes().stream()
+                            .map(PlanNode::getId))
                     .allMatch(noMoreSplits::contains);
 
             if (allSourcesComplete) {
@@ -423,8 +423,8 @@ public class MockRemoteTaskFactory
             }
             synchronized (this) {
                 int count = 0;
-                for (PlanNodeId partitionedSource : fragment.getPartitionedSources()) {
-                    Collection<Split> partitionedSplits = splits.get(partitionedSource);
+                for (PlanNodeId tableScanPlanNodeId : fragment.getTableScanSchedulingOrder()) {
+                    Collection<Split> partitionedSplits = splits.get(tableScanPlanNodeId);
                     count += partitionedSplits.size();
                 }
                 return count;

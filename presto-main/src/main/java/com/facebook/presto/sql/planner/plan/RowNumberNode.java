@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -29,7 +30,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public final class RowNumberNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final List<Symbol> partitionBy;
@@ -104,7 +105,7 @@ public final class RowNumberNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitRowNumber(this, context);
     }

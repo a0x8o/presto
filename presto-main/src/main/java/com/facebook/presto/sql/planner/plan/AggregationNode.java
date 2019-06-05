@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner.plan;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.tree.Expression;
@@ -40,7 +41,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class AggregationNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final Map<Symbol, Aggregation> aggregations;
@@ -193,7 +194,7 @@ public class AggregationNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitAggregation(this, context);
     }
@@ -369,7 +370,7 @@ public class AggregationNode
                 @JsonProperty("arguments") List<Expression> arguments,
                 @JsonProperty("filter") Optional<Expression> filter,
                 @JsonProperty("orderBy") Optional<OrderingScheme> orderingScheme,
-                @JsonProperty("isDistinct") boolean isDistinct,
+                @JsonProperty("distinct") boolean isDistinct,
                 @JsonProperty("mask") Optional<Symbol> mask)
         {
             this.functionHandle = requireNonNull(functionHandle, "functionHandle is null");

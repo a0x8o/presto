@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.Partitioning.ArgumentBinding;
@@ -44,7 +45,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class ExchangeNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     public enum Type
     {
@@ -276,7 +277,7 @@ public class ExchangeNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitExchange(this, context);
     }

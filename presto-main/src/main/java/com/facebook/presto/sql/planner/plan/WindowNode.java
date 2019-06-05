@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
@@ -39,7 +40,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class WindowNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final Set<Symbol> prePartitionedInputs;
@@ -148,7 +149,7 @@ public class WindowNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitWindow(this, context);
     }

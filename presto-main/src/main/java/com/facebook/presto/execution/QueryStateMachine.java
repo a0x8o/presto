@@ -34,7 +34,6 @@ import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.transaction.TransactionId;
 import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.annotations.VisibleForTesting;
@@ -473,7 +472,7 @@ public class QueryStateMachine
 
             if (stageInfo.getPlan().isPresent()) {
                 PlanFragment plan = stageInfo.getPlan().get();
-                if (plan.getPartitionedSourceNodes().stream().anyMatch(TableScanNode.class::isInstance)) {
+                if (!plan.getTableScanSchedulingOrder().isEmpty()) {
                     rawInputDataSize += stageStats.getRawInputDataSize().toBytes();
                     rawInputPositions += stageStats.getRawInputPositions();
 
@@ -481,10 +480,7 @@ public class QueryStateMachine
                     processedInputPositions += stageStats.getProcessedInputPositions();
                 }
 
-                if (plan.isMaterializedExchangeSource()) {
-                    writtenOutputPhysicalDataSize += stageStats.getPhysicalWrittenDataSize().toBytes();
-                }
-                else {
+                if (plan.isOutputTableWriterFragment()) {
                     writtenOutputPositions += stageInfo.getStageStats().getOperatorSummaries().stream()
                             .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
                             .mapToLong(OperatorStats::getInputPositions)
@@ -494,6 +490,9 @@ public class QueryStateMachine
                             .mapToLong(stats -> stats.getInputDataSize().toBytes())
                             .sum();
                     writtenOutputPhysicalDataSize += stageStats.getPhysicalWrittenDataSize().toBytes();
+                }
+                else {
+                    writtenIntermediatePhysicalDataSize += stageStats.getPhysicalWrittenDataSize().toBytes();
                 }
             }
 

@@ -22,7 +22,6 @@ import com.facebook.presto.operator.PipelineStats;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.eventlistener.StageGcStatistics;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.util.Failures;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
@@ -214,11 +213,11 @@ public class StageStateMachine
         finalStageInfo.addStateChangeListener(fireOnceStateChangeListener);
     }
 
-    public void setAllTasksFinal(Iterable<TaskInfo> finalTaskInfos)
+    public void setAllTasksFinal(Iterable<TaskInfo> finalTaskInfos, int totalLifespans)
     {
         requireNonNull(finalTaskInfos, "finalTaskInfos is null");
         checkState(stageState.get().isDone());
-        StageInfo stageInfo = getStageInfo(() -> finalTaskInfos);
+        StageInfo stageInfo = getStageInfo(() -> finalTaskInfos, totalLifespans, totalLifespans);
         checkArgument(stageInfo.isFinalStageInfo(), "finalTaskInfos are not all done");
         finalStageInfo.compareAndSet(Optional.empty(), Optional.of(stageInfo));
     }
@@ -299,7 +298,7 @@ public class StageStateMachine
                 blockedReasons.addAll(taskStats.getBlockedReasons());
             }
 
-            if (fragment.getPartitionedSourceNodes().stream().anyMatch(TableScanNode.class::isInstance)) {
+            if (!fragment.getTableScanSchedulingOrder().isEmpty()) {
                 rawInputDataSize += taskStats.getRawInputDataSize().toBytes();
                 rawInputPositions += taskStats.getRawInputPositions();
             }
@@ -334,7 +333,7 @@ public class StageStateMachine
                 progressPercentage);
     }
 
-    public StageInfo getStageInfo(Supplier<Iterable<TaskInfo>> taskInfosSupplier)
+    public StageInfo getStageInfo(Supplier<Iterable<TaskInfo>> taskInfosSupplier, int finishedLifespans, int totalLifespans)
     {
         Optional<StageInfo> finalStageInfo = this.finalStageInfo.get();
         if (finalStageInfo.isPresent()) {
@@ -457,6 +456,9 @@ public class StageStateMachine
                 totalTasks,
                 runningTasks,
                 completedTasks,
+
+                totalLifespans,
+                finishedLifespans,
 
                 totalDrivers,
                 queuedDrivers,

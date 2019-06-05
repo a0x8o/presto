@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.WindowNode.Specification;
@@ -32,7 +33,7 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public final class TopNRowNumberNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final Specification specification;
@@ -130,7 +131,7 @@ public final class TopNRowNumberNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitTopNRowNumber(this, context);
     }

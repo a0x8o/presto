@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.metadata.AnalyzeTableHandle;
 import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -28,7 +29,7 @@ import java.util.List;
 import static java.util.Objects.requireNonNull;
 
 public class StatisticsWriterNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final Symbol rowCountSymbol;
@@ -108,7 +109,7 @@ public class StatisticsWriterNode
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitStatisticsWriterNode(this, context);
     }
