@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.plan.Assignments;
@@ -39,7 +39,7 @@ public class TestPruneSemiJoinColumns
     public void testSemiJoinNotNeeded()
     {
         tester().assertThat(new PruneSemiJoinColumns())
-                .on(p -> buildProjectedSemiJoin(p, symbol -> symbol.getName().equals("leftValue")))
+                .on(p -> buildProjectedSemiJoin(p, variable -> variable.getName().equals("leftValue")))
                 .matches(
                         strictProject(
                                 ImmutableMap.of("leftValue", expression("leftValue")),
@@ -50,7 +50,7 @@ public class TestPruneSemiJoinColumns
     public void testAllColumnsNeeded()
     {
         tester().assertThat(new PruneSemiJoinColumns())
-                .on(p -> buildProjectedSemiJoin(p, symbol -> true))
+                .on(p -> buildProjectedSemiJoin(p, variable -> true))
                 .doesNotFire();
     }
 
@@ -58,7 +58,7 @@ public class TestPruneSemiJoinColumns
     public void testKeysNotNeeded()
     {
         tester().assertThat(new PruneSemiJoinColumns())
-                .on(p -> buildProjectedSemiJoin(p, symbol -> (symbol.getName().equals("leftValue") || symbol.getName().equals("match"))))
+                .on(p -> buildProjectedSemiJoin(p, variable -> (variable.getName().equals("leftValue") || variable.getName().equals("match"))))
                 .doesNotFire();
     }
 
@@ -66,7 +66,7 @@ public class TestPruneSemiJoinColumns
     public void testValueNotNeeded()
     {
         tester().assertThat(new PruneSemiJoinColumns())
-                .on(p -> buildProjectedSemiJoin(p, symbol -> symbol.getName().equals("match")))
+                .on(p -> buildProjectedSemiJoin(p, variable -> variable.getName().equals("match")))
                 .matches(
                         strictProject(
                                 ImmutableMap.of("match", expression("match")),
@@ -79,14 +79,14 @@ public class TestPruneSemiJoinColumns
                                         values("rightKey"))));
     }
 
-    private static PlanNode buildProjectedSemiJoin(PlanBuilder p, Predicate<Symbol> projectionFilter)
+    private static PlanNode buildProjectedSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> projectionFilter)
     {
-        Symbol match = p.symbol("match");
-        Symbol leftKey = p.symbol("leftKey");
-        Symbol leftKeyHash = p.symbol("leftKeyHash");
-        Symbol leftValue = p.symbol("leftValue");
-        Symbol rightKey = p.symbol("rightKey");
-        List<Symbol> outputs = ImmutableList.of(match, leftKey, leftKeyHash, leftValue);
+        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression leftKey = p.variable("leftKey");
+        VariableReferenceExpression leftKeyHash = p.variable("leftKeyHash");
+        VariableReferenceExpression leftValue = p.variable("leftValue");
+        VariableReferenceExpression rightKey = p.variable("rightKey");
+        List<VariableReferenceExpression> outputs = ImmutableList.of(match, leftKey, leftKeyHash, leftValue);
         return p.project(
                 Assignments.identity(
                         outputs.stream()

@@ -94,9 +94,9 @@ public class BeginTableWrite
                     node.getId(),
                     node.getSource().accept(this, context),
                     writerTarget,
-                    node.getRowCountSymbol(),
-                    node.getFragmentSymbol(),
-                    node.getTableCommitContextSymbol(),
+                    node.getRowCountVariable(),
+                    node.getFragmentVariable(),
+                    node.getTableCommitContextVariable(),
                     node.getColumns(),
                     node.getColumnNames(),
                     node.getPartitioningScheme(),
@@ -113,7 +113,7 @@ public class BeginTableWrite
                     rewriteDeleteTableScan(node.getSource(), deleteHandle.getHandle()),
                     deleteHandle,
                     node.getRowId(),
-                    node.getOutputSymbols());
+                    node.getOutputVariables());
         }
 
         @Override
@@ -129,7 +129,7 @@ public class BeginTableWrite
                     node.getId(),
                     child,
                     analyzeHandle,
-                    node.getRowCountSymbol(),
+                    node.getRowCountVariable(),
                     node.isRowCountEnabled(),
                     node.getDescriptor());
         }
@@ -149,7 +149,7 @@ public class BeginTableWrite
                     node.getId(),
                     child,
                     newTarget,
-                    node.getRowCountSymbol(),
+                    node.getRowCountVariable(),
                     node.getStatisticsAggregation(),
                     node.getStatisticsAggregationDescriptor());
         }
@@ -205,7 +205,7 @@ public class BeginTableWrite
                 return new TableScanNode(
                         scan.getId(),
                         layoutResult.getLayout().getNewTableHandle(),
-                        scan.getOutputSymbols(),
+                        scan.getOutputVariables(),
                         scan.getAssignments(),
                         layoutResult.getLayout().getPredicate(),
                         computeEnforced(originalEnforcedConstraint, layoutResult.getUnenforcedConstraint()));

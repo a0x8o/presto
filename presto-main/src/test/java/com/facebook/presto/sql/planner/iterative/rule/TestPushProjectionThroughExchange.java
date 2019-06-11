@@ -14,8 +14,8 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.OrderingScheme;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
@@ -44,8 +44,8 @@ public class TestPushProjectionThroughExchange
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p ->
                         p.project(
-                                Assignments.of(p.symbol("x"), new LongLiteral("3")),
-                                p.values(p.symbol("a"))))
+                                Assignments.of(p.variable("x"), new LongLiteral("3")),
+                                p.values(p.variable("a"))))
                 .doesNotFire();
     }
 
@@ -54,14 +54,14 @@ public class TestPushProjectionThroughExchange
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
-                    Symbol c = p.symbol("c");
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
+                    VariableReferenceExpression c = p.variable("c");
 
                     return p.project(
                             Assignments.builder()
-                                    .put(a, a.toSymbolReference())
-                                    .put(b, b.toSymbolReference())
+                                    .put(a, new SymbolReference(a.getName()))
+                                    .put(b, new SymbolReference(b.getName()))
                                     .build(),
                             p.exchange(e -> e
                                     .addSource(p.values(a, b, c))
@@ -76,11 +76,11 @@ public class TestPushProjectionThroughExchange
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
-                    Symbol c = p.symbol("c");
-                    Symbol c2 = p.symbol("c2");
-                    Symbol x = p.symbol("x");
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
+                    VariableReferenceExpression c = p.variable("c");
+                    VariableReferenceExpression c2 = p.variable("c2");
+                    VariableReferenceExpression x = p.variable("x");
                     return p.project(
                             Assignments.of(
                                     x, new LongLiteral("3"),
@@ -112,12 +112,12 @@ public class TestPushProjectionThroughExchange
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
-                    Symbol h = p.symbol("h");
-                    Symbol aTimes5 = p.symbol("a_times_5");
-                    Symbol bTimes5 = p.symbol("b_times_5");
-                    Symbol hTimes5 = p.symbol("h_times_5");
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
+                    VariableReferenceExpression h = p.variable("h");
+                    VariableReferenceExpression aTimes5 = p.variable("a_times_5");
+                    VariableReferenceExpression bTimes5 = p.variable("b_times_5");
+                    VariableReferenceExpression hTimes5 = p.variable("h_times_5");
                     return p.project(
                             Assignments.builder()
                                     .put(aTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("a"), new LongLiteral("5")))
@@ -154,14 +154,14 @@ public class TestPushProjectionThroughExchange
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
-                    Symbol h = p.symbol("h");
-                    Symbol aTimes5 = p.symbol("a_times_5");
-                    Symbol bTimes5 = p.symbol("b_times_5");
-                    Symbol hTimes5 = p.symbol("h_times_5");
-                    Symbol sortSymbol = p.symbol("sortSymbol");
-                    OrderingScheme orderingScheme = new OrderingScheme(ImmutableList.of(sortSymbol), ImmutableMap.of(sortSymbol, SortOrder.ASC_NULLS_FIRST));
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
+                    VariableReferenceExpression h = p.variable("h");
+                    VariableReferenceExpression aTimes5 = p.variable("a_times_5");
+                    VariableReferenceExpression bTimes5 = p.variable("b_times_5");
+                    VariableReferenceExpression hTimes5 = p.variable("h_times_5");
+                    VariableReferenceExpression sortVariable = p.variable("sortVariable");
+                    OrderingScheme orderingScheme = new OrderingScheme(ImmutableList.of(sortVariable), ImmutableMap.of(sortVariable, SortOrder.ASC_NULLS_FIRST));
                     return p.project(
                             Assignments.builder()
                                     .put(aTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("a"), new LongLiteral("5")))
@@ -170,10 +170,10 @@ public class TestPushProjectionThroughExchange
                                     .build(),
                             p.exchange(e -> e
                                     .addSource(
-                                            p.values(a, b, h, sortSymbol))
-                                    .addInputsSet(a, b, h, sortSymbol)
+                                            p.values(a, b, h, sortVariable))
+                                    .addInputsSet(a, b, h, sortVariable)
                                     .singleDistributionPartitioningScheme(
-                                            ImmutableList.of(a, b, h, sortSymbol))
+                                            ImmutableList.of(a, b, h, sortVariable))
                                     .orderingScheme(orderingScheme)));
                 })
                 .matches(

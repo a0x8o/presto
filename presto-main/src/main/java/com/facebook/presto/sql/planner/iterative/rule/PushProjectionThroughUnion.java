@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.matching.Capture;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.Rule;
@@ -34,7 +35,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.matching.Capture.newCapture;
-import static com.facebook.presto.sql.planner.ExpressionSymbolInliner.inlineSymbols;
+import static com.facebook.presto.sql.planner.ExpressionVariableInliner.inlineVariables;
 import static com.facebook.presto.sql.planner.plan.Patterns.project;
 import static com.facebook.presto.sql.planner.plan.Patterns.source;
 import static com.facebook.presto.sql.planner.plan.Patterns.union;
@@ -59,33 +60,38 @@ public class PushProjectionThroughUnion
         UnionNode source = captures.get(CHILD);
 
         // OutputLayout of the resultant Union, will be same as the layout of the Project
-        List<Symbol> outputLayout = parent.getOutputSymbols();
+        List<VariableReferenceExpression> outputLayout = parent.getOutputVariables();
 
         // Mapping from the output symbol to ordered list of symbols from each of the sources
-        ImmutableListMultimap.Builder<Symbol, Symbol> mappings = ImmutableListMultimap.builder();
+        ImmutableListMultimap.Builder<VariableReferenceExpression, VariableReferenceExpression> mappings = ImmutableListMultimap.builder();
 
         // sources for the resultant UnionNode
         ImmutableList.Builder<PlanNode> outputSources = ImmutableList.builder();
 
         for (int i = 0; i < source.getSources().size(); i++) {
-            Map<Symbol, SymbolReference> outputToInput = Maps.transformValues(source.sourceSymbolMap(i), Symbol::toSymbolReference);   // Map: output of union -> input of this source to the union
+            Map<VariableReferenceExpression, SymbolReference> outputToInput = Maps.transformValues(source.sourceVariableMap(i), variable -> new SymbolReference(variable.getName()));   // Map: output of union -> input of this source to the union
             Assignments.Builder assignments = Assignments.builder(); // assignments for the new ProjectNode
 
             // mapping from current ProjectNode to new ProjectNode, used to identify the output layout
-            Map<Symbol, Symbol> projectSymbolMapping = new HashMap<>();
+            Map<VariableReferenceExpression, VariableReferenceExpression> projectVariableMapping = new HashMap<>();
 
             // Translate the assignments in the ProjectNode using symbols of the source of the UnionNode
-            for (Map.Entry<Symbol, Expression> entry : parent.getAssignments().entrySet()) {
-                Expression translatedExpression = inlineSymbols(outputToInput, entry.getValue());
-                Type type = context.getSymbolAllocator().getTypes().get(entry.getKey());
-                Symbol symbol = context.getSymbolAllocator().newSymbol(translatedExpression, type);
-                assignments.put(symbol, translatedExpression);
-                projectSymbolMapping.put(entry.getKey(), symbol);
+            for (Map.Entry<VariableReferenceExpression, Expression> entry : parent.getAssignments().entrySet()) {
+                Expression translatedExpression = inlineVariables(outputToInput, entry.getValue(), context.getSymbolAllocator().getTypes());
+                Type type = entry.getKey().getType();
+                VariableReferenceExpression variable = context.getSymbolAllocator().newVariable(translatedExpression, type);
+                assignments.put(variable, translatedExpression);
+                projectVariableMapping.put(new VariableReferenceExpression(entry.getKey().getName(), type), variable);
             }
             outputSources.add(new ProjectNode(context.getIdAllocator().getNextId(), source.getSources().get(i), assignments.build()));
-            outputLayout.forEach(symbol -> mappings.put(symbol, projectSymbolMapping.get(symbol)));
+            outputLayout.forEach(variable -> mappings.put(variable, projectVariableMapping.get(variable)));
         }
 
-        return Result.ofPlanNode(new UnionNode(parent.getId(), outputSources.build(), mappings.build(), ImmutableList.copyOf(mappings.build().keySet())));
+        return Result.ofPlanNode(new UnionNode(parent.getId(), outputSources.build(), mappings.build()));
+    }
+
+    private static VariableReferenceExpression getWithMatchingSymbol(Map<VariableReferenceExpression, VariableReferenceExpression> variableMapping, Symbol symbol)
+    {
+        return variableMapping.entrySet().stream().filter(entry -> entry.getKey().getName().equals(symbol.getName())).findAny().map(Map.Entry::getValue).get();
     }
 }

@@ -35,9 +35,9 @@ public class TestPruneValuesColumns
         tester().assertThat(new PruneValuesColumns())
                 .on(p ->
                         p.project(
-                                Assignments.of(p.symbol("y"), expression("x")),
+                                Assignments.of(p.variable("y"), expression("x")),
                                 p.values(
-                                        ImmutableList.of(p.symbol("unused"), p.symbol("x")),
+                                        ImmutableList.of(p.variable("unused"), p.variable("x")),
                                         ImmutableList.of(
                                                 constantExpressions(BIGINT, 1, 2),
                                                 constantExpressions(BIGINT, 3, 4)))))
@@ -57,8 +57,8 @@ public class TestPruneValuesColumns
         tester().assertThat(new PruneValuesColumns())
                 .on(p ->
                         p.project(
-                                Assignments.of(p.symbol("y"), expression("x")),
-                                p.values(p.symbol("x"))))
+                                Assignments.of(p.variable("y"), expression("x")),
+                                p.values(p.variable("x"))))
                 .doesNotFire();
     }
 }

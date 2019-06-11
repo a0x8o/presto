@@ -16,13 +16,14 @@ package com.facebook.presto.sql.planner.assertions;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.OrderingScheme;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.OrderBy;
+import com.facebook.presto.sql.tree.SymbolReference;
 
 import java.util.Map;
 import java.util.Optional;
@@ -42,9 +43,9 @@ public class AggregationFunctionMatcher
     }
 
     @Override
-    public Optional<Symbol> getAssignedSymbol(PlanNode node, Session session, Metadata metadata, SymbolAliases symbolAliases)
+    public Optional<VariableReferenceExpression> getAssignedVariable(PlanNode node, Session session, Metadata metadata, SymbolAliases symbolAliases)
     {
-        Optional<Symbol> result = Optional.empty();
+        Optional<VariableReferenceExpression> result = Optional.empty();
         if (!(node instanceof AggregationNode)) {
             return result;
         }
@@ -52,7 +53,7 @@ public class AggregationFunctionMatcher
         AggregationNode aggregationNode = (AggregationNode) node;
 
         FunctionCall expectedCall = callMaker.getExpectedValue(symbolAliases);
-        for (Map.Entry<Symbol, Aggregation> assignment : aggregationNode.getAggregations().entrySet()) {
+        for (Map.Entry<VariableReferenceExpression, Aggregation> assignment : aggregationNode.getAggregations().entrySet()) {
             if (verifyAggregation(metadata.getFunctionManager(), assignment.getValue(), expectedCall)) {
                 checkState(!result.isPresent(), "Ambiguous function calls in %s", aggregationNode);
                 result = Optional.of(assignment.getKey());
@@ -85,9 +86,9 @@ public class AggregationFunctionMatcher
             return false;
         }
         for (int i = 0; i < expectedSortOrder.getSortItems().size(); i++) {
-            Symbol orderingSymbol = orderingScheme.getOrderBy().get(i);
-            if (expectedSortOrder.getSortItems().get(i).getSortKey().equals(orderingSymbol.toSymbolReference()) &&
-                    toSortOrder(expectedSortOrder.getSortItems().get(i)).equals(orderingScheme.getOrdering(orderingSymbol))) {
+            VariableReferenceExpression orderingVariable = orderingScheme.getOrderBy().get(i);
+            if (expectedSortOrder.getSortItems().get(i).getSortKey().equals(new SymbolReference(orderingVariable.getName())) &&
+                    toSortOrder(expectedSortOrder.getSortItems().get(i)).equals(orderingScheme.getOrdering(orderingVariable))) {
                 continue;
             }
             return false;

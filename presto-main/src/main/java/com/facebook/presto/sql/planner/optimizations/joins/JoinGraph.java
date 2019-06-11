@@ -14,7 +14,7 @@
 package com.facebook.presto.sql.planner.optimizations.joins;
 
 import com.facebook.presto.spi.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.plan.FilterNode;
@@ -49,7 +49,7 @@ import static java.util.Objects.requireNonNull;
  */
 public class JoinGraph
 {
-    private final Optional<Map<Symbol, Expression>> assignments;
+    private final Optional<Map<VariableReferenceExpression, Expression>> assignments;
     private final List<Expression> filters;
     private final List<PlanNode> nodes; // nodes in order of their appearance in tree plan (left, right, parent)
     private final Multimap<PlanNodeId, Edge> edges;
@@ -92,7 +92,7 @@ public class JoinGraph
             Multimap<PlanNodeId, Edge> edges,
             PlanNodeId rootId,
             List<Expression> filters,
-            Optional<Map<Symbol, Expression>> assignments)
+            Optional<Map<VariableReferenceExpression, Expression>> assignments)
     {
         this.nodes = nodes;
         this.edges = edges;
@@ -101,12 +101,12 @@ public class JoinGraph
         this.assignments = assignments;
     }
 
-    public JoinGraph withAssignments(Map<Symbol, Expression> assignments)
+    public JoinGraph withAssignments(Map<VariableReferenceExpression, Expression> assignments)
     {
         return new JoinGraph(nodes, edges, rootId, filters, Optional.of(assignments));
     }
 
-    public Optional<Map<Symbol, Expression>> getAssignments()
+    public Optional<Map<VariableReferenceExpression, Expression>> getAssignments()
     {
         return assignments;
     }
@@ -204,15 +204,15 @@ public class JoinGraph
                 .build();
 
         for (JoinNode.EquiJoinClause edge : joinClauses) {
-            Symbol leftSymbol = edge.getLeft();
-            Symbol rightSymbol = edge.getRight();
-            checkState(context.containsSymbol(leftSymbol));
-            checkState(context.containsSymbol(rightSymbol));
+            VariableReferenceExpression leftVariable = edge.getLeft();
+            VariableReferenceExpression rightVariable = edge.getRight();
+            checkState(context.containsVariable(leftVariable));
+            checkState(context.containsVariable(rightVariable));
 
-            PlanNode left = context.getSymbolSource(leftSymbol);
-            PlanNode right = context.getSymbolSource(rightSymbol);
-            edges.put(left.getId(), new Edge(right, leftSymbol, rightSymbol));
-            edges.put(right.getId(), new Edge(left, rightSymbol, leftSymbol));
+            PlanNode left = context.getVariableSource(leftVariable);
+            PlanNode right = context.getVariableSource(rightVariable);
+            edges.put(left.getId(), new Edge(right, leftVariable, rightVariable));
+            edges.put(right.getId(), new Edge(left, rightVariable, leftVariable));
         }
 
         return new JoinGraph(nodes, edges.build(), newRoot, joinedFilters, Optional.empty());
@@ -244,8 +244,8 @@ public class JoinGraph
                 }
             }
 
-            for (Symbol symbol : node.getOutputSymbols()) {
-                context.setSymbolSource(symbol, node);
+            for (VariableReferenceExpression variable : node.getOutputVariables()) {
+                context.setVariableSource(variable, node);
             }
             return new JoinGraph(node);
         }
@@ -305,11 +305,11 @@ public class JoinGraph
         private JoinGraph replacementGraph(PlanNode oldNode, PlanNode newNode, Context context)
         {
             // TODO optimize when idea is generally approved
-            List<Symbol> symbols = context.symbolSources.entrySet().stream()
+            List<VariableReferenceExpression> variables = context.variableSources.entrySet().stream()
                     .filter(entry -> entry.getValue() == oldNode)
                     .map(Map.Entry::getKey)
                     .collect(toImmutableList());
-            symbols.forEach(symbol -> context.symbolSources.put(symbol, newNode));
+            variables.forEach(variable -> context.variableSources.put(variable, newNode));
 
             return new JoinGraph(newNode);
         }
@@ -318,14 +318,14 @@ public class JoinGraph
     public static class Edge
     {
         private final PlanNode targetNode;
-        private final Symbol sourceSymbol;
-        private final Symbol targetSymbol;
+        private final VariableReferenceExpression sourceVariable;
+        private final VariableReferenceExpression targetVariable;
 
-        public Edge(PlanNode targetNode, Symbol sourceSymbol, Symbol targetSymbol)
+        public Edge(PlanNode targetNode, VariableReferenceExpression sourceVariable, VariableReferenceExpression targetVariable)
         {
             this.targetNode = requireNonNull(targetNode, "targetNode is null");
-            this.sourceSymbol = requireNonNull(sourceSymbol, "sourceSymbol is null");
-            this.targetSymbol = requireNonNull(targetSymbol, "targetSymbol is null");
+            this.sourceVariable = requireNonNull(sourceVariable, "sourceVariable is null");
+            this.targetVariable = requireNonNull(targetVariable, "targetVariable is null");
         }
 
         public PlanNode getTargetNode()
@@ -333,27 +333,27 @@ public class JoinGraph
             return targetNode;
         }
 
-        public Symbol getSourceSymbol()
+        public VariableReferenceExpression getSourceVariable()
         {
-            return sourceSymbol;
+            return sourceVariable;
         }
 
-        public Symbol getTargetSymbol()
+        public VariableReferenceExpression getTargetVariable()
         {
-            return targetSymbol;
+            return targetVariable;
         }
     }
 
     private static class Context
     {
-        private final Map<Symbol, PlanNode> symbolSources = new HashMap<>();
+        private final Map<VariableReferenceExpression, PlanNode> variableSources = new HashMap<>();
 
         // TODO When com.facebook.presto.sql.planner.optimizations.EliminateCrossJoins is removed, remove 'joinGraphs'
         private final List<JoinGraph> joinGraphs = new ArrayList<>();
 
-        public void setSymbolSource(Symbol symbol, PlanNode node)
+        public void setVariableSource(VariableReferenceExpression variable, PlanNode node)
         {
-            symbolSources.put(symbol, node);
+            variableSources.put(variable, node);
         }
 
         public void addSubGraph(JoinGraph graph)
@@ -361,15 +361,15 @@ public class JoinGraph
             joinGraphs.add(graph);
         }
 
-        public boolean containsSymbol(Symbol symbol)
+        public boolean containsVariable(VariableReferenceExpression variable)
         {
-            return symbolSources.containsKey(symbol);
+            return variableSources.containsKey(variable);
         }
 
-        public PlanNode getSymbolSource(Symbol symbol)
+        public PlanNode getVariableSource(VariableReferenceExpression variable)
         {
-            checkState(containsSymbol(symbol));
-            return symbolSources.get(symbol);
+            checkState(containsVariable(variable));
+            return variableSources.get(variable);
         }
 
         public List<JoinGraph> getGraphs()

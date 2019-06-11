@@ -17,7 +17,7 @@ import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.optimizations.PlanNodeDecorrelator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
@@ -36,6 +36,7 @@ import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.ExistsPredicate;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.LongLiteral;
+import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
@@ -112,14 +113,14 @@ public class TransformExistsApplyToLateralNode
 
     private Optional<PlanNode> rewriteToNonDefaultAggregation(ApplyNode applyNode, Context context)
     {
-        checkState(applyNode.getSubquery().getOutputSymbols().isEmpty(), "Expected subquery output symbols to be pruned");
+        checkState(applyNode.getSubquery().getOutputVariables().isEmpty(), "Expected subquery output variables to be pruned");
 
-        Symbol exists = getOnlyElement(applyNode.getSubqueryAssignments().getSymbols());
-        Symbol subqueryTrue = context.getSymbolAllocator().newSymbol("subqueryTrue", BOOLEAN);
+        VariableReferenceExpression exists = getOnlyElement(applyNode.getSubqueryAssignments().getVariables());
+        VariableReferenceExpression subqueryTrue = context.getSymbolAllocator().newVariable("subqueryTrue", BOOLEAN);
 
         Assignments.Builder assignments = Assignments.builder();
-        assignments.putIdentities(applyNode.getInput().getOutputSymbols());
-        assignments.put(exists, new CoalesceExpression(ImmutableList.of(subqueryTrue.toSymbolReference(), BooleanLiteral.FALSE_LITERAL)));
+        assignments.putIdentities(applyNode.getInput().getOutputVariables());
+        assignments.put(exists, new CoalesceExpression(ImmutableList.of(new SymbolReference(subqueryTrue.getName()), BooleanLiteral.FALSE_LITERAL)));
 
         PlanNode subquery = new ProjectNode(
                 context.getIdAllocator().getNextId(),
@@ -130,7 +131,7 @@ public class TransformExistsApplyToLateralNode
                         false),
                 Assignments.of(subqueryTrue, TRUE_LITERAL));
 
-        PlanNodeDecorrelator decorrelator = new PlanNodeDecorrelator(context.getIdAllocator(), context.getLookup());
+        PlanNodeDecorrelator decorrelator = new PlanNodeDecorrelator(context.getIdAllocator(), context.getSymbolAllocator(), context.getLookup());
         if (!decorrelator.decorrelateFilters(subquery, applyNode.getCorrelation()).isPresent()) {
             return Optional.empty();
         }
@@ -148,8 +149,8 @@ public class TransformExistsApplyToLateralNode
 
     private PlanNode rewriteToDefaultAggregation(ApplyNode parent, Context context)
     {
-        Symbol count = context.getSymbolAllocator().newSymbol("count", BIGINT);
-        Symbol exists = getOnlyElement(parent.getSubqueryAssignments().getSymbols());
+        VariableReferenceExpression count = context.getSymbolAllocator().newVariable("count", BIGINT);
+        VariableReferenceExpression exists = getOnlyElement(parent.getSubqueryAssignments().getVariables());
 
         return new LateralJoinNode(
                 parent.getId(),
@@ -171,7 +172,7 @@ public class TransformExistsApplyToLateralNode
                                 AggregationNode.Step.SINGLE,
                                 Optional.empty(),
                                 Optional.empty()),
-                        Assignments.of(exists, new ComparisonExpression(GREATER_THAN, count.toSymbolReference(), new Cast(new LongLiteral("0"), BIGINT.toString())))),
+                        Assignments.of(exists, new ComparisonExpression(GREATER_THAN, new SymbolReference(count.getName()), new Cast(new LongLiteral("0"), BIGINT.toString())))),
                 parent.getCorrelation(),
                 INNER,
                 parent.getOriginSubqueryError());

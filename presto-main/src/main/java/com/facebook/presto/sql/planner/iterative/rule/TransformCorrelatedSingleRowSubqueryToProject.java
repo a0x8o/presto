@@ -68,7 +68,7 @@ public class TransformCorrelatedSingleRowSubqueryToProject
         }
 
         List<ProjectNode> subqueryProjections = searchFrom(parent.getSubquery(), context.getLookup())
-                .where(node -> node instanceof ProjectNode && !node.getOutputSymbols().equals(parent.getCorrelation()))
+                .where(node -> node instanceof ProjectNode && !node.getOutputVariables().equals(parent.getCorrelation()))
                 .findAll();
 
         if (subqueryProjections.size() == 0) {
@@ -76,7 +76,7 @@ public class TransformCorrelatedSingleRowSubqueryToProject
         }
         else if (subqueryProjections.size() == 1) {
             Assignments assignments = Assignments.builder()
-                    .putIdentities(parent.getInput().getOutputSymbols())
+                    .putIdentities(parent.getInput().getOutputVariables())
                     .putAll(subqueryProjections.get(0).getAssignments())
                     .build();
             return Result.ofPlanNode(projectNode(parent.getInput(), assignments, context));

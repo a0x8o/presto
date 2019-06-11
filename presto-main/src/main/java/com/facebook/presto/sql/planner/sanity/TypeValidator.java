@@ -18,6 +18,7 @@ import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
@@ -112,16 +113,15 @@ public final class TypeValidator
         {
             visitPlan(node, context);
 
-            for (Map.Entry<Symbol, Expression> entry : node.getAssignments().entrySet()) {
-                Type expectedType = types.get(entry.getKey());
+            for (Map.Entry<VariableReferenceExpression, Expression> entry : node.getAssignments().entrySet()) {
                 if (entry.getValue() instanceof SymbolReference) {
                     SymbolReference symbolReference = (SymbolReference) entry.getValue();
-                    verifyTypeSignature(entry.getKey(), expectedType.getTypeSignature(), types.get(Symbol.from(symbolReference)).getTypeSignature());
+                    verifyTypeSignature(entry.getKey(), types.get(Symbol.from(symbolReference)).getTypeSignature());
                     continue;
                 }
                 Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(session, metadata, sqlParser, types, entry.getValue(), emptyList(), warningCollector);
                 Type actualType = expressionTypes.get(NodeRef.of(entry.getValue()));
-                verifyTypeSignature(entry.getKey(), expectedType.getTypeSignature(), actualType.getTypeSignature());
+                verifyTypeSignature(entry.getKey(), actualType.getTypeSignature());
             }
 
             return null;
@@ -132,67 +132,57 @@ public final class TypeValidator
         {
             visitPlan(node, context);
 
-            ListMultimap<Symbol, Symbol> symbolMapping = node.getSymbolMapping();
-            for (Symbol keySymbol : symbolMapping.keySet()) {
-                List<Symbol> valueSymbols = symbolMapping.get(keySymbol);
-                Type expectedType = types.get(keySymbol);
-                for (Symbol valueSymbol : valueSymbols) {
-                    verifyTypeSignature(keySymbol, expectedType.getTypeSignature(), types.get(valueSymbol).getTypeSignature());
+            ListMultimap<VariableReferenceExpression, VariableReferenceExpression> variableMapping = node.getVariableMapping();
+            for (VariableReferenceExpression keyVariable : variableMapping.keySet()) {
+                List<VariableReferenceExpression> valueVariables = variableMapping.get(keyVariable);
+                for (VariableReferenceExpression valueVariable : valueVariables) {
+                    verifyTypeSignature(keyVariable, valueVariable.getType().getTypeSignature());
                 }
             }
 
             return null;
         }
 
-        private void checkWindowFunctions(Map<Symbol, WindowNode.Function> functions)
+        private void checkWindowFunctions(Map<VariableReferenceExpression, WindowNode.Function> functions)
         {
-            for (Map.Entry<Symbol, WindowNode.Function> entry : functions.entrySet()) {
+            for (Map.Entry<VariableReferenceExpression, WindowNode.Function> entry : functions.entrySet()) {
                 FunctionHandle functionHandle = entry.getValue().getFunctionHandle();
                 CallExpression call = entry.getValue().getFunctionCall();
 
-                checkTypeSignature(entry.getKey(), metadata.getFunctionManager().getFunctionMetadata(functionHandle).getReturnType());
+                verifyTypeSignature(entry.getKey(), metadata.getFunctionManager().getFunctionMetadata(functionHandle).getReturnType());
                 checkCall(entry.getKey(), call);
             }
         }
 
-        private void checkTypeSignature(Symbol symbol, TypeSignature actualTypeSignature)
+        private void checkCall(VariableReferenceExpression variable, CallExpression call)
         {
-            TypeSignature expectedTypeSignature = types.get(symbol).getTypeSignature();
-            verifyTypeSignature(symbol, expectedTypeSignature, actualTypeSignature);
-        }
-
-        private void checkCall(Symbol symbol, CallExpression call)
-        {
-            Type expectedType = types.get(symbol);
             Type actualType = call.getType();
-            verifyTypeSignature(symbol, expectedType.getTypeSignature(), actualType.getTypeSignature());
+            verifyTypeSignature(variable, actualType.getTypeSignature());
         }
 
-        private void checkFunctionSignature(Map<Symbol, Aggregation> aggregations)
+        private void checkFunctionSignature(Map<VariableReferenceExpression, Aggregation> aggregations)
         {
-            for (Map.Entry<Symbol, Aggregation> entry : aggregations.entrySet()) {
-                checkTypeSignature(entry.getKey(), metadata.getFunctionManager().getFunctionMetadata(entry.getValue().getFunctionHandle()).getReturnType());
+            for (Map.Entry<VariableReferenceExpression, Aggregation> entry : aggregations.entrySet()) {
+                verifyTypeSignature(entry.getKey(), metadata.getFunctionManager().getFunctionMetadata(entry.getValue().getFunctionHandle()).getReturnType());
             }
         }
 
-        private void checkAggregation(Map<Symbol, Aggregation> aggregations)
+        private void checkAggregation(Map<VariableReferenceExpression, Aggregation> aggregations)
         {
-            for (Map.Entry<Symbol, Aggregation> entry : aggregations.entrySet()) {
-                Symbol symbol = entry.getKey();
+            for (Map.Entry<VariableReferenceExpression, Aggregation> entry : aggregations.entrySet()) {
                 verifyTypeSignature(
-                        symbol,
-                        types.get(symbol).getTypeSignature(),
+                        entry.getKey(),
                         metadata.getFunctionManager().getFunctionMetadata(entry.getValue().getFunctionHandle()).getReturnType());
                 // TODO check if the argument type agrees with function handle (will be added once Aggregation is using CallExpression).
             }
         }
 
-        private void verifyTypeSignature(Symbol symbol, TypeSignature expected, TypeSignature actual)
+        private void verifyTypeSignature(VariableReferenceExpression variable, TypeSignature actual)
         {
             // UNKNOWN should be considered as a wildcard type, which matches all the other types
             TypeManager typeManager = metadata.getTypeManager();
-            if (!actual.equals(UNKNOWN.getTypeSignature()) && !typeManager.isTypeOnlyCoercion(typeManager.getType(actual), typeManager.getType(expected))) {
-                checkArgument(expected.equals(actual), "type of symbol '%s' is expected to be %s, but the actual type is %s", symbol, expected, actual);
+            if (!actual.equals(UNKNOWN.getTypeSignature()) && !typeManager.isTypeOnlyCoercion(typeManager.getType(actual), variable.getType())) {
+                checkArgument(variable.getType().getTypeSignature().equals(actual), "type of variable '%s' is expected to be %s, but the actual type is %s", variable.getName(), variable.getType(), actual);
             }
         }
     }

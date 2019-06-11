@@ -15,8 +15,8 @@ package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
@@ -51,11 +51,11 @@ public class ExpressionMatcher
     }
 
     @Override
-    public Optional<Symbol> getAssignedSymbol(PlanNode node, Session session, Metadata metadata, SymbolAliases symbolAliases)
+    public Optional<VariableReferenceExpression> getAssignedVariable(PlanNode node, Session session, Metadata metadata, SymbolAliases symbolAliases)
     {
-        Optional<Symbol> result = Optional.empty();
+        Optional<VariableReferenceExpression> result = Optional.empty();
         ImmutableList.Builder<Expression> matchesBuilder = ImmutableList.builder();
-        Map<Symbol, Expression> assignments = getAssignments(node);
+        Map<VariableReferenceExpression, Expression> assignments = getAssignments(node);
 
         if (assignments == null) {
             return result;
@@ -63,7 +63,7 @@ public class ExpressionMatcher
 
         ExpressionVerifier verifier = new ExpressionVerifier(symbolAliases);
 
-        for (Map.Entry<Symbol, Expression> assignment : assignments.entrySet()) {
+        for (Map.Entry<VariableReferenceExpression, Expression> assignment : assignments.entrySet()) {
             if (verifier.process(assignment.getValue(), expression)) {
                 result = Optional.of(assignment.getKey());
                 matchesBuilder.add(assignment.getValue());
@@ -76,7 +76,7 @@ public class ExpressionMatcher
         return result;
     }
 
-    private static Map<Symbol, Expression> getAssignments(PlanNode node)
+    private static Map<VariableReferenceExpression, Expression> getAssignments(PlanNode node)
     {
         if (node instanceof ProjectNode) {
             ProjectNode projectNode = (ProjectNode) node;

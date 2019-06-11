@@ -35,9 +35,9 @@ public class TestRuleTester
             tester.assertThat(new DummyReplaceNodeRule())
                     .on(p ->
                             p.project(
-                                    Assignments.of(p.symbol("y"), expression("x")),
+                                    Assignments.of(p.variable("y"), expression("x")),
                                     p.values(
-                                            ImmutableList.of(p.symbol("x")),
+                                            ImmutableList.of(p.variable(p.symbol("x"))),
                                             ImmutableList.of(constantExpressions(BIGINT, 1)))))
                     .matches(
                             values(ImmutableList.of("different"), ImmutableList.of()));

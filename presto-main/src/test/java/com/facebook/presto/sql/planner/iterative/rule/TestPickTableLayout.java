@@ -78,7 +78,7 @@ public class TestPickTableLayout
     {
         for (Rule<?> rule : pickTableLayout.rules()) {
             tester().assertThat(rule)
-                    .on(p -> p.values(p.symbol("a", BIGINT)))
+                    .on(p -> p.values(p.variable("a", BIGINT)))
                     .doesNotFire();
         }
     }
@@ -90,7 +90,8 @@ public class TestPickTableLayout
                 .on(p -> p.tableScan(
                         nationTableHandle,
                         ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                        ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))
+                        ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                        ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT))))
                 .doesNotFire();
     }
 
@@ -102,7 +103,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 ordersTableHandle,
                                 ImmutableList.of(p.symbol("orderstatus", createVarcharType(1))),
-                                ImmutableMap.of(p.symbol("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
+                                ImmutableList.of(p.variable(p.symbol("orderstatus", createVarcharType(1)))),
+                                ImmutableMap.of(p.variable(p.symbol("orderstatus", createVarcharType(1))), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
                 .matches(values("A"));
     }
 
@@ -115,7 +117,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 nationTableHandle,
                                 ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), columnHandle),
+                                ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                                ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), columnHandle),
                                 TupleDomain.none(),
                                 TupleDomain.none())))
                 .matches(values("A"));
@@ -129,7 +132,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 nationTableHandle,
                                 ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
+                                ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                                ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT)),
                                 TupleDomain.all(),
                                 TupleDomain.all())))
                 .doesNotFire();
@@ -146,7 +150,8 @@ public class TestPickTableLayout
                                 TestingTransactionHandle.create(),
                                 Optional.empty()),
                         ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                        ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))
+                        ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                        ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT))))
                 .matches(
                         constrainedTableScanWithTableLayout("nation", ImmutableMap.of(), ImmutableMap.of("nationkey", "nationkey")));
     }
@@ -162,7 +167,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 ordersTableHandle,
                                 ImmutableList.of(p.symbol("orderstatus", createVarcharType(1))),
-                                ImmutableMap.of(p.symbol("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
+                                ImmutableList.of(p.variable(p.symbol("orderstatus", createVarcharType(1)))),
+                                ImmutableMap.of(p.variable(p.symbol("orderstatus", createVarcharType(1))), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
                 .matches(
                         constrainedTableScanWithTableLayout("orders", filterConstraint, ImmutableMap.of("orderstatus", "orderstatus")));
     }
@@ -175,7 +181,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 ordersTableHandle,
                                 ImmutableList.of(p.symbol("orderstatus", createVarcharType(1))),
-                                ImmutableMap.of(p.symbol("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
+                                ImmutableList.of(p.variable(p.symbol("orderstatus", createVarcharType(1)))),
+                                ImmutableMap.of(p.variable(p.symbol("orderstatus", createVarcharType(1))), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
                 .matches(
                         constrainedTableScanWithTableLayout(
                                 "orders",
@@ -192,7 +199,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 ordersTableHandle,
                                 ImmutableList.of(p.symbol("orderstatus", orderStatusType)),
-                                ImmutableMap.of(p.symbol("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
+                                ImmutableList.of(p.variable(p.symbol("orderstatus", orderStatusType))),
+                                ImmutableMap.of(p.variable(p.symbol("orderstatus", orderStatusType)), new TpchColumnHandle("orderstatus", orderStatusType)))))
                 .matches(constrainedTableScanWithTableLayout(
                         "orders",
                         ImmutableMap.of("orderstatus", singleValue(orderStatusType, utf8Slice("O"))),
@@ -208,7 +216,8 @@ public class TestPickTableLayout
                         p.tableScan(
                                 ordersTableHandle,
                                 ImmutableList.of(p.symbol("orderstatus", orderStatusType)),
-                                ImmutableMap.of(p.symbol("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
+                                ImmutableList.of(p.variable(p.symbol("orderstatus", orderStatusType))),
+                                ImmutableMap.of(p.variable(p.symbol("orderstatus", orderStatusType)), new TpchColumnHandle("orderstatus", orderStatusType)))))
                 .matches(
                         filter("rand() = 0",
                                 constrainedTableScanWithTableLayout(

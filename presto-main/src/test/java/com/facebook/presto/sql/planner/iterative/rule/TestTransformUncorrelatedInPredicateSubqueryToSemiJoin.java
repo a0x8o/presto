@@ -46,7 +46,7 @@ public class TestTransformUncorrelatedInPredicateSubqueryToSemiJoin
     {
         tester().assertThat(new TransformUncorrelatedInPredicateSubqueryToSemiJoin())
                 .on(p -> p.apply(
-                        Assignments.of(p.symbol("x"), new ExistsPredicate(new LongLiteral("1"))),
+                        Assignments.of(p.variable("x"), new ExistsPredicate(new LongLiteral("1"))),
                         emptyList(),
                         p.values(),
                         p.values()))
@@ -59,13 +59,13 @@ public class TestTransformUncorrelatedInPredicateSubqueryToSemiJoin
         tester().assertThat(new TransformUncorrelatedInPredicateSubqueryToSemiJoin())
                 .on(p -> p.apply(
                         Assignments.of(
-                                p.symbol("x"),
+                                p.variable("x"),
                                 new InPredicate(
                                         new SymbolReference("y"),
                                         new SymbolReference("z"))),
                         emptyList(),
-                        p.values(p.symbol("y")),
-                        p.values(p.symbol("z"))))
+                        p.values(p.variable("y")),
+                        p.values(p.variable("z"))))
                 .matches(node(SemiJoinNode.class, values("y"), values("z")));
     }
 }

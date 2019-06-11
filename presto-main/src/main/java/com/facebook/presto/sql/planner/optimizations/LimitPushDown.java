@@ -119,7 +119,7 @@ public class LimitPushDown
             // return empty ValuesNode in case of limit 0
             if (count == 0) {
                 return new ValuesNode(idAllocator.getNextId(),
-                        node.getOutputSymbols(),
+                        node.getOutputVariables(),
                         ImmutableList.of());
             }
 
@@ -135,10 +135,10 @@ public class LimitPushDown
 
             if (limit != null &&
                     node.getAggregations().isEmpty() &&
-                    node.getOutputSymbols().size() == node.getGroupingKeys().size() &&
-                    node.getOutputSymbols().containsAll(node.getGroupingKeys())) {
+                    node.getOutputVariables().size() == node.getGroupingKeys().size() &&
+                    node.getOutputVariables().containsAll(node.getGroupingKeys())) {
                 PlanNode rewrittenSource = context.rewrite(node.getSource());
-                return new DistinctLimitNode(idAllocator.getNextId(), rewrittenSource, limit.getCount(), false, rewrittenSource.getOutputSymbols(), Optional.empty());
+                return new DistinctLimitNode(idAllocator.getNextId(), rewrittenSource, limit.getCount(), false, rewrittenSource.getOutputVariables(), Optional.empty());
             }
             PlanNode rewrittenNode = context.defaultRewrite(node);
             if (limit != null) {
@@ -212,7 +212,7 @@ public class LimitPushDown
                 sources.add(context.rewrite(node.getSources().get(i), childLimit));
             }
 
-            PlanNode output = new UnionNode(node.getId(), sources, node.getSymbolMapping(), node.getOutputSymbols());
+            PlanNode output = new UnionNode(node.getId(), sources, node.getVariableMapping());
             if (limit != null) {
                 output = new LimitNode(idAllocator.getNextId(), output, limit.getCount(), limit.isPartial());
             }
@@ -228,11 +228,11 @@ public class LimitPushDown
                         node.getId(),
                         source,
                         node.getFilteringSource(),
-                        node.getSourceJoinSymbol(),
-                        node.getFilteringSourceJoinSymbol(),
+                        node.getSourceJoinVariable(),
+                        node.getFilteringSourceJoinVariable(),
                         node.getSemiJoinOutput(),
-                        node.getSourceHashSymbol(),
-                        node.getFilteringSourceHashSymbol(),
+                        node.getSourceHashVariable(),
+                        node.getFilteringSourceHashVariable(),
                         node.getDistributionType());
             }
             return node;

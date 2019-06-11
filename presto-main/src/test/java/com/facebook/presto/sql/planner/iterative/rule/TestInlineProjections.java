@@ -34,21 +34,21 @@ public class TestInlineProjections
                 .on(p ->
                         p.project(
                                 Assignments.builder()
-                                        .put(p.symbol("identity"), expression("symbol")) // identity
-                                        .put(p.symbol("multi_complex_1"), expression("complex + 1")) // complex expression referenced multiple times
-                                        .put(p.symbol("multi_complex_2"), expression("complex + 2")) // complex expression referenced multiple times
-                                        .put(p.symbol("multi_literal_1"), expression("literal + 1")) // literal referenced multiple times
-                                        .put(p.symbol("multi_literal_2"), expression("literal + 2")) // literal referenced multiple times
-                                        .put(p.symbol("single_complex"), expression("complex_2 + 2")) // complex expression reference only once
-                                        .put(p.symbol("try"), expression("try(complex / literal)"))
+                                        .put(p.variable("identity"), expression("symbol")) // identity
+                                        .put(p.variable("multi_complex_1"), expression("complex + 1")) // complex expression referenced multiple times
+                                        .put(p.variable("multi_complex_2"), expression("complex + 2")) // complex expression referenced multiple times
+                                        .put(p.variable("multi_literal_1"), expression("literal + 1")) // literal referenced multiple times
+                                        .put(p.variable("multi_literal_2"), expression("literal + 2")) // literal referenced multiple times
+                                        .put(p.variable("single_complex"), expression("complex_2 + 2")) // complex expression reference only once
+                                        .put(p.variable("try"), expression("try(complex / literal)"))
                                         .build(),
                                 p.project(Assignments.builder()
-                                                .put(p.symbol("symbol"), expression("x"))
-                                                .put(p.symbol("complex"), expression("x * 2"))
-                                                .put(p.symbol("literal"), expression("1"))
-                                                .put(p.symbol("complex_2"), expression("x - 1"))
+                                                .put(p.variable("symbol"), expression("x"))
+                                                .put(p.variable("complex"), expression("x * 2"))
+                                                .put(p.variable("literal"), expression("1"))
+                                                .put(p.variable("complex_2"), expression("x - 1"))
                                                 .build(),
-                                        p.values(p.symbol("x")))))
+                                        p.values(p.variable("x")))))
                 .matches(
                         project(
                                 ImmutableMap.<String, ExpressionMatcher>builder()
@@ -73,10 +73,10 @@ public class TestInlineProjections
         tester().assertThat(new InlineProjections())
                 .on(p ->
                         p.project(
-                                Assignments.of(p.symbol("output"), expression("value")),
+                                Assignments.of(p.variable("output"), expression("value")),
                                 p.project(
-                                        Assignments.identity(p.symbol("value")),
-                                        p.values(p.symbol("value")))))
+                                        Assignments.identity(p.variable("value")),
+                                        p.values(p.variable("value")))))
                 .doesNotFire();
     }
 
@@ -86,10 +86,10 @@ public class TestInlineProjections
         tester().assertThat(new InlineProjections())
                 .on(p ->
                         p.project(
-                                Assignments.identity(p.symbol("fromOuterScope"), p.symbol("value")),
+                                Assignments.identity(p.variable("fromOuterScope"), p.variable("value")),
                                 p.project(
-                                        Assignments.identity(p.symbol("value")),
-                                        p.values(p.symbol("value")))))
+                                        Assignments.identity(p.variable("value")),
+                                        p.values(p.variable("value")))))
                 .doesNotFire();
     }
 }

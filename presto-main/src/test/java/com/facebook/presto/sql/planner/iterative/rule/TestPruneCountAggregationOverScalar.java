@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
@@ -49,11 +50,11 @@ public class TestPruneCountAggregationOverScalar
                         p.aggregation((a) -> a
                                 .globalGrouping()
                                 .addAggregation(
-                                        p.symbol("count_1", BIGINT),
+                                        p.variable(p.symbol("count_1", BIGINT)),
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                         ImmutableList.of(BIGINT))
                                 .source(
-                                        p.tableScan(ImmutableList.of(), ImmutableMap.of())))
+                                        p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())))
                 ).doesNotFire();
     }
 
@@ -64,13 +65,13 @@ public class TestPruneCountAggregationOverScalar
                 .on(p ->
                         p.aggregation((a) -> a
                                 .addAggregation(
-                                        p.symbol("count_1", BIGINT),
+                                        p.variable(p.symbol("count_1", BIGINT)),
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()), ImmutableList.of(BIGINT))
                                 .globalGrouping()
                                 .step(AggregationNode.Step.SINGLE)
                                 .source(
                                         p.aggregation((aggregationBuilder) -> aggregationBuilder
-                                                .source(p.tableScan(ImmutableList.of(), ImmutableMap.of()))
+                                                .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of()))
                                                 .globalGrouping()
                                                 .step(AggregationNode.Step.SINGLE)))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
@@ -83,13 +84,13 @@ public class TestPruneCountAggregationOverScalar
                 .on(p ->
                         p.aggregation((a) -> a
                                 .addAggregation(
-                                        p.symbol("count_1", BIGINT),
+                                        p.variable(p.symbol("count_1", BIGINT)),
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                         ImmutableList.of(BIGINT))
                                 .step(AggregationNode.Step.SINGLE)
                                 .globalGrouping()
                                 .source(p.values(
-                                        ImmutableList.of(p.symbol("orderkey")),
+                                        ImmutableList.of(p.variable(p.symbol("orderkey"))),
                                         ImmutableList.of(PlanBuilder.constantExpressions(BIGINT, 1))))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
     }
@@ -101,12 +102,12 @@ public class TestPruneCountAggregationOverScalar
                 .on(p ->
                         p.aggregation((a) -> a
                                 .addAggregation(
-                                        p.symbol("count_1", BIGINT),
+                                        p.variable(p.symbol("count_1", BIGINT)),
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                         ImmutableList.of(BIGINT))
                                 .step(AggregationNode.Step.SINGLE)
                                 .globalGrouping()
-                                .source(p.enforceSingleRow(p.tableScan(ImmutableList.of(), ImmutableMap.of())))))
+                                .source(p.enforceSingleRow(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
     }
 
@@ -117,7 +118,7 @@ public class TestPruneCountAggregationOverScalar
                 .on(p ->
                         p.aggregation((a) -> a
                                 .addAggregation(
-                                        p.symbol("count_1", BIGINT),
+                                        p.variable(p.symbol("count_1", BIGINT)),
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                         ImmutableList.of(BIGINT))
                                 .step(AggregationNode.Step.SINGLE)
@@ -125,9 +126,9 @@ public class TestPruneCountAggregationOverScalar
                                 .source(
                                         p.aggregation(aggregationBuilder -> {
                                             aggregationBuilder
-                                                    .source(p.tableScan(ImmutableList.of(), ImmutableMap.of())).groupingSets(singleGroupingSet(ImmutableList.of(p.symbol("orderkey"))));
+                                                    .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())).groupingSets(singleGroupingSet(ImmutableList.of(p.variable("orderkey"))));
                                             aggregationBuilder
-                                                    .source(p.tableScan(ImmutableList.of(), ImmutableMap.of()));
+                                                    .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of()));
                                         }))))
                 .doesNotFire();
     }
@@ -138,14 +139,15 @@ public class TestPruneCountAggregationOverScalar
         tester().assertThat(new PruneCountAggregationOverScalar(getFunctionManager()))
                 .on(p -> {
                     Symbol totalPrice = p.symbol("total_price", DOUBLE);
+                    VariableReferenceExpression totalPriceVariable = new VariableReferenceExpression(totalPrice.getName(), DOUBLE);
                     AggregationNode inner = p.aggregation((a) -> a
-                            .addAggregation(totalPrice,
+                            .addAggregation(totalPriceVariable,
                                     new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new SymbolReference("totalprice"))),
                                     ImmutableList.of(DOUBLE))
                             .globalGrouping()
                             .source(
                                     p.project(
-                                            Assignments.of(totalPrice, totalPrice.toSymbolReference()),
+                                            Assignments.of(totalPriceVariable, totalPrice.toSymbolReference()),
                                             p.tableScan(
                                                     new TableHandle(
                                                             new ConnectorId("local"),
@@ -153,11 +155,12 @@ public class TestPruneCountAggregationOverScalar
                                                             TestingTransactionHandle.create(),
                                                             Optional.empty()),
                                                     ImmutableList.of(totalPrice),
-                                                    ImmutableMap.of(totalPrice, new TpchColumnHandle(totalPrice.getName(), DOUBLE))))));
+                                                    ImmutableList.of(totalPriceVariable),
+                                                    ImmutableMap.of(totalPriceVariable, new TpchColumnHandle(totalPrice.getName(), DOUBLE))))));
 
                     return p.aggregation((a) -> a
                             .addAggregation(
-                                    p.symbol("sum_outer", DOUBLE),
+                                    p.variable(p.symbol("sum_outer", DOUBLE)),
                                     new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new SymbolReference("sum_inner"))),
                                     ImmutableList.of(DOUBLE))
                             .globalGrouping()

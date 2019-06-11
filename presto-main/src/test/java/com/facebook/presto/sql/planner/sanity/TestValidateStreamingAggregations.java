@@ -68,24 +68,27 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .singleGroupingSet(p.symbol("nationkey"))
+                                .singleGroupingSet(p.variable("nationkey"))
                                 .source(
                                         p.tableScan(
                                                 nationTableHandle,
                                                 ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))));
+                                                ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                                                ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT))))));
 
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .singleGroupingSet(p.symbol("unique"), p.symbol("nationkey"))
-                                .preGroupedSymbols(p.symbol("unique"), p.symbol("nationkey"))
+                                .singleGroupingSet(p.variable("unique"), p.variable("nationkey"))
+                                .preGroupedVariables(p.variable("unique"), p.variable("nationkey"))
                                 .source(
-                                        p.assignUniqueId(p.symbol("unique"),
+                                        p.assignUniqueId(
+                                                p.variable(p.symbol("unique")),
                                                 p.tableScan(
                                                         nationTableHandle,
                                                         ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                                        ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)))))));
+                                                        ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                                                        ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT)))))));
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "Streaming aggregation with input not grouped on the grouping keys")
@@ -94,13 +97,14 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .singleGroupingSet(p.symbol("nationkey"))
-                                .preGroupedSymbols(p.symbol("nationkey"))
+                                .singleGroupingSet(p.variable("nationkey"))
+                                .preGroupedVariables(p.variable("nationkey"))
                                 .source(
                                         p.tableScan(
                                                 nationTableHandle,
                                                 ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))));
+                                                ImmutableList.of(p.variable(p.symbol("nationkey", BIGINT))),
+                                                ImmutableMap.of(p.variable(p.symbol("nationkey", BIGINT)), new TpchColumnHandle("nationkey", BIGINT))))));
     }
 
     private void validatePlan(Function<PlanBuilder, PlanNode> planProvider)

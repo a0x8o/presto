@@ -51,11 +51,11 @@ public class ReplicateSemiJoinInDelete
                     node.getId(),
                     sourceRewritten,
                     filteringSourceRewritten,
-                    node.getSourceJoinSymbol(),
-                    node.getFilteringSourceJoinSymbol(),
+                    node.getSourceJoinVariable(),
+                    node.getFilteringSourceJoinVariable(),
                     node.getSemiJoinOutput(),
-                    node.getSourceHashSymbol(),
-                    node.getFilteringSourceHashSymbol(),
+                    node.getSourceHashVariable(),
+                    node.getFilteringSourceHashVariable(),
                     node.getDistributionType());
 
             if (isDeleteQuery) {
@@ -77,7 +77,7 @@ public class ReplicateSemiJoinInDelete
                     rewrittenSource,
                     node.getTarget(),
                     node.getRowId(),
-                    node.getOutputSymbols());
+                    node.getOutputVariables());
         }
     }
 }

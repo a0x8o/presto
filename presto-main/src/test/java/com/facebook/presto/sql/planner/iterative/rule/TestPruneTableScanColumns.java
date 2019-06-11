@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
@@ -46,9 +47,11 @@ public class TestPruneTableScanColumns
                 .on(p ->
                 {
                     Symbol orderdate = p.symbol("orderdate", DATE);
+                    VariableReferenceExpression orderdateVariable = new VariableReferenceExpression(orderdate.getName(), DATE);
                     Symbol totalprice = p.symbol("totalprice", DOUBLE);
+                    VariableReferenceExpression totalpriceVariable = new VariableReferenceExpression(totalprice.getName(), DOUBLE);
                     return p.project(
-                            Assignments.of(p.symbol("x"), totalprice.toSymbolReference()),
+                            Assignments.of(p.variable("x"), totalprice.toSymbolReference()),
                             p.tableScan(
                                     new TableHandle(
                                             new ConnectorId("local"),
@@ -56,9 +59,10 @@ public class TestPruneTableScanColumns
                                             TestingTransactionHandle.create(),
                                             Optional.empty()),
                                     ImmutableList.of(orderdate, totalprice),
+                                    ImmutableList.of(orderdateVariable, totalpriceVariable),
                                     ImmutableMap.of(
-                                            orderdate, new TpchColumnHandle(orderdate.getName(), DATE),
-                                            totalprice, new TpchColumnHandle(totalprice.getName(), DOUBLE))));
+                                            orderdateVariable, new TpchColumnHandle(orderdate.getName(), DATE),
+                                            totalpriceVariable, new TpchColumnHandle(totalprice.getName(), DOUBLE))));
                 })
                 .matches(
                         strictProject(
@@ -70,12 +74,16 @@ public class TestPruneTableScanColumns
     public void testAllOutputsReferenced()
     {
         tester().assertThat(new PruneTableScanColumns())
-                .on(p ->
-                        p.project(
-                                Assignments.of(p.symbol("y"), expression("x")),
-                                p.tableScan(
-                                        ImmutableList.of(p.symbol("x")),
-                                        ImmutableMap.of(p.symbol("x"), new TestingColumnHandle("x")))))
+                .on(p -> {
+                    Symbol x = p.symbol("x");
+                    VariableReferenceExpression xv = p.variable(x);
+                    return p.project(
+                            Assignments.of(p.variable("y"), expression("x")),
+                            p.tableScan(
+                                    ImmutableList.of(x),
+                                    ImmutableList.of(xv),
+                                    ImmutableMap.of(p.variable(p.symbol("x")), new TestingColumnHandle("x"))));
+                })
                 .doesNotFire();
     }
 }

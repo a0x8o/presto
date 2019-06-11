@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
@@ -42,7 +42,7 @@ public class TestPruneJoinChildrenColumns
     public void testNotAllInputsRereferenced()
     {
         tester().assertThat(new PruneJoinChildrenColumns())
-                .on(p -> buildJoin(p, symbol -> symbol.getName().equals("leftValue")))
+                .on(p -> buildJoin(p, variable -> variable.getName().equals("leftValue")))
                 .matches(
                         join(
                                 JoinNode.Type.INNER,
@@ -69,8 +69,8 @@ public class TestPruneJoinChildrenColumns
     {
         tester().assertThat(new PruneJoinColumns())
                 .on(p -> {
-                    Symbol leftValue = p.symbol("leftValue");
-                    Symbol rightValue = p.symbol("rightValue");
+                    VariableReferenceExpression leftValue = p.variable("leftValue");
+                    VariableReferenceExpression rightValue = p.variable("rightValue");
                     return p.join(
                             JoinNode.Type.INNER,
                             p.values(leftValue),
@@ -84,15 +84,15 @@ public class TestPruneJoinChildrenColumns
                 .doesNotFire();
     }
 
-    private static PlanNode buildJoin(PlanBuilder p, Predicate<Symbol> joinOutputFilter)
+    private static PlanNode buildJoin(PlanBuilder p, Predicate<VariableReferenceExpression> joinOutputFilter)
     {
-        Symbol leftKey = p.symbol("leftKey");
-        Symbol leftKeyHash = p.symbol("leftKeyHash");
-        Symbol leftValue = p.symbol("leftValue");
-        Symbol rightKey = p.symbol("rightKey");
-        Symbol rightKeyHash = p.symbol("rightKeyHash");
-        Symbol rightValue = p.symbol("rightValue");
-        List<Symbol> outputs = ImmutableList.of(leftValue, rightValue);
+        VariableReferenceExpression leftKey = p.variable("leftKey");
+        VariableReferenceExpression leftKeyHash = p.variable("leftKeyHash");
+        VariableReferenceExpression leftValue = p.variable("leftValue");
+        VariableReferenceExpression rightKey = p.variable("rightKey");
+        VariableReferenceExpression rightKeyHash = p.variable("rightKeyHash");
+        VariableReferenceExpression rightValue = p.variable("rightValue");
+        List<VariableReferenceExpression> outputs = ImmutableList.of(leftValue, rightValue);
         return p.join(
                 JoinNode.Type.INNER,
                 p.values(leftKey, leftKeyHash, leftValue),
