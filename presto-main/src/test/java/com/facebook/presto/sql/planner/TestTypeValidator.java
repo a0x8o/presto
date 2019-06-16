@@ -21,6 +21,7 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.VarcharType;
@@ -65,6 +66,7 @@ import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.BoundType.UN
 import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.BoundType.UNBOUNDED_PRECEDING;
 import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.WindowType.RANGE;
 import static com.facebook.presto.sql.relational.Expressions.call;
+import static com.facebook.presto.sql.relational.Expressions.variable;
 
 @Test(singleThreaded = true)
 public class TestTypeValidator
@@ -77,6 +79,7 @@ public class TestTypeValidator
     private static final SqlParser SQL_PARSER = new SqlParser();
     private static final TypeValidator TYPE_VALIDATOR = new TypeValidator();
     private static final FunctionManager FUNCTION_MANAGER = createTestMetadataManager().getFunctionManager();
+    private static final FunctionHandle SUM = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE));
 
     private SymbolAllocator symbolAllocator;
     private TableScanNode baseTableScan;
@@ -174,7 +177,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(call("sum", functionHandle, DOUBLE, new VariableReferenceExpression(columnC.getName(), DOUBLE)), frame);
+        WindowNode.Function function = new WindowNode.Function(call("sum", functionHandle, DOUBLE, variable(columnC.getName(), DOUBLE)), frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 
@@ -199,8 +202,10 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationVariable, new Aggregation(
-                        FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE)),
-                        ImmutableList.of(columnC.toSymbolReference()),
+                        new CallExpression("sum",
+                                SUM,
+                                DOUBLE,
+                                ImmutableList.of(variable(columnC.getName(), DOUBLE))),
                         Optional.empty(),
                         Optional.empty(),
                         false,
@@ -244,8 +249,7 @@ public class TestTypeValidator
         assertTypesValid(node);
     }
 
-    // This test will be disable temporarily until we converted Aggregation to use CallExpression
-    @Test(enabled = false, expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "type of variable 'sum(_[0-9]+)?' is expected to be double, but the actual type is bigint")
+    @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "Expected input types are \\[double\\] but getting \\[bigint\\]")
     public void testInvalidAggregationFunctionCall()
     {
         VariableReferenceExpression aggregationVariable = symbolAllocator.newVariable("sum", DOUBLE);
@@ -254,8 +258,11 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationVariable, new Aggregation(
-                        FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE)),
-                        ImmutableList.of(columnA.toSymbolReference()),
+                        new CallExpression(
+                                "sum",
+                                SUM,
+                                DOUBLE,
+                                ImmutableList.of(variable(columnA.getName(), BIGINT))),
                         Optional.empty(),
                         Optional.empty(),
                         false,
@@ -278,8 +285,11 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationVariable, new Aggregation(
-                        FUNCTION_MANAGER.lookupFunction("sum", fromTypes(BIGINT)), // should be DOUBLE
-                        ImmutableList.of(columnC.toSymbolReference()),
+                        new CallExpression(
+                                "sum",
+                                FUNCTION_MANAGER.lookupFunction("sum", fromTypes(BIGINT)), // should be DOUBLE
+                                DOUBLE,
+                                ImmutableList.of(variable(columnC.getName(), BIGINT))),
                         Optional.empty(),
                         Optional.empty(),
                         false,

@@ -25,6 +25,7 @@ import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
@@ -73,7 +74,6 @@ import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.sql.tree.OrderBy;
 import com.facebook.presto.testing.TestingMetadata.TestingTableHandle;
 import com.facebook.presto.testing.TestingTransactionHandle;
 import com.google.common.base.Functions;
@@ -277,6 +277,7 @@ public class PlanBuilder
         {
             this.types = types;
         }
+
         public AggregationBuilder source(PlanNode source)
         {
             this.source = source;
@@ -299,10 +300,13 @@ public class PlanBuilder
             FunctionCall call = (FunctionCall) expression;
             FunctionHandle functionHandle = metadata.getFunctionManager().resolveFunction(session, call.getName(), TypeSignatureProvider.fromTypes(inputTypes));
             return addAggregation(output, new Aggregation(
-                    functionHandle,
-                    call.getArguments(),
-                    call.getFilter(),
-                    call.getOrderBy().map(OrderBy::getSortItems).map(sortItems -> toOrderingScheme(sortItems, types)),
+                    new CallExpression(
+                            call.getName().getSuffix(),
+                            functionHandle,
+                            metadata.getType(metadata.getFunctionManager().getFunctionMetadata(functionHandle).getReturnType()),
+                            call.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
+                    call.getFilter().map(OriginalExpressionUtils::castToRowExpression),
+                    call.getOrderBy().map(orderBy -> toOrderingScheme(orderBy, types)),
                     call.isDistinct(),
                     mask));
         }

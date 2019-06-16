@@ -19,6 +19,7 @@ import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.Analysis;
@@ -68,8 +69,6 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -562,10 +561,13 @@ class QueryPlanner
 
             aggregationsBuilder.put(newVariable,
                     new Aggregation(
-                            analysis.getFunctionHandle(aggregate),
-                            rewrittenFunction.getArguments(),
-                            rewrittenFunction.getFilter(),
-                            rewrittenFunction.getOrderBy().map(OrderBy::getSortItems).map(sortItems -> toOrderingScheme(sortItems, symbolAllocator.getTypes())),
+                            new CallExpression(
+                                    aggregate.getName().getSuffix(),
+                                    analysis.getFunctionHandle(aggregate),
+                                    analysis.getType(aggregate),
+                                    rewrittenFunction.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
+                            rewrittenFunction.getFilter().map(OriginalExpressionUtils::castToRowExpression),
+                            rewrittenFunction.getOrderBy().map(orderBy -> toOrderingScheme(orderBy, symbolAllocator.getTypes())),
                             rewrittenFunction.isDistinct(),
                             Optional.empty()));
         }
@@ -892,23 +894,10 @@ class QueryPlanner
             return subPlan;
         }
 
-        Iterator<SortItem> sortItems = orderBy.get().getSortItems().iterator();
-
-        // This logic is similar to PlannerUtils::toOrderingScheme
-        ImmutableList.Builder<VariableReferenceExpression> orderByVariables = ImmutableList.builder();
-        Map<VariableReferenceExpression, SortOrder> orderings = new HashMap<>();
-        for (Expression fieldOrExpression : orderByExpressions) {
-            VariableReferenceExpression variable = subPlan.translateToVariable(fieldOrExpression);
-
-            SortItem sortItem = sortItems.next();
-            if (!orderings.containsKey(variable)) {
-                orderByVariables.add(variable);
-                orderings.put(variable, toSortOrder(sortItem));
-            }
-        }
-
         PlanNode planNode;
-        OrderingScheme orderingScheme = new OrderingScheme(orderByVariables.build(), orderings);
+        OrderingScheme orderingScheme = toOrderingScheme(
+                orderByExpressions.stream().map(subPlan::translate).collect(toImmutableList()),
+                orderBy.get().getSortItems().stream().map(PlannerUtils::toSortOrder).collect(toImmutableList()));
         if (limit.isPresent() && !limit.get().equalsIgnoreCase("all")) {
             planNode = new TopNNode(idAllocator.getNextId(), subPlan.getRoot(), Long.parseLong(limit.get()), orderingScheme, TopNNode.Step.SINGLE);
         }
