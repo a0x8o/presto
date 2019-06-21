@@ -18,8 +18,12 @@ import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.ResolvedIndex;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.LiteralEncoder;
@@ -27,17 +31,13 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
-import com.facebook.presto.sql.planner.plan.Assignments;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Expression;
@@ -57,9 +57,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
 import static com.facebook.presto.sql.ExpressionUtils.combineConjuncts;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignmentsAsSymbolReferences;
 import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.WindowType.RANGE;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -162,7 +164,7 @@ public class IndexJoinOptimizer
                                 indexJoinNode = new ProjectNode(
                                         idAllocator.getNextId(),
                                         indexJoinNode,
-                                        Assignments.identity(node.getOutputVariables()));
+                                        identityAssignmentsAsSymbolReferences(node.getOutputVariables()));
                             }
 
                             return indexJoinNode;
@@ -172,14 +174,14 @@ public class IndexJoinOptimizer
                     case LEFT:
                         // We cannot use indices for outer joins until index join supports in-line filtering
                         if (!node.getFilter().isPresent() && rightIndexCandidate.isPresent()) {
-                            return createIndexJoinWithExpectedOutputs(node.getOutputVariables(), IndexJoinNode.Type.SOURCE_OUTER, leftRewritten, rightIndexCandidate.get(), createEquiJoinClause(leftJoinVariables, rightJoinVariables), idAllocator, symbolAllocator);
+                            return createIndexJoinWithExpectedOutputs(node.getOutputVariables(), IndexJoinNode.Type.SOURCE_OUTER, leftRewritten, rightIndexCandidate.get(), createEquiJoinClause(leftJoinVariables, rightJoinVariables), idAllocator);
                         }
                         break;
 
                     case RIGHT:
                         // We cannot use indices for outer joins until index join supports in-line filtering
                         if (!node.getFilter().isPresent() && leftIndexCandidate.isPresent()) {
-                            return createIndexJoinWithExpectedOutputs(node.getOutputVariables(), IndexJoinNode.Type.SOURCE_OUTER, rightRewritten, leftIndexCandidate.get(), createEquiJoinClause(rightJoinVariables, leftJoinVariables), idAllocator, symbolAllocator);
+                            return createIndexJoinWithExpectedOutputs(node.getOutputVariables(), IndexJoinNode.Type.SOURCE_OUTER, rightRewritten, leftIndexCandidate.get(), createEquiJoinClause(rightJoinVariables, leftJoinVariables), idAllocator);
                         }
                         break;
 
@@ -203,15 +205,14 @@ public class IndexJoinOptimizer
                 PlanNode probe,
                 PlanNode index,
                 List<IndexJoinNode.EquiJoinClause> equiJoinClause,
-                PlanNodeIdAllocator idAllocator,
-                SymbolAllocator symbolAllocator)
+                PlanNodeIdAllocator idAllocator)
         {
             PlanNode result = new IndexJoinNode(idAllocator.getNextId(), type, probe, index, equiJoinClause, Optional.empty(), Optional.empty());
             if (!result.getOutputVariables().equals(expectedOutputs)) {
                 result = new ProjectNode(
                         idAllocator.getNextId(),
                         result,
-                        Assignments.identity(expectedOutputs));
+                        identityAssignmentsAsSymbolReferences(expectedOutputs));
             }
             return result;
         }
@@ -335,9 +336,9 @@ public class IndexJoinOptimizer
             // Rewrite the lookup variables in terms of only the pre-projected variables that have direct translations
             ImmutableSet.Builder<VariableReferenceExpression> newLookupVariablesBuilder = ImmutableSet.builder();
             for (VariableReferenceExpression variable : context.get().getLookupVariables()) {
-                Expression expression = node.getAssignments().get(variable);
-                if (expression instanceof SymbolReference) {
-                    newLookupVariablesBuilder.add(new VariableReferenceExpression(((SymbolReference) expression).getName(), variable.getType()));
+                RowExpression expression = node.getAssignments().get(variable);
+                if (castToExpression(expression) instanceof SymbolReference) {
+                    newLookupVariablesBuilder.add(new VariableReferenceExpression(((SymbolReference) castToExpression(expression)).getName(), variable.getType()));
                 }
             }
             ImmutableSet<VariableReferenceExpression> newLookupVariables = newLookupVariablesBuilder.build();
@@ -488,7 +489,7 @@ public class IndexJoinOptimizer
                 extends InternalPlanVisitor<Map<VariableReferenceExpression, VariableReferenceExpression>, Set<VariableReferenceExpression>>
         {
             @Override
-            protected Map<VariableReferenceExpression, VariableReferenceExpression> visitPlan(PlanNode node, Set<VariableReferenceExpression> lookupVariables)
+            public Map<VariableReferenceExpression, VariableReferenceExpression> visitPlan(PlanNode node, Set<VariableReferenceExpression> lookupVariables)
             {
                 throw new UnsupportedOperationException("Node not expected to be part of Index pipeline: " + node);
             }
@@ -496,8 +497,12 @@ public class IndexJoinOptimizer
             @Override
             public Map<VariableReferenceExpression, VariableReferenceExpression> visitProject(ProjectNode node, Set<VariableReferenceExpression> lookupVariables)
             {
-                // Map from output variables to source variables
-                Map<VariableReferenceExpression, Symbol> directSymbolTranslationOutputMap = Maps.transformValues(Maps.filterValues(node.getAssignments().getMap(), SymbolReference.class::isInstance), Symbol::from);
+                // Map from output Symbols to source Symbols
+                Map<VariableReferenceExpression, Symbol> directSymbolTranslationOutputMap = Maps.transformValues(
+                        Maps.filterValues(
+                                node.getAssignments().getMap(),
+                                IndexKeyTracer::isVariable),
+                        this::extractSymbol);
                 Map<VariableReferenceExpression, VariableReferenceExpression> outputToSourceMap = lookupVariables.stream()
                         .filter(directSymbolTranslationOutputMap.keySet()::contains)
                         .collect(toImmutableMap(identity(), variable -> new VariableReferenceExpression(directSymbolTranslationOutputMap.get(variable).getName(), variable.getType())));
@@ -560,6 +565,27 @@ public class IndexJoinOptimizer
                 checkState(node.getLookupVariables().equals(lookupVariables), "lookupVariables must be the same as IndexSource lookup variables");
                 return lookupVariables.stream().collect(toImmutableMap(identity(), identity()));
             }
+
+            private Symbol extractSymbol(RowExpression expression)
+            {
+                // TODO remove isExpression once all optimization rule is using RowExpression.
+                // Handle both expression and rowExpression because ValidateDependenciesChecker used it.
+                if (expression instanceof VariableReferenceExpression) {
+                    return new Symbol(((VariableReferenceExpression) expression).getName());
+                }
+                checkArgument(isExpression(expression), "Must either be VariableReference or SymbolReference");
+                return Symbol.from(castToExpression(expression));
+            }
+        }
+
+        private static boolean isVariable(RowExpression expression)
+        {
+            // TODO remove isExpression once all optimization rule is using RowExpression.
+            // Handle both expression and rowExpression because ValidateDependenciesChecker used it.
+            if (isExpression(expression)) {
+                return castToExpression(expression) instanceof SymbolReference;
+            }
+            return expression instanceof VariableReferenceExpression;
         }
     }
 }

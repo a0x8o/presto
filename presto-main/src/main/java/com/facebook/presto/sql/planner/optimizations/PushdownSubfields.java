@@ -16,12 +16,16 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.Subfield.NestedField;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.RowType;
@@ -34,20 +38,17 @@ import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -222,9 +223,9 @@ public class PushdownSubfields
         @Override
         public PlanNode visitProject(ProjectNode node, RewriteContext<Context> context)
         {
-            for (Map.Entry<VariableReferenceExpression, Expression> entry : node.getAssignments().entrySet()) {
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : node.getAssignments().entrySet()) {
                 VariableReferenceExpression variable = entry.getKey();
-                Expression expression = entry.getValue();
+                Expression expression = castToExpression(entry.getValue());
 
                 if (expression instanceof SymbolReference) {
                     context.get().addAssignment(variable, new VariableReferenceExpression(((SymbolReference) expression).getName(), types.get(Symbol.from(expression))));

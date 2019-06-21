@@ -13,15 +13,16 @@
  */
 package com.facebook.presto.sql.planner.optimizations.joins;
 
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
 import com.facebook.presto.sql.planner.iterative.Lookup;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.Expression;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
@@ -39,6 +40,7 @@ import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToE
 import static com.facebook.presto.sql.relational.ProjectNodeUtils.isIdentity;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Maps.transformValues;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -232,7 +234,7 @@ public class JoinGraph
         }
 
         @Override
-        protected JoinGraph visitPlan(PlanNode node, Context context)
+        public JoinGraph visitPlan(PlanNode node, Context context)
         {
             if (!shallow) {
                 for (PlanNode child : node.getSources()) {
@@ -281,7 +283,7 @@ public class JoinGraph
         {
             if (isIdentity(node)) {
                 JoinGraph graph = node.getSource().accept(this, context);
-                return graph.withAssignments(node.getAssignments().getMap());
+                return graph.withAssignments(transformValues(node.getAssignments().getMap(), OriginalExpressionUtils::castToExpression));
             }
             return visitPlan(node, context);
         }

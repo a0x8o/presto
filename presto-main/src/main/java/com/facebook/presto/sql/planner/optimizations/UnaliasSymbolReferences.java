@@ -16,7 +16,10 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -36,7 +39,6 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExceptNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -46,7 +48,6 @@ import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -58,7 +59,6 @@ import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -89,6 +89,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.sql.planner.optimizations.ApplyNodeUtil.verifySubquerySupported;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
@@ -474,7 +475,9 @@ public class UnaliasSymbolReferences
             PlanNode subquery = context.rewrite(node.getSubquery());
             List<VariableReferenceExpression> canonicalCorrelation = Lists.transform(node.getCorrelation(), this::canonicalize);
 
-            return new ApplyNode(node.getId(), source, subquery, canonicalize(node.getSubqueryAssignments()), canonicalCorrelation, node.getOriginSubqueryError());
+            Assignments assignments = canonicalize(node.getSubqueryAssignments());
+            verifySubquerySupported(assignments);
+            return new ApplyNode(node.getId(), source, subquery, assignments, canonicalCorrelation, node.getOriginSubqueryError());
         }
 
         @Override
@@ -613,7 +616,7 @@ public class UnaliasSymbolReferences
         }
 
         @Override
-        protected PlanNode visitPlan(PlanNode node, RewriteContext<Void> context)
+        public PlanNode visitPlan(PlanNode node, RewriteContext<Void> context)
         {
             throw new UnsupportedOperationException("Unsupported plan node " + node.getClass().getSimpleName());
         }
@@ -634,8 +637,8 @@ public class UnaliasSymbolReferences
         {
             Map<Expression, VariableReferenceExpression> computedExpressions = new HashMap<>();
             Assignments.Builder assignments = Assignments.builder();
-            for (Map.Entry<VariableReferenceExpression, Expression> entry : oldAssignments.getMap().entrySet()) {
-                Expression expression = canonicalize(entry.getValue());
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : oldAssignments.getMap().entrySet()) {
+                Expression expression = canonicalize(castToExpression(entry.getValue()));
 
                 if (expression instanceof SymbolReference) {
                     // Always map a trivial symbol projection
@@ -660,7 +663,7 @@ public class UnaliasSymbolReferences
                 }
 
                 VariableReferenceExpression canonical = canonicalize(entry.getKey());
-                assignments.put(canonical, expression);
+                assignments.put(canonical, castToRowExpression(expression));
             }
             return assignments.build();
         }

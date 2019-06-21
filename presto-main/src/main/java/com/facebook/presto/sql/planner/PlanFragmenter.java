@@ -15,7 +15,6 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.QueryManagerConfig;
 import com.facebook.presto.execution.scheduler.BucketNodeMap;
@@ -24,23 +23,27 @@ import com.facebook.presto.metadata.InsertTableHandle;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.NewTableLayout;
 import com.facebook.presto.metadata.PartitioningMetadata;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayout.TablePartitioning;
 import com.facebook.presto.metadata.TableLayoutResult;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorNewTableLayout;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.Partitioning.ArgumentBinding;
@@ -54,14 +57,12 @@ import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode.CreateHandle;
 import com.facebook.presto.sql.planner.plan.TableWriterNode.InsertHandle;
@@ -69,7 +70,6 @@ import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.planner.sanity.PlanSanityChecker;
-import com.facebook.presto.sql.tree.Expression;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -560,14 +560,13 @@ public class PlanFragmenter
         private PartitioningVariableAssignments assignPartitioningVariables(Partitioning partitioning)
         {
             ImmutableList.Builder<VariableReferenceExpression> variables = ImmutableList.builder();
-            ImmutableMap.Builder<VariableReferenceExpression, Expression> constants = ImmutableMap.builder();
+            ImmutableMap.Builder<VariableReferenceExpression, RowExpression> constants = ImmutableMap.builder();
             for (ArgumentBinding argumentBinding : partitioning.getArguments()) {
                 VariableReferenceExpression variable;
                 if (argumentBinding.isConstant()) {
                     ConstantExpression constant = argumentBinding.getConstant();
-                    Expression expression = literalEncoder.toExpression(constant.getValue(), constant.getType());
-                    variable = symbolAllocator.newVariable(expression, constant.getType());
-                    constants.put(variable, expression);
+                    variable = symbolAllocator.newVariable("constant_partition", constant.getType());
+                    constants.put(variable, constant);
                 }
                 else {
                     variable = argumentBinding.getVariableReference();
@@ -632,7 +631,7 @@ public class PlanFragmenter
                 List<VariableReferenceExpression> outputs,
                 List<List<VariableReferenceExpression>> inputs,
                 List<PlanNode> sources,
-                Map<VariableReferenceExpression, Expression> constantExpressions,
+                Map<VariableReferenceExpression, RowExpression> constantExpressions,
                 PartitioningMetadata partitioningMetadata)
         {
             if (!constantExpressions.isEmpty()) {
@@ -656,7 +655,7 @@ public class PlanFragmenter
                 sources = sources.stream()
                         .map(source -> {
                             Assignments.Builder assignments = Assignments.builder();
-                            assignments.putIdentities(source.getOutputVariables());
+                            source.getOutputVariables().forEach(variable -> assignments.put(variable, new VariableReferenceExpression(variable.getName(), variable.getType())));
                             constantVariables.forEach(variable -> assignments.put(variable, constantExpressions.get(variable)));
                             return new ProjectNode(idAllocator.getNextId(), source, assignments.build());
                         })
@@ -899,7 +898,7 @@ public class PlanFragmenter
         }
 
         @Override
-        protected GroupedExecutionProperties visitPlan(PlanNode node, Void context)
+        public GroupedExecutionProperties visitPlan(PlanNode node, Void context)
         {
             if (node.getSources().isEmpty()) {
                 return GroupedExecutionProperties.notCapable();
@@ -1216,9 +1215,9 @@ public class PlanFragmenter
     private static class PartitioningVariableAssignments
     {
         private final List<VariableReferenceExpression> variables;
-        private final Map<VariableReferenceExpression, Expression> constants;
+        private final Map<VariableReferenceExpression, RowExpression> constants;
 
-        private PartitioningVariableAssignments(List<VariableReferenceExpression> variables, Map<VariableReferenceExpression, Expression> constants)
+        private PartitioningVariableAssignments(List<VariableReferenceExpression> variables, Map<VariableReferenceExpression, RowExpression> constants)
         {
             this.variables = ImmutableList.copyOf(requireNonNull(variables, "variables is null"));
             this.constants = ImmutableMap.copyOf(requireNonNull(constants, "constants is null"));
@@ -1232,7 +1231,7 @@ public class PlanFragmenter
             return variables;
         }
 
-        public Map<VariableReferenceExpression, Expression> getConstants()
+        public Map<VariableReferenceExpression, RowExpression> getConstants()
         {
             return constants;
         }

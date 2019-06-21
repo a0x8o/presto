@@ -14,7 +14,6 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.cost.CachingCostProvider;
 import com.facebook.presto.cost.CachingStatsProvider;
 import com.facebook.presto.cost.CostCalculator;
@@ -26,13 +25,16 @@ import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.NewTableLayout;
 import com.facebook.presto.metadata.QualifiedObjectName;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableMetadata;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.facebook.presto.spi.type.Type;
@@ -52,13 +54,11 @@ import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticAggregations;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.sanity.PlanSanityChecker;
@@ -99,6 +99,7 @@ import static com.facebook.presto.sql.planner.plan.TableWriterNode.InsertReferen
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.WriterTarget;
 import static com.facebook.presto.sql.planner.sanity.PlanSanityChecker.DISTRIBUTED_PLAN_SANITY_CHECKER;
 import static com.facebook.presto.sql.relational.Expressions.constant;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -358,7 +359,7 @@ public class LogicalPlanner
             int index = insert.getColumns().indexOf(columns.get(column.getName()));
             if (index < 0) {
                 Expression cast = new Cast(new NullLiteral(), column.getType().getTypeSignature().toString());
-                assignments.put(output, cast);
+                assignments.put(output, castToRowExpression(cast));
             }
             else {
                 Symbol input = plan.getSymbol(index);
@@ -366,11 +367,11 @@ public class LogicalPlanner
                 Type queryType = symbolAllocator.getTypes().get(input);
 
                 if (queryType.equals(tableType) || metadata.getTypeManager().isTypeOnlyCoercion(queryType, tableType)) {
-                    assignments.put(output, input.toSymbolReference());
+                    assignments.put(output, castToRowExpression(input.toSymbolReference()));
                 }
                 else {
                     Expression cast = new Cast(input.toSymbolReference(), tableType.getTypeSignature().toString());
-                    assignments.put(output, cast);
+                    assignments.put(output, castToRowExpression(cast));
                 }
             }
         }

@@ -24,13 +24,15 @@ import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayoutResult;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.ArrayType;
@@ -45,9 +47,7 @@ import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.iterative.Rule.Context;
 import com.facebook.presto.sql.planner.iterative.Rule.Result;
 import com.facebook.presto.sql.planner.plan.Assignments;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
@@ -88,6 +88,7 @@ import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.planner.ExpressionNodeInliner.replaceExpression;
 import static com.facebook.presto.sql.planner.SymbolsExtractor.extractUniqueVariable;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAsSymbolReference;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.LEFT;
 import static com.facebook.presto.sql.planner.plan.Patterns.filter;
@@ -587,10 +588,10 @@ public class ExtractSpatialJoins
     {
         Assignments.Builder projections = Assignments.builder();
         for (VariableReferenceExpression outputVariable : node.getOutputVariables()) {
-            projections.putIdentity(outputVariable);
+            projections.put(identityAsSymbolReference(outputVariable));
         }
 
-        projections.put(variable, expression);
+        projections.put(variable, castToRowExpression(expression));
         return new ProjectNode(context.getIdAllocator().getNextId(), node, projections.build());
     }
 
@@ -598,7 +599,7 @@ public class ExtractSpatialJoins
     {
         Assignments.Builder projections = Assignments.builder();
         for (VariableReferenceExpression outputVariable : node.getOutputVariables()) {
-            projections.putIdentity(outputVariable);
+            projections.put(identityAsSymbolReference(outputVariable));
         }
 
         ImmutableList.Builder<Expression> partitioningArguments = ImmutableList.<Expression>builder()
@@ -608,7 +609,7 @@ public class ExtractSpatialJoins
 
         FunctionCall partitioningFunction = new FunctionCall(QualifiedName.of("spatial_partitions"), partitioningArguments.build());
         VariableReferenceExpression partitionsVariable = context.getSymbolAllocator().newVariable(partitioningFunction, new ArrayType(INTEGER));
-        projections.put(partitionsVariable, partitioningFunction);
+        projections.put(partitionsVariable, castToRowExpression(partitioningFunction));
 
         return new UnnestNode(
                 context.getIdAllocator().getNextId(),

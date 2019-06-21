@@ -19,6 +19,7 @@ import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -29,7 +30,6 @@ import com.facebook.presto.sql.planner.optimizations.SymbolMapper;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.tree.LambdaExpression;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -170,7 +170,7 @@ public class PushPartialAggregationThroughExchange
 
             for (VariableReferenceExpression output : aggregation.getOutputVariables()) {
                 VariableReferenceExpression input = symbolMapper.map(output);
-                assignments.put(output, new SymbolReference(input.getName()));
+                assignments.put(output, castToRowExpression(new SymbolReference(input.getName())));
             }
             partials.add(new ProjectNode(context.getIdAllocator().getNextId(), mappedPartial, assignments.build()));
         }

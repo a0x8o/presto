@@ -17,6 +17,7 @@ import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -33,7 +34,6 @@ import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.relational.FunctionResolution;
@@ -59,7 +59,9 @@ import java.util.function.Function;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.ExpressionUtils.combineConjuncts;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.globalAggregation;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identitiesAsSymbolReferences;
 import static com.facebook.presto.sql.planner.plan.SimplePlanRewriter.rewriteWith;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
@@ -113,7 +115,7 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
                 return context.defaultRewrite(node);
             }
 
-            Expression expression = getOnlyElement(node.getSubqueryAssignments().getExpressions());
+            Expression expression = castToExpression(getOnlyElement(node.getSubqueryAssignments().getExpressions()));
             if (!(expression instanceof QuantifiedComparisonExpression)) {
                 return context.defaultRewrite(node);
             }
@@ -205,7 +207,7 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
 
             VariableReferenceExpression quantifiedComparisonVariable = getOnlyElement(node.getSubqueryAssignments().getVariables());
 
-            return projectExpressions(lateralJoinNode, Assignments.of(quantifiedComparisonVariable, valueComparedToSubquery));
+            return projectExpressions(lateralJoinNode, Assignments.of(quantifiedComparisonVariable, castToRowExpression(valueComparedToSubquery)));
         }
 
         public Expression rewriteUsingBounds(QuantifiedComparisonExpression quantifiedComparison, Symbol minValue, Symbol maxValue, Symbol countAllValue, Symbol countNonNullValue)
@@ -281,7 +283,7 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
         private ProjectNode projectExpressions(PlanNode input, Assignments subqueryAssignments)
         {
             Assignments assignments = Assignments.builder()
-                    .putIdentities(input.getOutputVariables())
+                    .putAll(identitiesAsSymbolReferences(input.getOutputVariables()))
                     .putAll(subqueryAssignments)
                     .build();
             return new ProjectNode(

@@ -15,7 +15,6 @@ package com.facebook.presto.tests;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.Session.SessionBuilder;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.cost.StatsCalculator;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
@@ -28,11 +27,13 @@ import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.server.testing.TestingPrestoServer;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.split.PageSourceManager;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.planner.ConnectorPlanOptimizerManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.testing.MaterializedResult;
@@ -263,6 +264,12 @@ public class DistributedQueryRunner
     public NodePartitioningManager getNodePartitioningManager()
     {
         return coordinator.getNodePartitioningManager();
+    }
+
+    @Override
+    public ConnectorPlanOptimizerManager getPlanOptimizerManager()
+    {
+        return coordinator.getPlanOptimizerManager();
     }
 
     @Override

@@ -15,6 +15,9 @@ package com.facebook.presto.util;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.PlanFragment;
@@ -27,7 +30,6 @@ import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -38,7 +40,6 @@ import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -48,7 +49,6 @@ import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -223,7 +223,7 @@ public final class GraphvizPrinter
         }
 
         @Override
-        protected Void visitPlan(PlanNode node, Void context)
+        public Void visitPlan(PlanNode node, Void context)
         {
             throw new UnsupportedOperationException(format("Node %s does not have a Graphviz visitor", node.getClass().getName()));
         }
@@ -391,13 +391,13 @@ public final class GraphvizPrinter
         public Void visitProject(ProjectNode node, Void context)
         {
             StringBuilder builder = new StringBuilder();
-            for (Map.Entry<VariableReferenceExpression, Expression> entry : node.getAssignments().entrySet()) {
-                if ((entry.getValue() instanceof SymbolReference) &&
-                        ((SymbolReference) entry.getValue()).getName().equals(entry.getKey().getName())) {
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : node.getAssignments().entrySet()) {
+                if ((entry.getValue() instanceof VariableReferenceExpression) &&
+                        ((VariableReferenceExpression) entry.getValue()).getName().equals(entry.getKey().getName())) {
                     // skip identity assignments
                     continue;
                 }
-                builder.append(format("%s := %s\\n", entry.getKey(), entry.getValue()));
+                builder.append(format("%s := %s\\n", entry.getKey(), formatter.formatRowExpression(entry.getValue())));
             }
 
             printNode(node, "Project", builder.toString(), NODE_COLORS.get(NodeType.PROJECT));
@@ -639,7 +639,7 @@ public final class GraphvizPrinter
         }
 
         @Override
-        protected Void visitPlan(PlanNode node, Void context)
+        public Void visitPlan(PlanNode node, Void context)
         {
             for (PlanNode child : node.getSources()) {
                 printEdge(node, child);

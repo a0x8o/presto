@@ -14,22 +14,22 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
@@ -62,6 +62,7 @@ import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToE
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Maps.transformValues;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -108,7 +109,7 @@ public class EffectivePredicateExtractor
         }
 
         @Override
-        protected Expression visitPlan(PlanNode node, Void context)
+        public Expression visitPlan(PlanNode node, Void context)
         {
             return TRUE_LITERAL;
         }
@@ -164,7 +165,7 @@ public class EffectivePredicateExtractor
 
             Expression underlyingPredicate = node.getSource().accept(this, context);
 
-            List<Expression> projectionEqualities = node.getAssignments().entrySet().stream()
+            List<Expression> projectionEqualities = transformValues(node.getAssignments().getMap(), OriginalExpressionUtils::castToExpression).entrySet().stream()
                     .filter(VARIABLE_MATCHES_EXPRESSION.negate())
                     .map(VARIABLE_ENTRY_TO_EQUALITY)
                     .collect(toImmutableList());

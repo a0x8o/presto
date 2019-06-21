@@ -15,16 +15,15 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
-import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.FunctionCall;
@@ -44,6 +43,7 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.StandardTypes.BOOLEAN;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static com.facebook.presto.sql.planner.optimizations.QueryCardinalityUtil.isAtMostScalar;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignmentsAsSymbolReferences;
 import static com.facebook.presto.sql.planner.plan.Patterns.LateralJoin.correlation;
 import static com.facebook.presto.sql.planner.plan.Patterns.lateralJoin;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
@@ -155,6 +155,6 @@ public class TransformCorrelatedScalarSubquery
         return Result.ofPlanNode(new ProjectNode(
                 context.getIdAllocator().getNextId(),
                 filterNode,
-                Assignments.identity(lateralJoinNode.getOutputVariables())));
+                identityAssignmentsAsSymbolReferences(lateralJoinNode.getOutputVariables())));
     }
 }

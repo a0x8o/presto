@@ -16,7 +16,10 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.PartitioningScheme;
@@ -33,7 +36,6 @@ import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExceptNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -43,7 +45,6 @@ import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
@@ -54,7 +55,6 @@ import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticAggregations;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -82,8 +82,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractAggregationUniqueVariables;
+import static com.facebook.presto.sql.planner.optimizations.ApplyNodeUtil.verifySubquerySupported;
 import static com.facebook.presto.sql.planner.optimizations.QueryCardinalityUtil.isScalar;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -538,7 +540,7 @@ public class PruneUnreferencedOutputs
             Assignments.Builder builder = Assignments.builder();
             node.getAssignments().forEach((variable, expression) -> {
                 if (context.get().contains(variable)) {
-                    expectedInputs.addAll(SymbolsExtractor.extractUniqueVariable(expression, symbolAllocator.getTypes()));
+                    expectedInputs.addAll(SymbolsExtractor.extractUniqueVariable(castToExpression(expression), symbolAllocator.getTypes()));
                     builder.put(variable, expression);
                 }
             });
@@ -794,12 +796,12 @@ public class PruneUnreferencedOutputs
             // extract symbols required subquery plan
             ImmutableSet.Builder<VariableReferenceExpression> subqueryAssignmentsVariablesBuilder = ImmutableSet.builder();
             Assignments.Builder subqueryAssignments = Assignments.builder();
-            for (Map.Entry<VariableReferenceExpression, Expression> entry : node.getSubqueryAssignments().getMap().entrySet()) {
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : node.getSubqueryAssignments().getMap().entrySet()) {
                 VariableReferenceExpression output = entry.getKey();
-                Expression expression = entry.getValue();
+                Expression expression = castToExpression(entry.getValue());
                 if (context.get().contains(output)) {
                     subqueryAssignmentsVariablesBuilder.addAll(SymbolsExtractor.extractUniqueVariable(expression, symbolAllocator.getTypes()));
-                    subqueryAssignments.put(output, expression);
+                    subqueryAssignments.put(output, castToRowExpression(expression));
                 }
             }
 
@@ -818,7 +820,9 @@ public class PruneUnreferencedOutputs
                     .addAll(subqueryAssignmentsVariables) // need to include those: e.g: "expr" from "expr IN (SELECT 1)"
                     .build();
             PlanNode input = context.rewrite(node.getInput(), inputContext);
-            return new ApplyNode(node.getId(), input, subquery, subqueryAssignments.build(), newCorrelation, node.getOriginSubqueryError());
+            Assignments assignments = subqueryAssignments.build();
+            verifySubquerySupported(assignments);
+            return new ApplyNode(node.getId(), input, subquery, assignments, newCorrelation, node.getOriginSubqueryError());
         }
 
         @Override

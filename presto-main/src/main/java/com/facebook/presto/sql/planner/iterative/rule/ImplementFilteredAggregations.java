@@ -15,12 +15,12 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.spi.plan.FilterNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.Assignments;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.Expression;
@@ -33,6 +33,7 @@ import java.util.Optional;
 
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.ExpressionUtils.combineDisjunctsWithDefault;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identitiesAsSymbolReferences;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
@@ -98,7 +99,7 @@ public class ImplementFilteredAggregations
                 Expression filter = OriginalExpressionUtils.castToExpression(entry.getValue().getFilter().get());
                 VariableReferenceExpression variable = context.getSymbolAllocator().newVariable(filter, BOOLEAN);
                 verify(!mask.isPresent(), "Expected aggregation without mask symbols, see Rule pattern");
-                newAssignments.put(variable, filter);
+                newAssignments.put(variable, castToRowExpression(filter));
                 mask = Optional.of(variable);
 
                 maskSymbols.add(new SymbolReference(variable.getName()));
@@ -121,7 +122,7 @@ public class ImplementFilteredAggregations
         }
 
         // identity projection for all existing inputs
-        newAssignments.putIdentities(aggregation.getSource().getOutputVariables());
+        newAssignments.putAll(identitiesAsSymbolReferences(aggregation.getSource().getOutputVariables()));
 
         return Result.ofPlanNode(
                 new AggregationNode(

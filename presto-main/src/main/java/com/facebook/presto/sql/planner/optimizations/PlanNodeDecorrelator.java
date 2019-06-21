@@ -14,6 +14,8 @@
 
 package com.facebook.presto.sql.planner.optimizations;
 
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.ExpressionUtils;
@@ -24,10 +26,8 @@ import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LimitNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
@@ -46,6 +46,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identitiesAsSymbolReferences;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.EQUAL;
@@ -90,7 +91,7 @@ public class PlanNodeDecorrelator
         }
 
         @Override
-        protected Optional<DecorrelationResult> visitPlan(PlanNode node, Void context)
+        public Optional<DecorrelationResult> visitPlan(PlanNode node, Void context)
         {
             return Optional.of(new DecorrelationResult(
                     node,
@@ -264,7 +265,7 @@ public class PlanNodeDecorrelator
 
             Assignments assignments = Assignments.builder()
                     .putAll(node.getAssignments())
-                    .putIdentities(variablesToAdd)
+                    .putAll(identitiesAsSymbolReferences(variablesToAdd))
                     .build();
 
             return Optional.of(new DecorrelationResult(

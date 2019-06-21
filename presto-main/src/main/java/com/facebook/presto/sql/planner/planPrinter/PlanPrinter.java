@@ -22,12 +22,15 @@ import com.facebook.presto.execution.StageInfo;
 import com.facebook.presto.execution.StageStats;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.OperatorNotFoundException;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.Marker;
 import com.facebook.presto.spi.predicate.Range;
@@ -57,7 +60,6 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExceptNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -70,7 +72,6 @@ import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -81,7 +82,6 @@ import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticAggregations;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -1040,7 +1040,7 @@ public class PlanPrinter
         }
 
         @Override
-        protected Void visitPlan(PlanNode node, Void context)
+        public Void visitPlan(PlanNode node, Void context)
         {
             throw new UnsupportedOperationException("not yet implemented: " + node.getClass().getName());
         }
@@ -1056,12 +1056,12 @@ public class PlanPrinter
 
         private void printAssignments(NodeRepresentation nodeOutput, Assignments assignments)
         {
-            for (Map.Entry<VariableReferenceExpression, Expression> entry : assignments.getMap().entrySet()) {
-                if (entry.getValue() instanceof SymbolReference && ((SymbolReference) entry.getValue()).getName().equals(entry.getKey().getName())) {
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : assignments.getMap().entrySet()) {
+                if (entry.getValue() instanceof VariableReferenceExpression && ((VariableReferenceExpression) entry.getValue()).getName().equals(entry.getKey().getName())) {
                     // skip identity assignments
                     continue;
                 }
-                nodeOutput.appendDetailsLine("%s := %s", entry.getKey(), entry.getValue());
+                nodeOutput.appendDetailsLine("%s := %s", entry.getKey(), formatter.formatRowExpression(entry.getValue()));
             }
         }
 

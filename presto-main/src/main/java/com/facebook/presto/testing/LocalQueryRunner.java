@@ -18,7 +18,6 @@ import com.facebook.presto.PagesIndexPageSorter;
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.connector.ConnectorManager;
 import com.facebook.presto.connector.system.AnalyzePropertiesSystemTable;
 import com.facebook.presto.connector.system.CatalogSystemTable;
@@ -99,13 +98,16 @@ import com.facebook.presto.server.PluginManager;
 import com.facebook.presto.server.PluginManagerConfig;
 import com.facebook.presto.server.SessionPropertyDefaults;
 import com.facebook.presto.server.security.PasswordAuthenticatorManager;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PageIndexerFactory;
 import com.facebook.presto.spi.PageSorter;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spiller.FileSingleStreamSpillerFactory;
 import com.facebook.presto.spiller.GenericPartitioningSpillerFactory;
 import com.facebook.presto.spiller.GenericSpillerFactory;
@@ -128,6 +130,7 @@ import com.facebook.presto.sql.gen.OrderingCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.facebook.presto.sql.gen.RowExpressionPredicateCompiler;
 import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.planner.ConnectorPlanOptimizerManager;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
 import com.facebook.presto.sql.planner.LogicalPlanner;
@@ -135,10 +138,11 @@ import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlanFragmenter;
 import com.facebook.presto.sql.planner.PlanOptimizers;
+import com.facebook.presto.sql.planner.RuleStatsRecorder;
 import com.facebook.presto.sql.planner.SubPlan;
+import com.facebook.presto.sql.planner.iterative.IterativeOptimizer;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.facebook.presto.sql.planner.optimizations.TranslateExpressions;
 import com.facebook.presto.sql.planner.planPrinter.PlanPrinter;
 import com.facebook.presto.sql.planner.sanity.PlanSanityChecker;
 import com.facebook.presto.sql.relational.RowExpressionDeterminismEvaluator;
@@ -238,6 +242,7 @@ public class LocalQueryRunner
     private final PageSourceManager pageSourceManager;
     private final IndexManager indexManager;
     private final NodePartitioningManager nodePartitioningManager;
+    private final ConnectorPlanOptimizerManager planOptimizerManager;
     private final PageSinkManager pageSinkManager;
     private final TransactionManager transactionManager;
     private final FileSingleStreamSpillerFactory singleStreamSpillerFactory;
@@ -305,6 +310,7 @@ public class LocalQueryRunner
                 catalogManager,
                 notificationExecutor);
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler);
+        this.planOptimizerManager = new ConnectorPlanOptimizerManager();
 
         this.blockEncodingManager = new BlockEncodingManager(typeRegistry);
         this.metadata = new MetadataManager(
@@ -341,6 +347,7 @@ public class LocalQueryRunner
                 pageSourceManager,
                 indexManager,
                 nodePartitioningManager,
+                planOptimizerManager,
                 pageSinkManager,
                 new HandleResolver(),
                 nodeManager,
@@ -484,6 +491,12 @@ public class LocalQueryRunner
     public NodePartitioningManager getNodePartitioningManager()
     {
         return nodePartitioningManager;
+    }
+
+    @Override
+    public ConnectorPlanOptimizerManager getPlanOptimizerManager()
+    {
+        return planOptimizerManager;
     }
 
     public PageSourceManager getPageSourceManager()
@@ -850,6 +863,7 @@ public class LocalQueryRunner
                 forceSingleNode,
                 new MBeanExporter(new TestingMBeanServer()),
                 splitManager,
+                planOptimizerManager,
                 pageSourceManager,
                 statsCalculator,
                 costCalculator,
@@ -899,5 +913,17 @@ public class LocalQueryRunner
         return searchFrom(node)
                 .where(TableScanNode.class::isInstance)
                 .findAll();
+    }
+
+    public PlanOptimizer translateExpressions()
+    {
+        // Translate all OriginalExpression in planNodes to RowExpression so that we can do plan pattern asserting and printing on RowExpression only.
+        return new IterativeOptimizer(
+                new RuleStatsRecorder(),
+                getStatsCalculator(),
+                getCostCalculator(),
+                new ImmutableSet.Builder()
+                        .addAll(new TranslateExpressions(getMetadata(), getSqlParser()).rules())
+                        .build());
     }
 }

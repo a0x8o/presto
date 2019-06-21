@@ -13,13 +13,15 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -29,9 +31,7 @@ import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.Assignments;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.planner.sanity.TypeValidator;
@@ -67,6 +67,7 @@ import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.BoundType.UN
 import static com.facebook.presto.sql.planner.plan.WindowNode.Frame.WindowType.RANGE;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.variable;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 
 @Test(singleThreaded = true)
 public class TestTypeValidator
@@ -133,8 +134,8 @@ public class TestTypeValidator
         Expression expression1 = new Cast(columnB.toSymbolReference(), StandardTypes.BIGINT);
         Expression expression2 = new Cast(columnC.toSymbolReference(), StandardTypes.BIGINT);
         Assignments assignments = Assignments.builder()
-                .put(symbolAllocator.newVariable(expression1, BIGINT), expression1)
-                .put(symbolAllocator.newVariable(expression2, BIGINT), expression2)
+                .put(symbolAllocator.newVariable(expression1, BIGINT), castToRowExpression(expression1))
+                .put(symbolAllocator.newVariable(expression2, BIGINT), castToRowExpression(expression2))
                 .build();
         PlanNode node = new ProjectNode(
                 newId(),
@@ -224,8 +225,8 @@ public class TestTypeValidator
     {
         Expression expression = new Cast(columnB.toSymbolReference(), StandardTypes.BIGINT);
         Assignments assignments = Assignments.builder()
-                .put(symbolAllocator.newVariable(expression, BIGINT), expression)
-                .put(symbolAllocator.newVariable(columnE.toSymbolReference(), VARCHAR), columnE.toSymbolReference()) // implicit coercion from varchar(3) to varchar
+                .put(symbolAllocator.newVariable(expression, BIGINT), castToRowExpression(expression))
+                .put(symbolAllocator.newVariable(columnE.toSymbolReference(), VARCHAR), castToRowExpression(columnE.toSymbolReference())) // implicit coercion from varchar(3) to varchar
                 .build();
         PlanNode node = new ProjectNode(newId(), baseTableScan, assignments);
 
@@ -238,8 +239,8 @@ public class TestTypeValidator
         Expression expression1 = new Cast(columnB.toSymbolReference(), StandardTypes.INTEGER);
         Expression expression2 = new Cast(columnA.toSymbolReference(), StandardTypes.INTEGER);
         Assignments assignments = Assignments.builder()
-                .put(symbolAllocator.newVariable(expression1, BIGINT), expression1) // should be INTEGER
-                .put(symbolAllocator.newVariable(expression1, INTEGER), expression2)
+                .put(symbolAllocator.newVariable(expression1, BIGINT), castToRowExpression(expression1)) // should be INTEGER
+                .put(symbolAllocator.newVariable(expression1, INTEGER), castToRowExpression(expression2))
                 .build();
         PlanNode node = new ProjectNode(
                 newId(),

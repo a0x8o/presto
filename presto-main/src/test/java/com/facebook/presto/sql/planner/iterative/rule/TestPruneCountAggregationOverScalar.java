@@ -13,14 +13,12 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.connector.ConnectorId;
-import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
-import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
-import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -36,6 +34,8 @@ import java.util.Optional;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.assignment;
+import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.constantExpressions;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCALE_FACTOR;
 
@@ -54,7 +54,7 @@ public class TestPruneCountAggregationOverScalar
                                         new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                         ImmutableList.of(BIGINT))
                                 .source(
-                                        p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())))
+                                        p.tableScan(ImmutableList.of(), ImmutableMap.of())))
                 ).doesNotFire();
     }
 
@@ -71,7 +71,7 @@ public class TestPruneCountAggregationOverScalar
                                 .step(AggregationNode.Step.SINGLE)
                                 .source(
                                         p.aggregation((aggregationBuilder) -> aggregationBuilder
-                                                .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of()))
+                                                .source(p.tableScan(ImmutableList.of(), ImmutableMap.of()))
                                                 .globalGrouping()
                                                 .step(AggregationNode.Step.SINGLE)))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
@@ -91,7 +91,7 @@ public class TestPruneCountAggregationOverScalar
                                 .globalGrouping()
                                 .source(p.values(
                                         ImmutableList.of(p.variable(p.symbol("orderkey"))),
-                                        ImmutableList.of(PlanBuilder.constantExpressions(BIGINT, 1))))))
+                                        ImmutableList.of(constantExpressions(BIGINT, 1))))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
     }
 
@@ -107,7 +107,7 @@ public class TestPruneCountAggregationOverScalar
                                         ImmutableList.of(BIGINT))
                                 .step(AggregationNode.Step.SINGLE)
                                 .globalGrouping()
-                                .source(p.enforceSingleRow(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())))))
+                                .source(p.enforceSingleRow(p.tableScan(ImmutableList.of(), ImmutableMap.of())))))
                 .matches(values(ImmutableMap.of("count_1", 0)));
     }
 
@@ -126,9 +126,9 @@ public class TestPruneCountAggregationOverScalar
                                 .source(
                                         p.aggregation(aggregationBuilder -> {
                                             aggregationBuilder
-                                                    .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of())).groupingSets(singleGroupingSet(ImmutableList.of(p.variable("orderkey"))));
+                                                    .source(p.tableScan(ImmutableList.of(), ImmutableMap.of())).groupingSets(singleGroupingSet(ImmutableList.of(p.variable("orderkey"))));
                                             aggregationBuilder
-                                                    .source(p.tableScan(ImmutableList.of(), ImmutableList.of(), ImmutableMap.of()));
+                                                    .source(p.tableScan(ImmutableList.of(), ImmutableMap.of()));
                                         }))))
                 .doesNotFire();
     }
@@ -147,14 +147,13 @@ public class TestPruneCountAggregationOverScalar
                             .globalGrouping()
                             .source(
                                     p.project(
-                                            Assignments.of(totalPriceVariable, totalPrice.toSymbolReference()),
+                                            assignment(totalPriceVariable, totalPrice.toSymbolReference()),
                                             p.tableScan(
                                                     new TableHandle(
                                                             new ConnectorId("local"),
                                                             new TpchTableHandle("orders", TINY_SCALE_FACTOR),
                                                             TestingTransactionHandle.create(),
                                                             Optional.empty()),
-                                                    ImmutableList.of(totalPrice),
                                                     ImmutableList.of(totalPriceVariable),
                                                     ImmutableMap.of(totalPriceVariable, new TpchColumnHandle(totalPrice.getName(), DOUBLE))))));
 

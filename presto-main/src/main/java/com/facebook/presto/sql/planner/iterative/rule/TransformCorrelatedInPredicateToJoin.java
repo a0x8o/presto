@@ -17,6 +17,8 @@ import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -29,11 +31,10 @@ import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
+import com.facebook.presto.sql.planner.plan.AssignmentUtils;
 import com.facebook.presto.sql.planner.plan.Assignments;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.sql.tree.BooleanLiteral;
@@ -66,6 +67,7 @@ import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.ExpressionUtils.and;
 import static com.facebook.presto.sql.ExpressionUtils.or;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identitiesAsSymbolReferences;
 import static com.facebook.presto.sql.planner.plan.Patterns.Apply.correlation;
 import static com.facebook.presto.sql.planner.plan.Patterns.applyNode;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
@@ -122,7 +124,7 @@ public class TransformCorrelatedInPredicateToJoin
         if (subqueryAssignments.size() != 1) {
             return Result.empty();
         }
-        Expression assignmentExpression = getOnlyElement(subqueryAssignments.getExpressions());
+        Expression assignmentExpression = castToExpression(getOnlyElement(subqueryAssignments.getExpressions()));
         if (!(assignmentExpression instanceof InPredicate)) {
             return Result.empty();
         }
@@ -180,8 +182,8 @@ public class TransformCorrelatedInPredicateToJoin
                 idAllocator.getNextId(),
                 decorrelatedBuildSource,
                 Assignments.builder()
-                        .putIdentities(decorrelatedBuildSource.getOutputVariables())
-                        .put(buildSideKnownNonNull, bigint(0))
+                        .putAll(identitiesAsSymbolReferences(decorrelatedBuildSource.getOutputVariables()))
+                        .put(buildSideKnownNonNull, castToRowExpression(bigint(0)))
                         .build());
 
         SymbolReference probeSideSymbolReference = Symbol.from(inPredicate.getValue()).toSymbolReference();
@@ -230,8 +232,8 @@ public class TransformCorrelatedInPredicateToJoin
                 idAllocator.getNextId(),
                 aggregation,
                 Assignments.builder()
-                        .putIdentities(apply.getInput().getOutputVariables())
-                        .put(inPredicateOutputVariable, inPredicateEquivalent)
+                        .putAll(identitiesAsSymbolReferences(apply.getInput().getOutputVariables()))
+                        .put(inPredicateOutputVariable, castToRowExpression(inPredicateEquivalent))
                         .build());
     }
 
@@ -327,7 +329,8 @@ public class TransformCorrelatedInPredicateToJoin
                         .map(SymbolReference.class::cast)
                         .map(symbolReference -> new VariableReferenceExpression(symbolReference.getName(), types.get(Symbol.from(symbolReference))))
                         .filter(variable -> !correlation.contains(variable))
-                        .forEach(assignments::putIdentity);
+                        .map(AssignmentUtils::identityAsSymbolReference)
+                        .forEach(assignments::put);
 
                 return new Decorrelated(
                         decorrelated.getCorrelatedPredicates(),
@@ -353,7 +356,7 @@ public class TransformCorrelatedInPredicateToJoin
         }
 
         @Override
-        protected Optional<Decorrelated> visitPlan(PlanNode node, PlanNode reference)
+        public Optional<Decorrelated> visitPlan(PlanNode node, PlanNode reference)
         {
             if (isCorrelatedRecursively(node)) {
                 return Optional.empty();

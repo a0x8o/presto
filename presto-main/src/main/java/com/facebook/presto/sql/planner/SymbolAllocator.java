@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.Type;
@@ -36,6 +37,7 @@ import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
 public class SymbolAllocator
+        implements VariableAllocator
 {
     private final Map<Symbol, Type> symbols;
     private int nextId;
@@ -50,12 +52,6 @@ public class SymbolAllocator
         symbols = new HashMap<>(initial);
     }
 
-    public Symbol newSymbol(Symbol symbolHint)
-    {
-        checkArgument(symbols.containsKey(symbolHint), "symbolHint not in symbols map");
-        return newSymbol(symbolHint.getName(), symbols.get(symbolHint));
-    }
-
     public VariableReferenceExpression newVariable(Symbol symbolHint)
     {
         checkArgument(symbols.containsKey(symbolHint), "symbolHint not in symbols map");
@@ -65,11 +61,6 @@ public class SymbolAllocator
     public VariableReferenceExpression newVariable(VariableReferenceExpression variableHint)
     {
         return newVariable(variableHint.getName(), variableHint.getType());
-    }
-
-    public Symbol newSymbol(QualifiedName nameHint, Type type)
-    {
-        return newSymbol(nameHint.getSuffix(), type, null);
     }
 
     public VariableReferenceExpression newVariable(QualifiedName nameHint, Type type)
@@ -82,6 +73,7 @@ public class SymbolAllocator
         return newSymbol(nameHint, type, null);
     }
 
+    @Override
     public VariableReferenceExpression newVariable(String nameHint, Type type)
     {
         return newVariable(nameHint, type, null);
@@ -92,6 +84,7 @@ public class SymbolAllocator
         return newVariable("$hashValue", BigintType.BIGINT);
     }
 
+    @Override
     public VariableReferenceExpression newVariable(String nameHint, Type type, String suffix)
     {
         Symbol symbol = newSymbol(nameHint, type, suffix);

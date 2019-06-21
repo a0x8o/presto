@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -33,6 +33,7 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJo
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignmentsAsSymbolReferences;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public class TestPruneJoinColumns
@@ -93,7 +94,7 @@ public class TestPruneJoinColumns
         VariableReferenceExpression rightValue = p.variable("rightValue");
         List<VariableReferenceExpression> outputs = ImmutableList.of(leftKey, leftValue, rightKey, rightValue);
         return p.project(
-                Assignments.identity(
+                identityAssignmentsAsSymbolReferences(
                         outputs.stream()
                                 .filter(projectionFilter)
                                 .collect(toImmutableList())),

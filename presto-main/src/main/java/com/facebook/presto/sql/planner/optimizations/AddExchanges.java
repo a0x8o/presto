@@ -21,7 +21,11 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.GroupingProperty;
 import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SortingProperty;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.TableScanNode;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy;
@@ -44,7 +48,6 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode.Scope;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -54,7 +57,6 @@ import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
@@ -62,7 +64,6 @@ import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -106,6 +107,7 @@ import static com.facebook.presto.SystemSessionProperties.isScaleWriters;
 import static com.facebook.presto.SystemSessionProperties.preferStreamingOperators;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.getNumberOfTableScans;
 import static com.facebook.presto.sql.planner.FragmentTableScanCounter.hasMultipleTableScans;
+import static com.facebook.presto.sql.planner.PlannerUtils.toVariableReference;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_ARBITRARY_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SCALED_WRITER_DISTRIBUTION;
@@ -123,7 +125,6 @@ import static com.facebook.presto.sql.planner.plan.ExchangeNode.mergingExchange;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.partitionedExchange;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.replicatedExchange;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.roundRobinExchange;
-import static com.facebook.presto.sql.relational.Expressions.variable;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -188,7 +189,7 @@ public class AddExchanges
         }
 
         @Override
-        protected PlanWithProperties visitPlan(PlanNode node, PreferredProperties preferredProperties)
+        public PlanWithProperties visitPlan(PlanNode node, PreferredProperties preferredProperties)
         {
             return rebaseAndDeriveProperties(node, planChild(node, preferredProperties));
         }
@@ -859,7 +860,7 @@ public class AddExchanges
         @Override
         public PlanWithProperties visitUnnest(UnnestNode node, PreferredProperties preferredProperties)
         {
-            PreferredProperties translatedPreferred = preferredProperties.translate(variable -> node.getReplicateVariables().contains(new Symbol(variable.getName())) ? Optional.of(variable) : Optional.empty());
+            PreferredProperties translatedPreferred = preferredProperties.translate(variable -> node.getReplicateVariables().contains(variable) ? Optional.of(variable) : Optional.empty());
 
             return rebaseAndDeriveProperties(node, planChild(node, translatedPreferred));
         }
@@ -1375,17 +1376,12 @@ public class AddExchanges
     public static Map<VariableReferenceExpression, VariableReferenceExpression> computeIdentityTranslations(Assignments assignments, TypeProvider types)
     {
         Map<VariableReferenceExpression, VariableReferenceExpression> outputToInput = new HashMap<>();
-        for (Map.Entry<VariableReferenceExpression, Expression> assignment : assignments.getMap().entrySet()) {
-            if (assignment.getValue() instanceof SymbolReference) {
-                outputToInput.put(assignment.getKey(), toVariableReference(Symbol.from(assignment.getValue()), types));
+        for (Map.Entry<VariableReferenceExpression, RowExpression> assignment : assignments.getMap().entrySet()) {
+            if (castToExpression(assignment.getValue()) instanceof SymbolReference) {
+                outputToInput.put(assignment.getKey(), toVariableReference(Symbol.from(castToExpression(assignment.getValue())), types));
             }
         }
         return outputToInput;
-    }
-
-    public static VariableReferenceExpression toVariableReference(Symbol symbol, TypeProvider types)
-    {
-        return variable(symbol.getName(), types.get(symbol));
     }
 
     @VisibleForTesting

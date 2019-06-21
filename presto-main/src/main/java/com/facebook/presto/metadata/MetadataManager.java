@@ -15,10 +15,10 @@ package com.facebook.presto.metadata;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.spi.CatalogSchemaName;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorPushdownFilterResult;
@@ -35,6 +35,7 @@ import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
@@ -1152,25 +1153,25 @@ public class MetadataManager
     }
 
     @Override
-    public void commitPartition(Session session, OutputTableHandle tableHandle, int partitionId, Collection<Slice> fragments)
+    public void commitPartition(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments)
     {
         ConnectorId connectorId = tableHandle.getConnectorId();
         CatalogMetadata catalogMetadata = getCatalogMetadata(session, connectorId);
         ConnectorMetadata metadata = catalogMetadata.getMetadata();
         ConnectorSession connectorSession = session.toConnectorSession(connectorId);
 
-        metadata.commitPartition(connectorSession, tableHandle.getConnectorHandle(), partitionId, fragments);
+        metadata.commitPartition(connectorSession, tableHandle.getConnectorHandle(), fragments);
     }
 
     @Override
-    public void commitPartition(Session session, InsertTableHandle tableHandle, int partitionId, Collection<Slice> fragments)
+    public void commitPartition(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments)
     {
         ConnectorId connectorId = tableHandle.getConnectorId();
         CatalogMetadata catalogMetadata = getCatalogMetadata(session, connectorId);
         ConnectorMetadata metadata = catalogMetadata.getMetadata();
         ConnectorSession connectorSession = session.toConnectorSession(connectorId);
 
-        metadata.commitPartition(connectorSession, tableHandle.getConnectorHandle(), partitionId, fragments);
+        metadata.commitPartition(connectorSession, tableHandle.getConnectorHandle(), fragments);
     }
 
     @Override
