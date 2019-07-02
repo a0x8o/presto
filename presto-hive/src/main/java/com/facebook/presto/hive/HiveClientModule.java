@@ -14,8 +14,10 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
-import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
-import com.facebook.presto.hive.orc.OrcPageSourceFactory;
+import com.facebook.presto.hive.orc.DwrfBatchPageSourceFactory;
+import com.facebook.presto.hive.orc.DwrfSelectivePageSourceFactory;
+import com.facebook.presto.hive.orc.OrcBatchPageSourceFactory;
+import com.facebook.presto.hive.orc.OrcSelectivePageSourceFactory;
 import com.facebook.presto.hive.parquet.ParquetPageSourceFactory;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.hive.rule.HivePlanOptimizerProvider;
@@ -111,11 +113,15 @@ public class HiveClientModule
         binder.bind(FileFormatDataSourceStats.class).in(Scopes.SINGLETON);
         newExporter(binder).export(FileFormatDataSourceStats.class).as(generatedNameOf(FileFormatDataSourceStats.class, connectorId));
 
-        Multibinder<HivePageSourceFactory> pageSourceFactoryBinder = newSetBinder(binder, HivePageSourceFactory.class);
-        pageSourceFactoryBinder.addBinding().to(OrcPageSourceFactory.class).in(Scopes.SINGLETON);
-        pageSourceFactoryBinder.addBinding().to(DwrfPageSourceFactory.class).in(Scopes.SINGLETON);
+        Multibinder<HiveBatchPageSourceFactory> pageSourceFactoryBinder = newSetBinder(binder, HiveBatchPageSourceFactory.class);
+        pageSourceFactoryBinder.addBinding().to(OrcBatchPageSourceFactory.class).in(Scopes.SINGLETON);
+        pageSourceFactoryBinder.addBinding().to(DwrfBatchPageSourceFactory.class).in(Scopes.SINGLETON);
         pageSourceFactoryBinder.addBinding().to(ParquetPageSourceFactory.class).in(Scopes.SINGLETON);
         pageSourceFactoryBinder.addBinding().to(RcFilePageSourceFactory.class).in(Scopes.SINGLETON);
+
+        Multibinder<HiveSelectivePageSourceFactory> selectivePageSourceFactoryBinder = newSetBinder(binder, HiveSelectivePageSourceFactory.class);
+        selectivePageSourceFactoryBinder.addBinding().to(OrcSelectivePageSourceFactory.class).in(Scopes.SINGLETON);
+        selectivePageSourceFactoryBinder.addBinding().to(DwrfSelectivePageSourceFactory.class).in(Scopes.SINGLETON);
 
         Multibinder<HiveFileWriterFactory> fileWriterFactoryBinder = newSetBinder(binder, HiveFileWriterFactory.class);
         binder.bind(OrcFileWriterFactory.class).in(Scopes.SINGLETON);

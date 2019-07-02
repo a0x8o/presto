@@ -35,7 +35,7 @@ import com.facebook.presto.hive.metastore.thrift.BridgingHiveMetastore;
 import com.facebook.presto.hive.metastore.thrift.HiveCluster;
 import com.facebook.presto.hive.metastore.thrift.TestingHiveCluster;
 import com.facebook.presto.hive.metastore.thrift.ThriftHiveMetastore;
-import com.facebook.presto.hive.orc.OrcPageSource;
+import com.facebook.presto.hive.orc.OrcBatchPageSource;
 import com.facebook.presto.hive.parquet.ParquetPageSource;
 import com.facebook.presto.hive.rcfile.RcFilePageSource;
 import com.facebook.presto.metadata.MetadataManager;
@@ -820,7 +820,7 @@ public abstract class AbstractTestHiveClient
                 new HiveSessionProperties(hiveClientConfig, new OrcFileWriterConfig(), new ParquetFileWriterConfig()),
                 new HiveWriterStats(),
                 getDefaultOrcFileWriterFactory(hiveClientConfig));
-        pageSourceProvider = new HivePageSourceProvider(hiveClientConfig, hdfsEnvironment, getDefaultHiveRecordCursorProvider(hiveClientConfig), getDefaultHiveDataStreamFactories(hiveClientConfig), TYPE_MANAGER);
+        pageSourceProvider = new HivePageSourceProvider(hiveClientConfig, hdfsEnvironment, getDefaultHiveRecordCursorProvider(hiveClientConfig), getDefaultHiveDataStreamFactories(hiveClientConfig), ImmutableSet.of(), TYPE_MANAGER);
     }
 
     /**
@@ -4500,7 +4500,7 @@ public abstract class AbstractTestHiveClient
                 return RcFilePageSource.class;
             case ORC:
             case DWRF:
-                return OrcPageSource.class;
+                return OrcBatchPageSource.class;
             case PARQUET:
                 return ParquetPageSource.class;
             default:
