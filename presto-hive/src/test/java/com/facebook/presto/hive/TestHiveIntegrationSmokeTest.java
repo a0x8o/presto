@@ -4135,6 +4135,17 @@ public class TestHiveIntegrationSmokeTest
                 "      linenumber");
     }
 
+    @Test
+    public void testIgnoreTableBucketing()
+    {
+        String query = "SELECT count(*) FROM orders WHERE \"$bucket\" = 1";
+        assertQuery(bucketedSession, query, "SELECT 1350");
+        Session ignoreBucketingSession = Session.builder(bucketedSession)
+                .setCatalogSessionProperty(bucketedSession.getCatalog().get(), "ignore_table_bucketing", "true")
+                .build();
+        assertQueryFails(ignoreBucketingSession, query, "Table bucketing is ignored\\. The virtual \"\\$bucket\" column cannot be referenced\\.");
+    }
+
     private HiveInsertTableHandle getHiveInsertTableHandle(Session session, String tableName)
     {
         Metadata metadata = ((DistributedQueryRunner) getQueryRunner()).getCoordinator().getMetadata();
