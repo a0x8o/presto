@@ -13,15 +13,16 @@
  */
 package com.facebook.presto.orc.reader;
 
+import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.StreamDescriptor;
+import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
 import com.facebook.presto.orc.stream.BooleanInputStream;
 import com.facebook.presto.orc.stream.InputStreamSource;
 import com.facebook.presto.orc.stream.InputStreamSources;
 import com.facebook.presto.orc.stream.LongInputStream;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import org.openjdk.jol.info.ClassLayout;
 
@@ -29,6 +30,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DATA;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DICTIONARY_DATA;
@@ -36,18 +38,20 @@ import static com.facebook.presto.orc.metadata.Stream.StreamKind.IN_DICTIONARY;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.util.Objects.requireNonNull;
 
-public class LongDictionaryBatchStreamReader
-        implements BatchStreamReader
+public class LongDictionarySelectiveStreamReader
+        extends AbstractLongSelectiveStreamReader
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(LongDictionaryBatchStreamReader.class).instanceSize();
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(LongDictionarySelectiveStreamReader.class).instanceSize();
 
     private final StreamDescriptor streamDescriptor;
-
-    private int readOffset;
-    private int nextBatchSize;
+    @Nullable
+    private final TupleDomainFilter filter;
+    private final boolean nullsAllowed;
 
     private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
     @Nullable
@@ -67,102 +71,113 @@ public class LongDictionaryBatchStreamReader
 
     private boolean dictionaryOpen;
     private boolean rowGroupOpen;
+    private int readOffset;
 
-    public LongDictionaryBatchStreamReader(StreamDescriptor streamDescriptor)
+    private LocalMemoryContext systemMemoryContext;
+
+    public LongDictionarySelectiveStreamReader(
+            StreamDescriptor streamDescriptor,
+            Optional<TupleDomainFilter> filter,
+            Optional<Type> outputType,
+            LocalMemoryContext systemMemoryContext)
     {
-        this.streamDescriptor = requireNonNull(streamDescriptor, "stream is null");
+        super(outputType);
+        this.streamDescriptor = requireNonNull(streamDescriptor, "streamDescriptor is null");
+        this.filter = requireNonNull(filter, "filter is null").orElse(null);
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
+
+        nullsAllowed = this.filter == null || this.filter.testNull();
     }
 
     @Override
-    public void prepareNextRead(int batchSize)
-    {
-        readOffset += nextBatchSize;
-        nextBatchSize = batchSize;
-    }
-
-    @Override
-    public Block readBlock(Type type)
+    public int read(int offset, int[] positions, int positionCount)
             throws IOException
     {
         if (!rowGroupOpen) {
             openRowGroup();
         }
 
-        if (readOffset > 0) {
-            if (presentStream != null) {
-                // skip ahead the present bit reader, but count the set bits
-                // and use this as the skip size for the length reader
-                readOffset = presentStream.countBitsSet(readOffset);
-            }
-
-            if (inDictionaryStream != null) {
-                inDictionaryStream.skip(readOffset);
-            }
-
-            if (readOffset > 0) {
-                if (dataStream == null) {
-                    throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
-                }
-                dataStream.skip(readOffset);
-            }
+        if (outputRequired) {
+            ensureValuesCapacity(positionCount, presentStream != null && nullsAllowed);
         }
 
-        BlockBuilder builder = type.createBlockBuilder(null, nextBatchSize);
-
-        if (presentStream == null) {
-            // Data doesn't have nulls
-            if (dataStream == null) {
-                throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
-            }
-            if (inDictionaryStream == null) {
-                for (int i = 0; i < nextBatchSize; i++) {
-                    type.writeLong(builder, dictionary[((int) dataStream.next())]);
-                }
-            }
-            else {
-                for (int i = 0; i < nextBatchSize; i++) {
-                    long id = dataStream.next();
-                    if (inDictionaryStream.nextBit()) {
-                        type.writeLong(builder, dictionary[(int) id]);
-                    }
-                    else {
-                        type.writeLong(builder, id);
-                    }
-                }
-            }
+        if (filter != null) {
+            ensureOutputPositionsCapacity(positionCount);
         }
         else {
-            // Data has nulls
-            if (dataStream == null) {
-                // The only valid case for dataStream is null when data has nulls is that all values are nulls.
-                int nullValues = presentStream.getUnsetBits(nextBatchSize);
-                if (nullValues != nextBatchSize) {
-                    throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
-                }
-                for (int i = 0; i < nextBatchSize; i++) {
-                    builder.appendNull();
+            outputPositions = positions;
+        }
+
+        // account memory used by values, nulls and outputPositions
+        systemMemoryContext.setBytes(getRetainedSizeInBytes());
+
+        if (readOffset < offset) {
+            skip(offset - readOffset);
+        }
+
+        outputPositionCount = 0;
+        int streamPosition = 0;
+        // TODO In case of all nulls, the stream type will be LongDirect
+        for (int i = 0; i < positionCount; i++) {
+            int position = positions[i];
+            if (position > streamPosition) {
+                skip(position - streamPosition);
+                streamPosition = position;
+            }
+
+            if (presentStream != null && !presentStream.nextBit()) {
+                if (nullsAllowed) {
+                    if (outputRequired) {
+                        nulls[outputPositionCount] = true;
+                    }
+                    if (filter != null) {
+                        outputPositions[outputPositionCount] = position;
+                    }
+                    outputPositionCount++;
                 }
             }
             else {
-                for (int i = 0; i < nextBatchSize; i++) {
-                    if (!presentStream.nextBit()) {
-                        builder.appendNull();
-                    }
-                    else {
-                        long id = dataStream.next();
-                        if (inDictionaryStream == null || inDictionaryStream.nextBit()) {
-                            type.writeLong(builder, dictionary[(int) id]);
-                        }
-                        else {
-                            type.writeLong(builder, id);
+                long value = dataStream.next();
+                if (inDictionaryStream == null || inDictionaryStream.nextBit()) {
+                    value = dictionary[(int) value];
+                }
+                if (filter == null || filter.testLong(value)) {
+                    if (outputRequired) {
+                        values[outputPositionCount] = value;
+                        if (nulls != null) {
+                            nulls[outputPositionCount] = false;
                         }
                     }
+                    if (filter != null) {
+                        outputPositions[outputPositionCount] = position;
+                    }
+                    outputPositionCount++;
                 }
             }
+            streamPosition++;
         }
-        readOffset = 0;
-        nextBatchSize = 0;
-        return builder.build();
+
+        readOffset = offset + streamPosition;
+
+        return outputPositionCount;
+    }
+
+    private void skip(int items)
+            throws IOException
+    {
+        if (presentStream != null) {
+            int dataToSkip = presentStream.countBitsSet(items);
+            if (inDictionaryStream != null) {
+                inDictionaryStream.skip(dataToSkip);
+            }
+            dataStream.skip(dataToSkip);
+        }
+        else {
+            if (inDictionaryStream != null) {
+                inDictionaryStream.skip(items);
+            }
+            dataStream.skip(items);
+        }
     }
 
     private void openRowGroup()
@@ -190,6 +205,16 @@ public class LongDictionaryBatchStreamReader
     }
 
     @Override
+    public Block getBlock(int[] positions, int positionCount)
+    {
+        checkArgument(outputPositionCount > 0, "outputPositionCount must be greater than zero");
+        checkState(outputRequired, "This stream reader doesn't produce output");
+        checkState(positionCount <= outputPositionCount, "Not enough values");
+
+        return buildOutputBlock(positions, positionCount, nullsAllowed && presentStream != null);
+    }
+
+    @Override
     public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
     {
         dictionaryDataStreamSource = dictionaryStreamSources.getInputStreamSource(streamDescriptor, DICTIONARY_DATA, LongInputStream.class);
@@ -203,7 +228,6 @@ public class LongDictionaryBatchStreamReader
         dataStreamSource = missingStreamSource(LongInputStream.class);
 
         readOffset = 0;
-        nextBatchSize = 0;
 
         presentStream = null;
         inDictionaryStream = null;
@@ -220,8 +244,6 @@ public class LongDictionaryBatchStreamReader
         dataStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, DATA, LongInputStream.class);
 
         readOffset = 0;
-        nextBatchSize = 0;
-
         presentStream = null;
         inDictionaryStream = null;
         dataStream = null;
@@ -238,8 +260,14 @@ public class LongDictionaryBatchStreamReader
     }
 
     @Override
+    public void close()
+    {
+        systemMemoryContext.close();
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
-        return INSTANCE_SIZE + sizeOf(dictionary);
+        return INSTANCE_SIZE + sizeOf(dictionary) + sizeOf(values) + sizeOf(nulls) + sizeOf(outputPositions);
     }
 }
