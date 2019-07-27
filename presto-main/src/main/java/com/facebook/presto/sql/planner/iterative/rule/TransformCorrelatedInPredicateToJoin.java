@@ -22,10 +22,9 @@ import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolAllocator;
-import com.facebook.presto.sql.planner.SymbolsExtractor;
+import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
+import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
@@ -72,6 +71,7 @@ import static com.facebook.presto.sql.planner.plan.Patterns.Apply.correlation;
 import static com.facebook.presto.sql.planner.plan.Patterns.applyNode;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
@@ -132,7 +132,7 @@ public class TransformCorrelatedInPredicateToJoin
         InPredicate inPredicate = (InPredicate) assignmentExpression;
         VariableReferenceExpression inPredicateOutputVariable = getOnlyElement(subqueryAssignments.getVariables());
 
-        return apply(apply, inPredicate, inPredicateOutputVariable, context.getLookup(), context.getIdAllocator(), context.getSymbolAllocator());
+        return apply(apply, inPredicate, inPredicateOutputVariable, context.getLookup(), context.getIdAllocator(), context.getVariableAllocator());
     }
 
     private Result apply(
@@ -141,9 +141,9 @@ public class TransformCorrelatedInPredicateToJoin
             VariableReferenceExpression inPredicateOutputVariable,
             Lookup lookup,
             PlanNodeIdAllocator idAllocator,
-            SymbolAllocator symbolAllocator)
+            PlanVariableAllocator variableAllocator)
     {
-        Optional<Decorrelated> decorrelated = new DecorrelatingVisitor(lookup, apply.getCorrelation(), symbolAllocator.getTypes())
+        Optional<Decorrelated> decorrelated = new DecorrelatingVisitor(lookup, apply.getCorrelation(), variableAllocator.getTypes())
                 .decorrelate(apply.getSubquery());
 
         if (!decorrelated.isPresent()) {
@@ -156,7 +156,7 @@ public class TransformCorrelatedInPredicateToJoin
                 inPredicateOutputVariable,
                 decorrelated.get(),
                 idAllocator,
-                symbolAllocator);
+                variableAllocator);
 
         return Result.ofPlanNode(projection);
     }
@@ -167,7 +167,7 @@ public class TransformCorrelatedInPredicateToJoin
             VariableReferenceExpression inPredicateOutputVariable,
             Decorrelated decorrelated,
             PlanNodeIdAllocator idAllocator,
-            SymbolAllocator symbolAllocator)
+            PlanVariableAllocator variableAllocator)
     {
         Expression correlationCondition = and(decorrelated.getCorrelatedPredicates());
         PlanNode decorrelatedBuildSource = decorrelated.getDecorrelatedNode();
@@ -175,9 +175,9 @@ public class TransformCorrelatedInPredicateToJoin
         AssignUniqueId probeSide = new AssignUniqueId(
                 idAllocator.getNextId(),
                 apply.getInput(),
-                symbolAllocator.newVariable("unique", BIGINT));
+                variableAllocator.newVariable("unique", BIGINT));
 
-        VariableReferenceExpression buildSideKnownNonNull = symbolAllocator.newVariable("buildSideKnownNonNull", BIGINT);
+        VariableReferenceExpression buildSideKnownNonNull = variableAllocator.newVariable("buildSideKnownNonNull", BIGINT);
         ProjectNode buildSide = new ProjectNode(
                 idAllocator.getNextId(),
                 decorrelatedBuildSource,
@@ -186,8 +186,10 @@ public class TransformCorrelatedInPredicateToJoin
                         .put(buildSideKnownNonNull, castToRowExpression(bigint(0)))
                         .build());
 
-        SymbolReference probeSideSymbolReference = Symbol.from(inPredicate.getValue()).toSymbolReference();
-        SymbolReference buildSideSymbolReference = Symbol.from(inPredicate.getValueList()).toSymbolReference();
+        checkArgument(inPredicate.getValue() instanceof SymbolReference, "Unexpected expression: %s", inPredicate.getValue());
+        SymbolReference probeSideSymbolReference = (SymbolReference) inPredicate.getValue();
+        checkArgument(inPredicate.getValueList() instanceof SymbolReference, "Unexpected expression: %s", inPredicate.getValueList());
+        SymbolReference buildSideSymbolReference = (SymbolReference) inPredicate.getValueList();
 
         Expression joinExpression = and(
                 or(
@@ -198,8 +200,8 @@ public class TransformCorrelatedInPredicateToJoin
 
         JoinNode leftOuterJoin = leftOuterJoin(idAllocator, probeSide, buildSide, joinExpression);
 
-        VariableReferenceExpression countMatchesVariable = symbolAllocator.newVariable("countMatches", BIGINT);
-        VariableReferenceExpression countNullMatchesVariable = symbolAllocator.newVariable("countNullMatches", BIGINT);
+        VariableReferenceExpression countMatchesVariable = variableAllocator.newVariable("countMatches", BIGINT);
+        VariableReferenceExpression countNullMatchesVariable = variableAllocator.newVariable("countNullMatches", BIGINT);
 
         Expression matchCondition = and(
                 new IsNotNullPredicate(probeSideSymbolReference),
@@ -327,7 +329,7 @@ public class TransformCorrelatedInPredicateToJoin
                         .flatMap(AstUtils::preOrder)
                         .filter(SymbolReference.class::isInstance)
                         .map(SymbolReference.class::cast)
-                        .map(symbolReference -> new VariableReferenceExpression(symbolReference.getName(), types.get(Symbol.from(symbolReference))))
+                        .map(symbolReference -> new VariableReferenceExpression(symbolReference.getName(), types.get(symbolReference)))
                         .filter(variable -> !correlation.contains(variable))
                         .map(AssignmentUtils::identityAsSymbolReference)
                         .forEach(assignments::put);
@@ -378,7 +380,7 @@ public class TransformCorrelatedInPredicateToJoin
 
         private boolean isCorrelatedShallowly(PlanNode node)
         {
-            return SymbolsExtractor.extractUniqueNonRecursive(node).stream().map(symbol -> new VariableReferenceExpression(symbol.getName(), types.get(symbol))).anyMatch(correlation::contains);
+            return VariablesExtractor.extractUniqueNonRecursive(node, types).stream().anyMatch(correlation::contains);
         }
     }
 

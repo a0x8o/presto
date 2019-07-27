@@ -18,8 +18,7 @@ import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -32,7 +31,6 @@ import java.util.Optional;
 
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.asSymbolReference;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
 public class StatisticAggregations
@@ -61,15 +59,7 @@ public class StatisticAggregations
         return groupingVariables;
     }
 
-    public List<Symbol> getGroupingSymbols()
-    {
-        return groupingVariables.stream()
-                .map(VariableReferenceExpression::getName)
-                .map(Symbol::new)
-                .collect(toImmutableList());
-    }
-
-    public Parts createPartialAggregations(SymbolAllocator symbolAllocator, FunctionManager functionManager)
+    public Parts createPartialAggregations(PlanVariableAllocator variableAllocator, FunctionManager functionManager)
     {
         ImmutableMap.Builder<VariableReferenceExpression, Aggregation> partialAggregation = ImmutableMap.builder();
         ImmutableMap.Builder<VariableReferenceExpression, Aggregation> finalAggregation = ImmutableMap.builder();
@@ -78,7 +68,7 @@ public class StatisticAggregations
             Aggregation originalAggregation = entry.getValue();
             FunctionHandle functionHandle = originalAggregation.getFunctionHandle();
             InternalAggregationFunction function = functionManager.getAggregateFunctionImplementation(functionHandle);
-            VariableReferenceExpression partialVariable = symbolAllocator.newVariable(functionManager.getFunctionMetadata(functionHandle).getName(), function.getIntermediateType());
+            VariableReferenceExpression partialVariable = variableAllocator.newVariable(functionManager.getFunctionMetadata(functionHandle).getName(), function.getIntermediateType());
             mappings.put(entry.getKey(), partialVariable);
             partialAggregation.put(partialVariable, new Aggregation(
                     new CallExpression(

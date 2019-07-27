@@ -25,6 +25,8 @@ import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.RowExpressionService;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -49,9 +51,10 @@ import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.SYNTHESIZED;
 import static com.facebook.presto.hive.HivePageSourceProvider.ColumnMapping.toColumnHandles;
 import static com.facebook.presto.hive.HiveSessionProperties.isPushdownFilterEnabled;
 import static com.facebook.presto.hive.HiveUtil.getPrefilledColumnValue;
-import static com.facebook.presto.spi.relation.LogicalRowExpressions.TRUE_CONSTANT;
+import static com.facebook.presto.spi.relation.ExpressionOptimizer.Level.MOST_OPTIMIZED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.Maps.uniqueIndex;
@@ -67,6 +70,7 @@ public class HivePageSourceProvider
     private final Set<HiveBatchPageSourceFactory> pageSourceFactories;
     private final Set<HiveSelectivePageSourceFactory> selectivePageSourceFactories;
     private final TypeManager typeManager;
+    private final RowExpressionService rowExpressionService;
 
     @Inject
     public HivePageSourceProvider(
@@ -75,7 +79,8 @@ public class HivePageSourceProvider
             Set<HiveRecordCursorProvider> cursorProviders,
             Set<HiveBatchPageSourceFactory> pageSourceFactories,
             Set<HiveSelectivePageSourceFactory> selectivePageSourceFactories,
-            TypeManager typeManager)
+            TypeManager typeManager,
+            RowExpressionService rowExpressionService)
     {
         requireNonNull(hiveClientConfig, "hiveClientConfig is null");
         this.hiveStorageTimeZone = hiveClientConfig.getDateTimeZone();
@@ -84,6 +89,7 @@ public class HivePageSourceProvider
         this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
         this.selectivePageSourceFactories = ImmutableSet.copyOf(requireNonNull(selectivePageSourceFactories, "selectivePageSourceFactories is null"));
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.rowExpressionService = requireNonNull(rowExpressionService, "rowExpressionService is null");
     }
 
     @Override
@@ -99,7 +105,7 @@ public class HivePageSourceProvider
         Configuration configuration = hdfsEnvironment.getConfiguration(new HdfsContext(session, hiveSplit.getDatabase(), hiveSplit.getTable()), path);
 
         if (isPushdownFilterEnabled(session)) {
-            return createSelectivePageSource(selectivePageSourceFactories, configuration, session, hiveSplit, hiveColumns, hiveStorageTimeZone);
+            return createSelectivePageSource(selectivePageSourceFactories, configuration, session, hiveSplit, hiveColumns, hiveStorageTimeZone, rowExpressionService);
         }
 
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
@@ -135,26 +141,30 @@ public class HivePageSourceProvider
             ConnectorSession session,
             HiveSplit split,
             List<HiveColumnHandle> columns,
-            DateTimeZone hiveStorageTimeZone)
+            DateTimeZone hiveStorageTimeZone,
+            RowExpressionService rowExpressionService)
     {
         Set<HiveColumnHandle> interimColumns = ImmutableSet.<HiveColumnHandle>builder()
                 .addAll(split.getPredicateColumns().values())
                 .addAll(split.getBucketConversion().map(BucketConversion::getBucketColumnHandles).orElse(ImmutableList.of()))
                 .build();
 
+        List<HiveColumnHandle> allColumns = ImmutableList.<HiveColumnHandle>builder()
+                .addAll(columns)
+                .addAll(interimColumns.stream().filter(not(columns::contains)).collect(toImmutableList()))
+                .build();
+
         Path path = new Path(split.getPath());
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 split.getPartitionKeys(),
-                columns,
-                ImmutableList.copyOf(interimColumns),
+                allColumns,
+                ImmutableList.of(),
                 split.getColumnCoercions(), // TODO Include predicateColumns
                 path,
                 split.getTableBucketNumber());
 
         Optional<BucketAdaptation> bucketAdaptation = split.getBucketConversion().map(conversion -> toBucketAdaptation(conversion, columnMappings, split.getTableBucketNumber()));
         checkArgument(!bucketAdaptation.isPresent(), "Bucket conversion is not supported yet");
-
-        checkArgument(TRUE_CONSTANT.equals(split.getRemainingPredicate()), "Complex predicate pushdown is not supported yet");
 
         Map<Integer, String> prefilledValues = columnMappings.stream()
                 .filter(mapping -> mapping.getKind() == ColumnMappingKind.PREFILLED)
@@ -163,6 +173,8 @@ public class HivePageSourceProvider
         List<Integer> outputColumns = columns.stream()
                 .map(HiveColumnHandle::getHiveColumnIndex)
                 .collect(toImmutableList());
+
+        RowExpression optimizedRemainingPredicate = rowExpressionService.getExpressionOptimizer().optimize(split.getRemainingPredicate(), MOST_OPTIMIZED, session);
 
         for (HiveSelectivePageSourceFactory pageSourceFactory : selectivePageSourceFactories) {
             Optional<? extends ConnectorPageSource> pageSource = pageSourceFactory.createPageSource(
@@ -177,6 +189,7 @@ public class HivePageSourceProvider
                     prefilledValues,
                     outputColumns,
                     split.getDomainPredicate(),
+                    optimizedRemainingPredicate,
                     hiveStorageTimeZone);
             if (pageSource.isPresent()) {
                 return pageSource.get();

@@ -409,7 +409,7 @@ public class LocalExecutionPlanner
                         if (argument.isConstant()) {
                             return argument.getConstant().getType();
                         }
-                        return types.get(argument.getColumn());
+                        return argument.getVariableReference().getType();
                     })
                     .collect(toImmutableList());
         }
@@ -2245,7 +2245,7 @@ public class LocalExecutionPlanner
                         node.getId(),
                         aggregation.getAggregations(),
                         ImmutableSet.of(),
-                        aggregation.getGroupingVariables(),
+                        groupingVariables,
                         FINAL,
                         Optional.empty(),
                         Optional.empty(),

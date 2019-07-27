@@ -27,9 +27,7 @@ import com.facebook.presto.verifier.resolver.FailureResolver;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static com.facebook.presto.spi.StandardErrorCode.EXCEEDED_TIME_LIMIT;
@@ -45,6 +43,11 @@ import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.T
 import static com.facebook.presto.verifier.framework.QueryOrigin.forMain;
 import static com.facebook.presto.verifier.framework.QueryOrigin.forSetup;
 import static com.facebook.presto.verifier.framework.QueryOrigin.forTeardown;
+import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_QUERY_FAILED;
+import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_QUERY_TIMED_OUT;
+import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_SETUP_QUERY_FAILED;
+import static com.facebook.presto.verifier.framework.SkippedReason.FAILED_BEFORE_CONTROL_QUERY;
+import static com.facebook.presto.verifier.framework.SkippedReason.NON_DETERMINISTIC;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Throwables.getStackTraceAsString;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -59,6 +62,7 @@ public abstract class AbstractVerification
 {
     private static final Logger log = Logger.get(AbstractVerification.class);
 
+    private final VerificationResubmitter verificationResubmitter;
     private final PrestoAction prestoAction;
     private final SourceQuery sourceQuery;
     private final QueryRewriter queryRewriter;
@@ -70,15 +74,15 @@ public abstract class AbstractVerification
 
     private final VerificationContext verificationContext = new VerificationContext();
 
-    private Map<TargetCluster, QueryStats> queryStats = new EnumMap<>(TargetCluster.class);
-
     public AbstractVerification(
+            VerificationResubmitter verificationResubmitter,
             PrestoAction prestoAction,
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
             List<FailureResolver> failureResolvers,
             VerifierConfig config)
     {
+        this.verificationResubmitter = requireNonNull(verificationResubmitter, "verificationResubmitter is null");
         this.prestoAction = requireNonNull(prestoAction, "prestoAction is null");
         this.sourceQuery = requireNonNull(sourceQuery, "sourceQuery is null");
         this.queryRewriter = requireNonNull(queryRewriter, "queryRewriter is null");
@@ -98,10 +102,10 @@ public abstract class AbstractVerification
         return verificationContext;
     }
 
-    protected void setQueryStats(QueryStats queryStats, TargetCluster cluster)
+    @Override
+    public SourceQuery getSourceQuery()
     {
-        checkState(!this.queryStats.containsKey(cluster), "%sQueryStats has already been set", cluster.name().toLowerCase(ENGLISH));
-        this.queryStats.put(cluster, queryStats);
+        return sourceQuery;
     }
 
     @Override
@@ -113,9 +117,14 @@ public abstract class AbstractVerification
         VerificationResult verificationResult = null;
         Optional<Boolean> deterministic = Optional.empty();
 
+        Optional<QueryStats> controlQueryStats = Optional.empty();
+        Optional<QueryStats> testQueryStats = Optional.empty();
+
         try {
             control = queryRewriter.rewriteQuery(sourceQuery.getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
             test = queryRewriter.rewriteQuery(sourceQuery.getTestQuery(), TEST, getConfiguration(TEST), getVerificationContext());
+            controlQueryStats = Optional.of(setupAndRun(control, CONTROL));
+            testQueryStats = Optional.of(setupAndRun(test, TEST));
             verificationResult = verify(control, test);
 
             deterministic = verificationResult.getMatchResult().isMismatchPossiblyCausedByNonDeterminism() ?
@@ -126,18 +135,21 @@ public abstract class AbstractVerification
             return Optional.of(buildEvent(
                     Optional.of(control),
                     Optional.of(test),
-                    Optional.of(queryStats.get(CONTROL)),
-                    Optional.of(queryStats.get(TEST)),
+                    controlQueryStats,
+                    testQueryStats,
                     Optional.empty(),
                     Optional.of(verificationResult),
                     deterministic));
         }
         catch (QueryException e) {
+            if (verificationResubmitter.resubmit(this, e)) {
+                return Optional.empty();
+            }
             return Optional.of(buildEvent(
                     Optional.ofNullable(control),
                     Optional.ofNullable(test),
-                    Optional.ofNullable(queryStats.get(CONTROL)),
-                    Optional.ofNullable(queryStats.get(TEST)),
+                    controlQueryStats,
+                    testQueryStats,
                     Optional.of(e),
                     Optional.ofNullable(verificationResult),
                     deterministic));
@@ -168,11 +180,6 @@ public abstract class AbstractVerification
         return queryRewriter;
     }
 
-    protected SourceQuery getSourceQuery()
-    {
-        return sourceQuery;
-    }
-
     protected QueryConfiguration getConfiguration(TargetCluster cluster)
     {
         checkState(cluster == CONTROL || cluster == TEST, "Unexpected TargetCluster %s", cluster);
@@ -196,6 +203,12 @@ public abstract class AbstractVerification
                 log.warn("Failed to teardown %s: %s", cluster.name().toLowerCase(ENGLISH), formatSql(teardownQuery));
             }
         }
+    }
+
+    protected QueryStats setupAndRun(QueryBundle control, TargetCluster cluster)
+    {
+        setup(control, cluster);
+        return getPrestoAction().execute(control.getQuery(), getConfiguration(cluster), forMain(cluster), getVerificationContext());
     }
 
     private VerifierQueryEvent buildEvent(
@@ -224,11 +237,12 @@ public abstract class AbstractVerification
         }
 
         EventStatus status;
+        Optional<SkippedReason> skippedReason = getSkippedReason(controlState, deterministic);
         Optional<String> resolveMessage = Optional.empty();
         if (succeeded) {
             status = SUCCEEDED;
         }
-        else if (isSkipped(controlState, deterministic)) {
+        else if (skippedReason.isPresent()) {
             status = SKIPPED;
         }
         else {
@@ -257,6 +271,7 @@ public abstract class AbstractVerification
                 testId,
                 sourceQuery.getName(),
                 status,
+                skippedReason,
                 deterministic,
                 resolveMessage,
                 buildQueryInfo(
@@ -329,18 +344,22 @@ public abstract class AbstractVerification
                 .collect(toImmutableList());
     }
 
-    private static boolean isSkipped(QueryState controlState, Optional<Boolean> deterministic)
+    private static Optional<SkippedReason> getSkippedReason(QueryState controlState, Optional<Boolean> deterministic)
     {
-        if (controlState == QueryState.FAILED ||
-                controlState == QueryState.FAILED_TO_SETUP ||
-                controlState == QueryState.TIMED_OUT ||
-                controlState == QueryState.NOT_RUN) {
-            return true;
+        switch (controlState) {
+            case FAILED:
+                return Optional.of(CONTROL_QUERY_FAILED);
+            case FAILED_TO_SETUP:
+                return Optional.of(CONTROL_SETUP_QUERY_FAILED);
+            case TIMED_OUT:
+                return Optional.of(CONTROL_QUERY_TIMED_OUT);
+            case NOT_RUN:
+                return Optional.of(FAILED_BEFORE_CONTROL_QUERY);
         }
         if (!deterministic.orElse(true)) {
-            return true;
+            return Optional.of(NON_DETERMINISTIC);
         }
-        return false;
+        return Optional.empty();
     }
 
     private static Optional<Double> millisToSeconds(Optional<Long> millis)

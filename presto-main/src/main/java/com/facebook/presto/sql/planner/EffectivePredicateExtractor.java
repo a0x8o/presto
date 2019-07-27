@@ -206,7 +206,7 @@ public class EffectivePredicateExtractor
         public Expression visitTableScan(TableScanNode node, Void context)
         {
             Map<ColumnHandle, VariableReferenceExpression> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
-            return domainTranslator.toPredicate(node.getCurrentConstraint().simplify().transform(column -> assignments.containsKey(column) ? new Symbol(assignments.get(column).getName()) : null));
+            return domainTranslator.toPredicate(node.getCurrentConstraint().simplify().transform(column -> assignments.containsKey(column) ? assignments.get(column).getName() : null));
         }
 
         @Override
@@ -273,7 +273,7 @@ public class EffectivePredicateExtractor
             // Conjuncts without any symbol dependencies cannot be applied to the effective predicate (e.g. FALSE literal)
             return conjuncts.stream()
                     .map(expression -> pullExpressionThroughVariables(expression, outputVariables))
-                    .map(expression -> SymbolsExtractor.extractAll(expression).isEmpty() ? TRUE_LITERAL : expression)
+                    .map(expression -> VariablesExtractor.extractAll(expression, types).isEmpty() ? TRUE_LITERAL : expression)
                     .map(expressionOrNullVariables(types, nullVariableScopes))
                     .collect(toImmutableList());
         }

@@ -39,7 +39,6 @@ import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.NoOpSymbolResolver;
 import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.RowExpressionInterpreter;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.ActualProperties.Global;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
@@ -600,10 +599,10 @@ public class PropertyDerivations
 
             Map<VariableReferenceExpression, ConstantExpression> constants = new HashMap<>(properties.getConstants());
             if (isExpression(node.getPredicate())) {
-                TupleDomain<Symbol> tupleDomain = ExpressionDomainTranslator.fromPredicate(metadata, session, castToExpression(node.getPredicate()), types).getTupleDomain();
+                TupleDomain<String> tupleDomain = ExpressionDomainTranslator.fromPredicate(metadata, session, castToExpression(node.getPredicate()), types).getTupleDomain();
                 constants.putAll(extractFixedValuesToConstantExpressions(tupleDomain)
                         .map(values -> values.entrySet().stream()
-                                .collect(toImmutableMap(entry -> toVariableReference(entry.getKey(), types), Map.Entry::getValue)))
+                                .collect(toImmutableMap(entry -> toVariableReference(new SymbolReference(entry.getKey()), types), Map.Entry::getValue)))
                         .orElse(ImmutableMap.of()));
             }
             else {
@@ -644,7 +643,7 @@ public class PropertyDerivations
                     Object value = optimizer.optimize(NoOpSymbolResolver.INSTANCE);
 
                     if (value instanceof SymbolReference) {
-                        VariableReferenceExpression variable = toVariableReference(Symbol.from((SymbolReference) value), types);
+                        VariableReferenceExpression variable = toVariableReference((SymbolReference) value, types);
                         ConstantExpression existingConstantValue = constants.get(variable);
                         if (existingConstantValue != null) {
                             constants.put(output, new ConstantExpression(value, type));
@@ -801,7 +800,7 @@ public class PropertyDerivations
                 RowExpression expression = assignment.getValue();
                 if (isExpression(expression)) {
                     if (castToExpression(expression) instanceof SymbolReference) {
-                        inputToOutput.put(toVariableReference(Symbol.from(castToExpression(expression)), types), assignment.getKey());
+                        inputToOutput.put(toVariableReference(castToExpression(expression), types), assignment.getKey());
                     }
                 }
                 else {

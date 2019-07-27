@@ -21,7 +21,6 @@ import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PartitioningScheme;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.Assignments;
@@ -93,7 +92,7 @@ public class PushProjectionThroughExchange
 
         ImmutableList.Builder<PlanNode> newSourceBuilder = ImmutableList.builder();
         ImmutableList.Builder<List<VariableReferenceExpression>> inputsBuilder = ImmutableList.builder();
-        TypeProvider types = context.getSymbolAllocator().getTypes();
+        TypeProvider types = context.getVariableAllocator().getTypes();
         for (int i = 0; i < exchange.getSources().size(); i++) {
             Map<VariableReferenceExpression, SymbolReference> outputToInputMap = extractExchangeOutputToInput(exchange, i);
 
@@ -104,7 +103,7 @@ public class PushProjectionThroughExchange
             partitioningColumns.stream()
                     .map(outputToInputMap::get)
                     .forEach(nameReference -> {
-                        VariableReferenceExpression variable = toVariableReference(Symbol.from(nameReference), types);
+                        VariableReferenceExpression variable = toVariableReference(nameReference, types);
                         projections.put(variable, castToRowExpression(nameReference));
                         inputs.add(variable);
                     });
@@ -123,7 +122,7 @@ public class PushProjectionThroughExchange
                         .filter(variable -> !partitioningColumns.contains(variable))
                         .map(outputToInputMap::get)
                         .forEach(nameReference -> {
-                            VariableReferenceExpression variable = toVariableReference(Symbol.from(nameReference), types);
+                            VariableReferenceExpression variable = toVariableReference(nameReference, types);
                             projections.put(variable, castToRowExpression(nameReference));
                             inputs.add(variable);
                         });
@@ -132,7 +131,7 @@ public class PushProjectionThroughExchange
             for (Map.Entry<VariableReferenceExpression, RowExpression> projection : project.getAssignments().entrySet()) {
                 Expression translatedExpression = inlineVariables(outputToInputMap, castToExpression(projection.getValue()), types);
                 Type type = projection.getKey().getType();
-                VariableReferenceExpression variable = context.getSymbolAllocator().newVariable(translatedExpression, type);
+                VariableReferenceExpression variable = context.getVariableAllocator().newVariable(translatedExpression, type);
                 projections.put(variable, castToRowExpression(translatedExpression));
                 inputs.add(variable);
             }

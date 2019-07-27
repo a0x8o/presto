@@ -41,9 +41,8 @@ import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.LiteralEncoder;
 import com.facebook.presto.sql.planner.LookupSymbolResolver;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolsExtractor;
 import com.facebook.presto.sql.planner.TypeProvider;
+import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Expression;
@@ -159,7 +158,7 @@ public class PickTableLayout
                     castToExpression(filterNode.getPredicate()),
                     false,
                     context.getSession(),
-                    context.getSymbolAllocator().getTypes(),
+                    context.getVariableAllocator().getTypes(),
                     context.getIdAllocator(),
                     metadata,
                     parser,
@@ -292,8 +291,8 @@ public class PickTableLayout
 
             BiMap<VariableReferenceExpression, VariableReferenceExpression> symbolToColumnMapping = node.getAssignments().entrySet().stream()
                     .collect(toImmutableBiMap(
-                            entry -> new VariableReferenceExpression(entry.getKey().getName(), types.get(new Symbol(entry.getKey().getName()))),
-                            entry -> new VariableReferenceExpression(getColumnName(session, metadata, node.getTable(), entry.getValue()), types.get(new Symbol(entry.getKey().getName())))));
+                            Map.Entry::getKey,
+                            entry -> new VariableReferenceExpression(getColumnName(session, metadata, node.getTable(), entry.getValue()), entry.getKey().getType())));
             RowExpression translatedPredicate = replaceExpression(SqlToRowExpressionTranslator.translate(predicate, predicateTypes, ImmutableMap.of(), metadata.getFunctionManager(), metadata.getTypeManager(), session, false), symbolToColumnMapping);
 
             PushdownFilterResult pushdownFilterResult = metadata.pushdownFilter(session, node.getTable(), translatedPredicate);
@@ -328,7 +327,7 @@ public class PickTableLayout
                 types);
 
         TupleDomain<ColumnHandle> newDomain = decomposedPredicate.getTupleDomain()
-                .transform(symbol -> node.getAssignments().entrySet().stream().collect(toImmutableMap(entry -> new Symbol(entry.getKey().getName()), Map.Entry::getValue)).get(symbol))
+                .transform(variableName -> node.getAssignments().entrySet().stream().collect(toImmutableMap(entry -> entry.getKey().getName(), Map.Entry::getValue)).get(variableName))
                 .intersect(node.getEnforcedConstraint());
 
         Map<ColumnHandle, VariableReferenceExpression> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
@@ -345,7 +344,7 @@ public class PickTableLayout
                             deterministicPredicate,
                             // Simplify the tuple domain to avoid creating an expression with too many nodes,
                             // which would be expensive to evaluate in the call to isCandidate below.
-                            domainTranslator.toPredicate(newDomain.simplify().transform(column -> assignments.containsKey(column) ? new Symbol(assignments.get(column).getName()) : null))));
+                            domainTranslator.toPredicate(newDomain.simplify().transform(column -> assignments.containsKey(column) ? assignments.get(column).getName() : null))));
             constraint = new Constraint<>(newDomain, evaluator::isCandidate);
         }
         else {
@@ -387,7 +386,7 @@ public class PickTableLayout
         //   and non-TupleDomain-expressible expressions should be retained. Changing the order can lead
         //   to failures of previously successful queries.
         Expression resultingPredicate = combineConjuncts(
-                domainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(column -> new Symbol(assignments.get(column).getName()))),
+                domainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(column -> assignments.get(column).getName())),
                 filterNonDeterministicConjuncts(predicate),
                 decomposedPredicate.getRemainingExpression());
 
@@ -415,8 +414,8 @@ public class PickTableLayout
             Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(session, metadata, parser, types, expression, emptyList(), WarningCollector.NOOP);
 
             evaluator = ExpressionInterpreter.expressionOptimizer(expression, metadata, session, expressionTypes);
-            arguments = SymbolsExtractor.extractUnique(expression).stream()
-                    .map(symbol -> assignments.entrySet().stream().collect(toImmutableMap(entry -> new Symbol(entry.getKey().getName()), Map.Entry::getValue)).get(symbol))
+            arguments = VariablesExtractor.extractUnique(expression, types).stream()
+                    .map(assignments::get)
                     .collect(toImmutableSet());
         }
 

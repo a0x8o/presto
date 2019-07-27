@@ -31,8 +31,7 @@ import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.planner.ExpressionDomainTranslator;
 import com.facebook.presto.sql.planner.LiteralEncoder;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
@@ -79,12 +78,12 @@ public class WindowFilterPushDown
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
         requireNonNull(types, "types is null");
-        requireNonNull(symbolAllocator, "symbolAllocator is null");
+        requireNonNull(variableAllocator, "variableAllocator is null");
         requireNonNull(idAllocator, "idAllocator is null");
 
         return SimplePlanRewriter.rewriteWith(new Rewriter(idAllocator, metadata, domainTranslator, session, types), plan, null);
@@ -160,7 +159,7 @@ public class WindowFilterPushDown
         {
             PlanNode source = context.rewrite(node.getSource());
 
-            TupleDomain<Symbol> tupleDomain = fromPredicate(metadata, session, castToExpression(node.getPredicate()), types).getTupleDomain();
+            TupleDomain<String> tupleDomain = fromPredicate(metadata, session, castToExpression(node.getPredicate()), types).getTupleDomain();
 
             if (source instanceof RowNumberNode) {
                 VariableReferenceExpression rowNumberVariable = ((RowNumberNode) source).getRowNumberVariable();
@@ -187,19 +186,19 @@ public class WindowFilterPushDown
         private PlanNode rewriteFilterSource(FilterNode filterNode, PlanNode source, VariableReferenceExpression rowNumberVariable, int upperBound)
         {
             ExtractionResult extractionResult = fromPredicate(metadata, session, castToExpression(filterNode.getPredicate()), types);
-            TupleDomain<Symbol> tupleDomain = extractionResult.getTupleDomain();
+            TupleDomain<String> tupleDomain = extractionResult.getTupleDomain();
 
             if (!isEqualRange(tupleDomain, rowNumberVariable, upperBound)) {
                 return new FilterNode(filterNode.getId(), source, filterNode.getPredicate());
             }
 
             // Remove the row number domain because it is absorbed into the node
-            Map<Symbol, Domain> newDomains = tupleDomain.getDomains().get().entrySet().stream()
+            Map<String, Domain> newDomains = tupleDomain.getDomains().get().entrySet().stream()
                     .filter(entry -> !entry.getKey().equals(rowNumberVariable))
                     .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
 
             // Construct a new predicate
-            TupleDomain<Symbol> newTupleDomain = TupleDomain.withColumnDomains(newDomains);
+            TupleDomain<String> newTupleDomain = TupleDomain.withColumnDomains(newDomains);
             Expression newPredicate = ExpressionUtils.combineConjuncts(
                     extractionResult.getRemainingExpression(),
                     domainTranslator.toPredicate(newTupleDomain));
@@ -210,22 +209,22 @@ public class WindowFilterPushDown
             return new FilterNode(filterNode.getId(), source, castToRowExpression(newPredicate));
         }
 
-        private static boolean isEqualRange(TupleDomain<Symbol> tupleDomain, VariableReferenceExpression variable, long upperBound)
+        private static boolean isEqualRange(TupleDomain<String> tupleDomain, VariableReferenceExpression variable, long upperBound)
         {
             if (tupleDomain.isNone()) {
                 return false;
             }
-            Domain domain = tupleDomain.getDomains().get().get(new Symbol(variable.getName()));
+            Domain domain = tupleDomain.getDomains().get().get(variable.getName());
             return domain.getValues().equals(ValueSet.ofRanges(Range.lessThanOrEqual(domain.getType(), upperBound)));
         }
 
-        private static OptionalInt extractUpperBound(TupleDomain<Symbol> tupleDomain, VariableReferenceExpression variable)
+        private static OptionalInt extractUpperBound(TupleDomain<String> tupleDomain, VariableReferenceExpression variable)
         {
             if (tupleDomain.isNone()) {
                 return OptionalInt.empty();
             }
 
-            Domain rowNumberDomain = tupleDomain.getDomains().get().get(new Symbol(variable.getName()));
+            Domain rowNumberDomain = tupleDomain.getDomains().get().get(variable.getName());
             if (rowNumberDomain == null) {
                 return OptionalInt.empty();
             }

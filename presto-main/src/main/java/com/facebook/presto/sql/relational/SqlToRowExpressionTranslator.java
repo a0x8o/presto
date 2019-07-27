@@ -15,13 +15,9 @@ package com.facebook.presto.sql.relational;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
-import com.facebook.presto.spi.relation.InputReferenceExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
 import com.facebook.presto.spi.relation.RowExpression;
-import com.facebook.presto.spi.relation.RowExpressionVisitor;
-import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.SpecialFormExpression.Form;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.CharType;
@@ -485,68 +481,11 @@ public final class SqlToRowExpressionTranslator
         {
             RowExpression value = process(node.getExpression(), context);
 
-            if (node.isTypeOnly()) {
-                return changeType(value, getType(node));
-            }
-
             if (node.isSafe()) {
                 return call(TRY_CAST.name(), functionManager.lookupCast(TRY_CAST, value.getType().getTypeSignature(), getType(node).getTypeSignature()), getType(node), value);
             }
 
             return call(CAST.name(), functionManager.lookupCast(CAST, value.getType().getTypeSignature(), getType(node).getTypeSignature()), getType(node), value);
-        }
-
-        private static RowExpression changeType(RowExpression value, Type targetType)
-        {
-            ChangeTypeVisitor visitor = new ChangeTypeVisitor(targetType);
-            return value.accept(visitor, null);
-        }
-
-        private static class ChangeTypeVisitor
-                implements RowExpressionVisitor<RowExpression, Void>
-        {
-            private final Type targetType;
-
-            private ChangeTypeVisitor(Type targetType)
-            {
-                this.targetType = targetType;
-            }
-
-            @Override
-            public RowExpression visitCall(CallExpression call, Void context)
-            {
-                return new CallExpression(call.getDisplayName(), call.getFunctionHandle(), targetType, call.getArguments());
-            }
-
-            @Override
-            public RowExpression visitInputReference(InputReferenceExpression reference, Void context)
-            {
-                return field(reference.getField(), targetType);
-            }
-
-            @Override
-            public RowExpression visitConstant(ConstantExpression literal, Void context)
-            {
-                return constant(literal.getValue(), targetType);
-            }
-
-            @Override
-            public RowExpression visitLambda(LambdaDefinitionExpression lambda, Void context)
-            {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public RowExpression visitVariableReference(VariableReferenceExpression reference, Void context)
-            {
-                return new VariableReferenceExpression(reference.getName(), targetType);
-            }
-
-            @Override
-            public RowExpression visitSpecialForm(SpecialFormExpression specialForm, Void context)
-            {
-                return specialForm(specialForm.getForm(), targetType, specialForm.getArguments());
-            }
         }
 
         @Override
@@ -767,6 +706,19 @@ public final class SqlToRowExpressionTranslator
             RowExpression base = process(node.getBase(), context);
             RowExpression index = process(node.getIndex(), context);
 
+            // this block will handle row subscript, converts the ROW_CONSTRUCTOR with subscript to a DEREFERENCE expression
+            if (base.getType() instanceof RowType) {
+                checkState(index instanceof ConstantExpression, "Subscript expression on ROW requires a ConstantExpression");
+                ConstantExpression position = (ConstantExpression) index;
+                checkState(position.getValue() instanceof Long, "ConstantExpression should contain a valid integer index into the row");
+                Long offset = (Long) position.getValue();
+                checkState(
+                        offset >= 1 && offset <= base.getType().getTypeParameters().size(),
+                        "Subscript index out of bounds %s: should be >= 1 and <= %s",
+                        offset,
+                        base.getType().getTypeParameters().size());
+                return specialForm(DEREFERENCE, getType(node), base, Expressions.constant(offset - 1, INTEGER));
+            }
             return call(
                     SUBSCRIPT.name(),
                     functionManager.resolveOperator(SUBSCRIPT, fromTypes(base.getType(), index.getType())),

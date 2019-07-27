@@ -103,34 +103,34 @@ import static org.testng.Assert.assertTrue;
 public class TestExpressionInterpreter
 {
     private static final int TEST_VARCHAR_TYPE_LENGTH = 17;
-    private static final TypeProvider SYMBOL_TYPES = TypeProvider.copyOf(ImmutableMap.<Symbol, Type>builder()
-            .put(new Symbol("bound_integer"), INTEGER)
-            .put(new Symbol("bound_long"), BIGINT)
-            .put(new Symbol("bound_string"), createVarcharType(TEST_VARCHAR_TYPE_LENGTH))
-            .put(new Symbol("bound_varbinary"), VarbinaryType.VARBINARY)
-            .put(new Symbol("bound_double"), DOUBLE)
-            .put(new Symbol("bound_boolean"), BOOLEAN)
-            .put(new Symbol("bound_date"), DATE)
-            .put(new Symbol("bound_time"), TIME)
-            .put(new Symbol("bound_timestamp"), TIMESTAMP)
-            .put(new Symbol("bound_pattern"), VARCHAR)
-            .put(new Symbol("bound_null_string"), VARCHAR)
-            .put(new Symbol("bound_decimal_short"), createDecimalType(5, 2))
-            .put(new Symbol("bound_decimal_long"), createDecimalType(23, 3))
-            .put(new Symbol("time"), BIGINT) // for testing reserved identifiers
-            .put(new Symbol("unbound_integer"), INTEGER)
-            .put(new Symbol("unbound_long"), BIGINT)
-            .put(new Symbol("unbound_long2"), BIGINT)
-            .put(new Symbol("unbound_long3"), BIGINT)
-            .put(new Symbol("unbound_string"), VARCHAR)
-            .put(new Symbol("unbound_double"), DOUBLE)
-            .put(new Symbol("unbound_boolean"), BOOLEAN)
-            .put(new Symbol("unbound_date"), DATE)
-            .put(new Symbol("unbound_time"), TIME)
-            .put(new Symbol("unbound_timestamp"), TIMESTAMP)
-            .put(new Symbol("unbound_interval"), INTERVAL_DAY_TIME)
-            .put(new Symbol("unbound_pattern"), VARCHAR)
-            .put(new Symbol("unbound_null_string"), VARCHAR)
+    private static final TypeProvider SYMBOL_TYPES = TypeProvider.viewOf(ImmutableMap.<String, Type>builder()
+            .put("bound_integer", INTEGER)
+            .put("bound_long", BIGINT)
+            .put("bound_string", createVarcharType(TEST_VARCHAR_TYPE_LENGTH))
+            .put("bound_varbinary", VarbinaryType.VARBINARY)
+            .put("bound_double", DOUBLE)
+            .put("bound_boolean", BOOLEAN)
+            .put("bound_date", DATE)
+            .put("bound_time", TIME)
+            .put("bound_timestamp", TIMESTAMP)
+            .put("bound_pattern", VARCHAR)
+            .put("bound_null_string", VARCHAR)
+            .put("bound_decimal_short", createDecimalType(5, 2))
+            .put("bound_decimal_long", createDecimalType(23, 3))
+            .put("time", BIGINT) // for testing reserved identifiers
+            .put("unbound_integer", INTEGER)
+            .put("unbound_long", BIGINT)
+            .put("unbound_long2", BIGINT)
+            .put("unbound_long3", BIGINT)
+            .put("unbound_string", VARCHAR)
+            .put("unbound_double", DOUBLE)
+            .put("unbound_boolean", BOOLEAN)
+            .put("unbound_date", DATE)
+            .put("unbound_time", TIME)
+            .put("unbound_timestamp", TIMESTAMP)
+            .put("unbound_interval", INTERVAL_DAY_TIME)
+            .put("unbound_pattern", VARCHAR)
+            .put("unbound_null_string", VARCHAR)
             .build());
 
     private static final SqlParser SQL_PARSER = new SqlParser();
@@ -577,6 +577,7 @@ public class TestExpressionInterpreter
 
         // string
         assertOptimizedEquals("cast('xyz' as VARCHAR)", "'xyz'");
+        assertOptimizedEquals("cast(cast('abcxyz' as VARCHAR(3)) as VARCHAR(5))", "'abc'");
 
         // null
         assertOptimizedEquals("cast(null as VARCHAR)", "null");
@@ -1430,6 +1431,13 @@ public class TestExpressionInterpreter
         optimize("CAST(null AS ROW(a VARCHAR, b BIGINT)).a");
     }
 
+    @Test
+    public void testRowSubscript()
+    {
+        assertOptimizedEquals("ROW (1, 'a', true)[3]", "true");
+        assertOptimizedEquals("ROW (1, 'a', ROW (2, 'b', ROW (3, 'c')))[3][3][2]", "'c'");
+    }
+
     @Test(expectedExceptions = PrestoException.class)
     public void testArraySubscriptConstantNegativeIndex()
     {
@@ -1537,7 +1545,7 @@ public class TestExpressionInterpreter
         Object rowExpressionResult = new RowExpressionInterpreter(rowExpression, METADATA, TEST_SESSION.toConnectorSession(), true).optimize(symbol -> {
             Object value = symbolConstant(symbol);
             if (value == null) {
-                return new VariableReferenceExpression(symbol.getName(), SYMBOL_TYPES.get(symbol));
+                return new VariableReferenceExpression(symbol.getName(), SYMBOL_TYPES.get(symbol.toSymbolReference()));
             }
             return value;
         });
