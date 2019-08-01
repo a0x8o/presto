@@ -35,6 +35,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collector;
 
+import static java.util.Collections.unmodifiableMap;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
@@ -67,7 +68,7 @@ public final class TupleDomain<T>
             if (containsNoneDomain(map)) {
                 return Optional.empty();
             }
-            return Optional.of(Collections.unmodifiableMap(normalizeAndCopy(map)));
+            return Optional.of(unmodifiableMap(normalizeAndCopy(map)));
         });
     }
 
@@ -408,6 +409,26 @@ public final class TupleDomain<T>
                 .collect(toLinkedMap(Map.Entry::getKey, e -> e.getValue().simplify()));
 
         return TupleDomain.withColumnDomains(simplified);
+    }
+
+    public TupleDomain<T> compact(int threshold)
+    {
+        Map<T, Domain> compactedDomains = new HashMap<>();
+        getDomains().ifPresent(domains -> {
+            for (Map.Entry<T, Domain> entry : domains.entrySet()) {
+                T hiveColumnHandle = entry.getKey();
+                Domain domain = entry.getValue();
+
+                ValueSet values = domain.getValues();
+                ValueSet compactValueSet = values.getValuesProcessor().<Optional<ValueSet>>transform(
+                        ranges -> ranges.getRangeCount() > threshold ? Optional.of(ValueSet.ofRanges(ranges.getSpan())) : Optional.empty(),
+                        discreteValues -> discreteValues.getValues().size() > threshold ? Optional.of(ValueSet.all(values.getType())) : Optional.empty(),
+                        allOrNone -> Optional.empty())
+                        .orElse(values);
+                compactedDomains.put(hiveColumnHandle, Domain.create(compactValueSet, domain.isNullAllowed()));
+            }
+        });
+        return TupleDomain.withColumnDomains(unmodifiableMap(compactedDomains));
     }
 
     private static <T, K, U> Collector<T, ?, Map<K, U>> toLinkedMap(Function<? super T, ? extends K> keyMapper, Function<? super T, ? extends U> valueMapper)

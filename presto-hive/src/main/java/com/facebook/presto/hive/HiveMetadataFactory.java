@@ -42,7 +42,6 @@ public class HiveMetadataFactory
     private final boolean writesToNonManagedTablesEnabled;
     private final boolean createsOfNonManagedTablesEnabled;
     private final long perTransactionCacheMaximumSize;
-    private final int maxPartitions;
     private final ExtendedHiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final HivePartitionManager partitionManager;
@@ -56,6 +55,7 @@ public class HiveMetadataFactory
     private final ListeningExecutorService fileRenameExecutor;
     private final TypeTranslator typeTranslator;
     private final StagingFileCommitter stagingFileCommitter;
+    private final ZeroRowFileCreator zeroRowFileCreator;
     private final String prestoVersion;
 
     @Inject
@@ -74,6 +74,7 @@ public class HiveMetadataFactory
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             TypeTranslator typeTranslator,
             StagingFileCommitter stagingFileCommitter,
+            ZeroRowFileCreator zeroRowFileCreator,
             NodeVersion nodeVersion)
     {
         this(
@@ -87,7 +88,6 @@ public class HiveMetadataFactory
                 hiveClientConfig.getWritesToNonManagedTablesEnabled(),
                 hiveClientConfig.getCreatesOfNonManagedTablesEnabled(),
                 hiveClientConfig.getPerTransactionMetastoreCacheMaximumSize(),
-                hiveClientConfig.getMaxPartitionsPerScan(),
                 typeManager,
                 locationService,
                 functionResolution,
@@ -97,6 +97,7 @@ public class HiveMetadataFactory
                 fileRenameExecutor,
                 typeTranslator,
                 stagingFileCommitter,
+                zeroRowFileCreator,
                 nodeVersion.toString());
     }
 
@@ -111,7 +112,6 @@ public class HiveMetadataFactory
             boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled,
             long perTransactionCacheMaximumSize,
-            int maxPartitions,
             TypeManager typeManager,
             LocationService locationService,
             StandardFunctionResolution functionResolution,
@@ -121,6 +121,7 @@ public class HiveMetadataFactory
             ListeningExecutorService fileRenameExecutor,
             TypeTranslator typeTranslator,
             StagingFileCommitter stagingFileCommitter,
+            ZeroRowFileCreator zeroRowFileCreator,
             String prestoVersion)
     {
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
@@ -143,8 +144,8 @@ public class HiveMetadataFactory
         this.fileRenameExecutor = requireNonNull(fileRenameExecutor, "fileRenameExecutor is null");
         this.typeTranslator = requireNonNull(typeTranslator, "typeTranslator is null");
         this.stagingFileCommitter = requireNonNull(stagingFileCommitter, "stagingFileCommitter is null");
+        this.zeroRowFileCreator = requireNonNull(zeroRowFileCreator, "zeroRowFileCreator is null");
         this.prestoVersion = requireNonNull(prestoVersion, "prestoVersion is null");
-        this.maxPartitions = maxPartitions;
 
         if (!allowCorruptWritesForTesting && !timeZone.equals(DateTimeZone.getDefault())) {
             log.warn("Hive writes are disabled. " +
@@ -181,7 +182,7 @@ public class HiveMetadataFactory
                 typeTranslator,
                 prestoVersion,
                 new MetastoreHiveStatisticsProvider(metastore),
-                maxPartitions,
-                stagingFileCommitter);
+                stagingFileCommitter,
+                zeroRowFileCreator);
     }
 }
