@@ -17,15 +17,15 @@ import com.facebook.presto.jdbc.QueryStats;
 import com.facebook.presto.sql.SqlFormatter;
 import com.facebook.presto.sql.tree.Statement;
 import com.facebook.presto.verifier.checksum.ChecksumResult;
-import com.facebook.presto.verifier.event.FailureInfo;
 import com.facebook.presto.verifier.event.QueryInfo;
 import com.facebook.presto.verifier.event.VerifierQueryEvent;
 import com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus;
 import com.facebook.presto.verifier.framework.MatchResult.MatchType;
-import com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster;
 import com.facebook.presto.verifier.resolver.FailureResolver;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
+
+import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Optional;
@@ -35,14 +35,14 @@ import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.FAILED_RESOLVED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SKIPPED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SUCCEEDED;
-import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.MAIN;
-import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.SETUP;
-import static com.facebook.presto.verifier.framework.QueryOrigin.QueryStage.TEARDOWN;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.TEST;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forMain;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forSetup;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forTeardown;
+import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
+import static com.facebook.presto.verifier.framework.ClusterType.TEST;
+import static com.facebook.presto.verifier.framework.QueryStage.CONTROL_MAIN;
+import static com.facebook.presto.verifier.framework.QueryStage.DETERMINISM_ANALYSIS;
+import static com.facebook.presto.verifier.framework.QueryStage.TEST_MAIN;
+import static com.facebook.presto.verifier.framework.QueryStage.forMain;
+import static com.facebook.presto.verifier.framework.QueryStage.forSetup;
+import static com.facebook.presto.verifier.framework.QueryStage.forTeardown;
 import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_QUERY_FAILED;
 import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_QUERY_TIMED_OUT;
 import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_SETUP_QUERY_FAILED;
@@ -67,12 +67,11 @@ public abstract class AbstractVerification
     private final SourceQuery sourceQuery;
     private final QueryRewriter queryRewriter;
     private final List<FailureResolver> failureResolvers;
+    private final VerificationContext verificationContext;
 
     private final String testId;
     private final boolean runTearDownOnResultMismatch;
     private final boolean failureResolverEnabled;
-
-    private final VerificationContext verificationContext = new VerificationContext();
 
     public AbstractVerification(
             VerificationResubmitter verificationResubmitter,
@@ -80,27 +79,24 @@ public abstract class AbstractVerification
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
             List<FailureResolver> failureResolvers,
-            VerifierConfig config)
+            VerificationContext verificationContext,
+            VerifierConfig verifierConfig)
     {
         this.verificationResubmitter = requireNonNull(verificationResubmitter, "verificationResubmitter is null");
         this.prestoAction = requireNonNull(prestoAction, "prestoAction is null");
         this.sourceQuery = requireNonNull(sourceQuery, "sourceQuery is null");
         this.queryRewriter = requireNonNull(queryRewriter, "queryRewriter is null");
         this.failureResolvers = requireNonNull(failureResolvers, "failureResolvers is null");
+        this.verificationContext = requireNonNull(verificationContext, "verificationContext is null");
 
-        this.testId = requireNonNull(config.getTestId(), "testId is null");
-        this.runTearDownOnResultMismatch = config.isRunTearDownOnResultMismatch();
-        this.failureResolverEnabled = config.isFailureResolverEnabled();
+        this.testId = requireNonNull(verifierConfig.getTestId(), "testId is null");
+        this.runTearDownOnResultMismatch = verifierConfig.isRunTearDownOnResultMismatch();
+        this.failureResolverEnabled = verifierConfig.isFailureResolverEnabled();
     }
 
     protected abstract VerificationResult verify(QueryBundle control, QueryBundle test);
 
     protected abstract Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksum);
-
-    protected VerificationContext getVerificationContext()
-    {
-        return verificationContext;
-    }
 
     @Override
     public SourceQuery getSourceQuery()
@@ -117,14 +113,14 @@ public abstract class AbstractVerification
         VerificationResult verificationResult = null;
         Optional<Boolean> deterministic = Optional.empty();
 
-        Optional<QueryStats> controlQueryStats = Optional.empty();
-        Optional<QueryStats> testQueryStats = Optional.empty();
+        QueryStats controlQueryStats = null;
+        QueryStats testQueryStats = null;
 
         try {
-            control = queryRewriter.rewriteQuery(sourceQuery.getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
-            test = queryRewriter.rewriteQuery(sourceQuery.getTestQuery(), TEST, getConfiguration(TEST), getVerificationContext());
-            controlQueryStats = Optional.of(setupAndRun(control, CONTROL));
-            testQueryStats = Optional.of(setupAndRun(test, TEST));
+            control = queryRewriter.rewriteQuery(sourceQuery.getControlQuery(), CONTROL);
+            test = queryRewriter.rewriteQuery(sourceQuery.getTestQuery(), TEST);
+            controlQueryStats = setupAndRun(control, false);
+            testQueryStats = setupAndRun(test, false);
             verificationResult = verify(control, test);
 
             deterministic = verificationResult.getMatchResult().isMismatchPossiblyCausedByNonDeterminism() ?
@@ -135,8 +131,8 @@ public abstract class AbstractVerification
             return Optional.of(buildEvent(
                     Optional.of(control),
                     Optional.of(test),
-                    controlQueryStats,
-                    testQueryStats,
+                    Optional.ofNullable(controlQueryStats),
+                    Optional.ofNullable(testQueryStats),
                     Optional.empty(),
                     Optional.of(verificationResult),
                     deterministic));
@@ -148,8 +144,8 @@ public abstract class AbstractVerification
             return Optional.of(buildEvent(
                     Optional.ofNullable(control),
                     Optional.ofNullable(test),
-                    controlQueryStats,
-                    testQueryStats,
+                    Optional.ofNullable(controlQueryStats),
+                    Optional.ofNullable(testQueryStats),
                     Optional.of(e),
                     Optional.ofNullable(verificationResult),
                     deterministic));
@@ -160,12 +156,8 @@ public abstract class AbstractVerification
         }
         finally {
             if (!resultMismatched || runTearDownOnResultMismatch) {
-                if (control != null) {
-                    teardownSafely(control, CONTROL);
-                }
-                if (test != null) {
-                    teardownSafely(test, TEST);
-                }
+                teardownSafely(control);
+                teardownSafely(test);
             }
         }
     }
@@ -180,35 +172,32 @@ public abstract class AbstractVerification
         return queryRewriter;
     }
 
-    protected QueryConfiguration getConfiguration(TargetCluster cluster)
+    protected QueryStats setupAndRun(QueryBundle bundle, boolean determinismAnalysis)
     {
-        checkState(cluster == CONTROL || cluster == TEST, "Unexpected TargetCluster %s", cluster);
-        return cluster == CONTROL ? sourceQuery.getControlConfiguration() : sourceQuery.getTestConfiguration();
-    }
+        checkState(!determinismAnalysis || bundle.getCluster() == CONTROL, "Determinism analysis can only be run on control cluster");
+        QueryStage setupStage = determinismAnalysis ? DETERMINISM_ANALYSIS : forSetup(bundle.getCluster());
+        QueryStage mainStage = determinismAnalysis ? DETERMINISM_ANALYSIS : forMain(bundle.getCluster());
 
-    protected void setup(QueryBundle control, TargetCluster cluster)
-    {
-        for (Statement setupQuery : control.getSetupQueries()) {
-            prestoAction.execute(setupQuery, getConfiguration(cluster), forSetup(cluster), getVerificationContext());
+        for (Statement setupQuery : bundle.getSetupQueries()) {
+            prestoAction.execute(setupQuery, setupStage);
         }
+        return getPrestoAction().execute(bundle.getQuery(), mainStage);
     }
 
-    protected void teardownSafely(QueryBundle control, TargetCluster cluster)
+    protected void teardownSafely(@Nullable QueryBundle bundle)
     {
-        for (Statement teardownQuery : control.getTeardownQueries()) {
+        if (bundle == null) {
+            return;
+        }
+
+        for (Statement teardownQuery : bundle.getTeardownQueries()) {
             try {
-                prestoAction.execute(teardownQuery, getConfiguration(cluster), forTeardown(cluster), getVerificationContext());
+                prestoAction.execute(teardownQuery, forTeardown(bundle.getCluster()));
             }
             catch (Throwable t) {
-                log.warn("Failed to teardown %s: %s", cluster.name().toLowerCase(ENGLISH), formatSql(teardownQuery));
+                log.warn("Failed to teardown %s: %s", bundle.getCluster().name().toLowerCase(ENGLISH), formatSql(teardownQuery));
             }
         }
-    }
-
-    protected QueryStats setupAndRun(QueryBundle control, TargetCluster cluster)
-    {
-        setup(control, cluster);
-        return getPrestoAction().execute(control.getQuery(), getConfiguration(cluster), forMain(cluster), getVerificationContext());
     }
 
     private VerifierQueryEvent buildEvent(
@@ -253,10 +242,10 @@ public abstract class AbstractVerification
             status = resolveMessage.isPresent() ? FAILED_RESOLVED : FAILED;
         }
 
-        controlStats = queryException.isPresent() && queryException.get().getQueryOrigin().equals(forMain(CONTROL)) ?
+        controlStats = queryException.isPresent() && queryException.get().getQueryStage() == CONTROL_MAIN ?
                 queryException.get().getQueryStats() :
                 controlStats;
-        testStats = queryException.isPresent() && queryException.get().getQueryOrigin().equals(forMain(TEST)) ?
+        testStats = queryException.isPresent() && queryException.get().getQueryStage() == TEST_MAIN ?
                 queryException.get().getQueryStats() :
                 testStats;
 
@@ -280,18 +269,18 @@ public abstract class AbstractVerification
                         verificationResult.map(VerificationResult::getControlChecksumQueryId),
                         verificationResult.map(VerificationResult::getControlChecksumQuery),
                         control,
-                        controlStats,
-                        verificationContext.getAllFailures(CONTROL)),
+                        controlStats),
                 buildQueryInfo(
                         sourceQuery.getTestConfiguration(),
                         sourceQuery.getTestQuery(),
                         verificationResult.map(VerificationResult::getTestChecksumQueryId),
                         verificationResult.map(VerificationResult::getTestChecksumQuery),
                         test,
-                        testStats,
-                        verificationContext.getAllFailures(TEST)),
+                        testStats),
                 errorCode,
-                Optional.ofNullable(errorMessage));
+                Optional.ofNullable(errorMessage),
+                queryException.map(QueryException::toQueryFailure),
+                verificationContext.getQueryFailures());
     }
 
     private Optional<String> resolveFailure(QueryStats controlStats, QueryException queryException)
@@ -314,8 +303,7 @@ public abstract class AbstractVerification
             Optional<String> checksumQueryId,
             Optional<String> checksumQuery,
             Optional<QueryBundle> queryBundle,
-            Optional<QueryStats> queryStats,
-            List<FailureInfo> allFailures)
+            Optional<QueryStats> queryStats)
     {
         return new QueryInfo(
                 configuration.getCatalog(),
@@ -328,8 +316,7 @@ public abstract class AbstractVerification
                 queryBundle.map(QueryBundle::getTeardownQueries).map(AbstractVerification::formatSqls),
                 checksumQuery,
                 millisToSeconds(queryStats.map(QueryStats::getCpuTimeMillis)),
-                millisToSeconds(queryStats.map(QueryStats::getWallTimeMillis)),
-                allFailures);
+                millisToSeconds(queryStats.map(QueryStats::getWallTimeMillis)));
     }
 
     protected static String formatSql(Statement statement)
@@ -367,23 +354,23 @@ public abstract class AbstractVerification
         return millis.map(value -> new Duration(value, MILLISECONDS).getValue(SECONDS));
     }
 
-    private static QueryState getQueryState(Optional<QueryStats> statsFromResult, Optional<QueryException> queryException, TargetCluster cluster)
+    private static QueryState getQueryState(Optional<QueryStats> statsFromResult, Optional<QueryException> queryException, ClusterType cluster)
     {
         if (statsFromResult.isPresent()) {
             return QueryState.SUCCEEDED;
         }
-        if (!queryException.isPresent() || queryException.get().getQueryOrigin().getCluster() != cluster) {
+        if (!queryException.isPresent() || queryException.get().getQueryStage().getTargetCluster() != cluster) {
             return QueryState.NOT_RUN;
         }
-        if (queryException.get().getQueryOrigin().getStage() == SETUP) {
+        if (queryException.get().getQueryStage().isSetup()) {
             return QueryState.FAILED_TO_SETUP;
         }
-        if (queryException.get().getQueryOrigin().getStage() == MAIN) {
+        if (queryException.get().getQueryStage().isMain()) {
             return queryException.get().getPrestoErrorCode().map(errorCode -> errorCode == EXCEEDED_TIME_LIMIT).orElse(false) ?
                     QueryState.TIMED_OUT :
                     QueryState.FAILED;
         }
-        if (queryException.get().getQueryOrigin().getStage() == TEARDOWN) {
+        if (queryException.get().getQueryStage().isTeardown()) {
             return QueryState.FAILED_TO_TEARDOWN;
         }
         return QueryState.NOT_RUN;

@@ -105,15 +105,19 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordSet;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.LimitNode;
+import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.TableScanNode;
+import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
@@ -151,7 +155,6 @@ import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
@@ -167,7 +170,6 @@ import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode.DeleteHandle;
-import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
@@ -722,8 +724,8 @@ public class LocalExecutionPlanner
 
             OrderingScheme orderingScheme = node.getOrderingScheme().get();
             ImmutableMap<VariableReferenceExpression, Integer> layout = makeLayout(node);
-            List<Integer> sortChannels = getChannelsForVariables(orderingScheme.getOrderBy(), layout);
-            List<SortOrder> sortOrder = orderingScheme.getOrderingList();
+            List<Integer> sortChannels = getChannelsForVariables(orderingScheme.getOrderByVariables(), layout);
+            List<SortOrder> sortOrder = getOrderingList(orderingScheme);
 
             List<Type> types = getSourceOperatorTypes(node, context.getTypes());
             ImmutableList<Integer> outputChannels = IntStream.range(0, types.size())
@@ -829,7 +831,7 @@ public class LocalExecutionPlanner
                     .map(channel -> source.getTypes().get(channel))
                     .collect(toImmutableList());
 
-            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderBy();
+            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderByVariables();
             List<Integer> sortChannels = getChannelsForVariables(orderByVariables, source.getLayout());
             List<SortOrder> sortOrder = orderByVariables.stream()
                     .map(variable -> node.getOrderingScheme().getOrdering(variable))
@@ -882,8 +884,8 @@ public class LocalExecutionPlanner
 
             if (node.getOrderingScheme().isPresent()) {
                 OrderingScheme orderingScheme = node.getOrderingScheme().get();
-                sortChannels = getChannelsForVariables(orderingScheme.getOrderBy(), source.getLayout());
-                sortOrder = orderingScheme.getOrderingList();
+                sortChannels = getChannelsForVariables(orderingScheme.getOrderByVariables(), source.getLayout());
+                sortOrder = getOrderingList(orderingScheme);
             }
 
             ImmutableList.Builder<Integer> outputChannels = ImmutableList.builder();
@@ -959,7 +961,7 @@ public class LocalExecutionPlanner
         {
             PhysicalOperation source = node.getSource().accept(this, context);
 
-            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderBy();
+            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderByVariables();
 
             List<Integer> sortChannels = new ArrayList<>();
             List<SortOrder> sortOrders = new ArrayList<>();
@@ -984,7 +986,7 @@ public class LocalExecutionPlanner
         {
             PhysicalOperation source = node.getSource().accept(this, context);
 
-            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderBy();
+            List<VariableReferenceExpression> orderByVariables = node.getOrderingScheme().getOrderByVariables();
 
             List<Integer> orderByChannels = getChannelsForVariables(orderByVariables, source.getLayout());
 
@@ -1166,10 +1168,12 @@ public class LocalExecutionPlanner
             // if source is a table scan we fold it directly into the filter and project
             // otherwise we plan it as a normal operator
             Map<VariableReferenceExpression, Integer> sourceLayout;
+            TableHandle table = null;
             List<ColumnHandle> columns = null;
             PhysicalOperation source = null;
             if (sourceNode instanceof TableScanNode) {
                 TableScanNode tableScanNode = (TableScanNode) sourceNode;
+                table = tableScanNode.getTable();
 
                 // extract the column handles and channel to type mapping
                 sourceLayout = new LinkedHashMap<>();
@@ -1222,6 +1226,7 @@ public class LocalExecutionPlanner
                             pageSourceProvider,
                             cursorProcessor,
                             pageProcessor,
+                            table,
                             columns,
                             projections.stream().map(RowExpression::getType).collect(toImmutableList()),
                             getFilterAndProjectMinOutputPageSize(session),
@@ -1271,7 +1276,7 @@ public class LocalExecutionPlanner
                 columns.add(node.getAssignments().get(variable));
             }
 
-            OperatorFactory operatorFactory = new TableScanOperatorFactory(context.getNextOperatorId(), node.getId(), pageSourceProvider, columns);
+            OperatorFactory operatorFactory = new TableScanOperatorFactory(context.getNextOperatorId(), node.getId(), pageSourceProvider, node.getTable(), columns);
             return new PhysicalOperation(operatorFactory, makeLayout(node), context, stageExecutionDescriptor.isScanGroupedExecution(node.getId()) ? GROUPED_EXECUTION : UNGROUPED_EXECUTION);
         }
 
@@ -2381,8 +2386,8 @@ public class LocalExecutionPlanner
 
             OrderingScheme orderingScheme = node.getOrderingScheme().get();
             ImmutableMap<VariableReferenceExpression, Integer> layout = makeLayout(node);
-            List<Integer> sortChannels = getChannelsForVariables(orderingScheme.getOrderBy(), layout);
-            List<SortOrder> orderings = orderingScheme.getOrderingList();
+            List<Integer> sortChannels = getChannelsForVariables(orderingScheme.getOrderByVariables(), layout);
+            List<SortOrder> orderings = getOrderingList(orderingScheme);
             OperatorFactory operatorFactory = new LocalMergeSourceOperatorFactory(
                     context.getNextOperatorId(),
                     node.getId(),
@@ -2526,8 +2531,8 @@ public class LocalExecutionPlanner
             List<VariableReferenceExpression> sortKeys = ImmutableList.of();
             if (aggregation.getOrderBy().isPresent()) {
                 OrderingScheme orderBy = aggregation.getOrderBy().get();
-                sortKeys = orderBy.getOrderBy();
-                sortOrders = orderBy.getOrderingList();
+                sortKeys = orderBy.getOrderByVariables();
+                sortOrders = getOrderingList(orderBy);
             }
 
             return internalAggregationFunction.bind(
@@ -2769,6 +2774,15 @@ public class LocalExecutionPlanner
             checkArgument(source.getLayout().containsKey(input));
             return source.getLayout().get(input);
         };
+    }
+
+    /**
+     *  List of sort orders in the same order as the list of variables returned from `getOrderByVariables()`. This means for
+     *  index i, variable `getOrderByVariables().get(i)` has order `getOrderingList().get(i)`.
+     */
+    private static List<SortOrder> getOrderingList(OrderingScheme orderingScheme)
+    {
+        return orderingScheme.getOrderByVariables().stream().map(orderingScheme.getOrderingsMap()::get).collect(toImmutableList());
     }
 
     /**

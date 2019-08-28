@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DATA;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
@@ -50,6 +51,7 @@ public class LongDirectSelectiveStreamReader
     private final StreamDescriptor streamDescriptor;
     @Nullable
     private final TupleDomainFilter filter;
+    private final boolean nonDeterministicFilter;
     private final boolean nullsAllowed;
 
     private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
@@ -78,13 +80,16 @@ public class LongDirectSelectiveStreamReader
         this.filter = requireNonNull(filter, "filter is null").orElse(null);
         this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
 
-        nullsAllowed = this.filter == null || this.filter.testNull();
+        nonDeterministicFilter = this.filter != null && !this.filter.isDeterministic();
+        nullsAllowed = this.filter == null || nonDeterministicFilter || this.filter.testNull();
     }
 
     @Override
     public int read(int offset, int[] positions, int positionCount)
             throws IOException
     {
+        checkArgument(positionCount > 0, "positionCount must be greater than zero");
+
         if (!rowGroupOpen) {
             openRowGroup();
         }
@@ -94,7 +99,7 @@ public class LongDirectSelectiveStreamReader
         allNulls = false;
 
         if (filter != null) {
-            ensureOutputPositionsCapacity(positionCount);
+            outputPositions = ensureCapacity(outputPositions, positionCount);
         }
         else {
             outputPositions = positions;
@@ -121,7 +126,7 @@ public class LongDirectSelectiveStreamReader
                 }
 
                 if (presentStream != null && !presentStream.nextBit()) {
-                    if (nullsAllowed) {
+                    if ((nonDeterministicFilter && filter.testNull()) || nullsAllowed) {
                         if (outputRequired) {
                             nulls[outputPositionCount] = true;
                         }
@@ -146,7 +151,24 @@ public class LongDirectSelectiveStreamReader
                         outputPositionCount++;
                     }
                 }
+
                 streamPosition++;
+
+                if (filter != null) {
+                    outputPositionCount -= filter.getPrecedingPositionsToFail();
+
+                    int succeedingPositionsToFail = filter.getSucceedingPositionsToFail();
+                    if (succeedingPositionsToFail > 0) {
+                        int positionsToSkip = 0;
+                        for (int j = 0; j < succeedingPositionsToFail; j++) {
+                            i++;
+                            int nextPosition = positions[i];
+                            positionsToSkip += 1 + nextPosition - streamPosition;
+                            streamPosition = nextPosition + 1;
+                        }
+                        skip(positionsToSkip);
+                    }
+                }
             }
         }
 
@@ -160,7 +182,15 @@ public class LongDirectSelectiveStreamReader
     {
         presentStream.skip(positions[positionCount - 1]);
 
-        if (nullsAllowed) {
+        if (nonDeterministicFilter) {
+            outputPositionCount = 0;
+            for (int i = 0; i < positionCount; i++) {
+                if (filter.testNull()) {
+                    outputPositionCount++;
+                }
+            }
+        }
+        else if (nullsAllowed) {
             outputPositionCount = positionCount;
             allNulls = true;
         }

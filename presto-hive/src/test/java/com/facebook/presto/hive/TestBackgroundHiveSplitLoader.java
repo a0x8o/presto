@@ -39,7 +39,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.util.Progressable;
 import org.testng.annotations.Test;
@@ -47,21 +46,19 @@ import org.testng.annotations.Test;
 import java.net.URI;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
 import static com.facebook.presto.hive.BackgroundHiveSplitLoader.BucketSplitInfo.createBucketSplitInfo;
 import static com.facebook.presto.hive.HiveColumnHandle.PATH_COLUMN_NAME;
-import static com.facebook.presto.hive.HiveColumnHandle.pathColumnHandle;
 import static com.facebook.presto.hive.HiveTestUtils.SESSION;
 import static com.facebook.presto.hive.HiveType.HIVE_INT;
 import static com.facebook.presto.hive.HiveType.HIVE_STRING;
 import static com.facebook.presto.hive.HiveUtil.getRegularColumnHandles;
 import static com.facebook.presto.hive.metastore.PrestoTableType.MANAGED_TABLE;
+import static com.facebook.presto.hive.util.HiveFileIterator.NestedDirectoryPolicy;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.facebook.presto.spi.predicate.TupleDomain.withColumnDomains;
-import static com.facebook.presto.spi.relation.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -113,7 +110,7 @@ public class TestBackgroundHiveSplitLoader
                 TEST_FILES,
                 Optional.empty());
 
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, TupleDomain.all(), ImmutableMap.of());
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
 
         assertEquals(drain(hiveSplitSource).size(), 2);
@@ -127,7 +124,7 @@ public class TestBackgroundHiveSplitLoader
                 TEST_FILES,
                 Optional.of(RETURNED_PATH_DOMAIN));
 
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, RETURNED_PATH_TUPLE_DOMAIN, ImmutableMap.of(PATH_COLUMN_NAME, pathColumnHandle()));
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
         List<String> paths = drain(hiveSplitSource);
         assertEquals(paths.size(), 1);
@@ -145,7 +142,7 @@ public class TestBackgroundHiveSplitLoader
                 PARTITIONED_TABLE,
                 Optional.of(new HiveBucketHandle(BUCKET_COLUMN_HANDLES, BUCKET_COUNT, BUCKET_COUNT)));
 
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, RETURNED_PATH_TUPLE_DOMAIN, ImmutableMap.of(PATH_COLUMN_NAME, pathColumnHandle()));
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
         List<String> paths = drain(hiveSplitSource);
         assertEquals(paths.size(), 1);
@@ -167,7 +164,7 @@ public class TestBackgroundHiveSplitLoader
                                 BUCKET_COUNT,
                                 BUCKET_COUNT)));
 
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, RETURNED_PATH_TUPLE_DOMAIN, ImmutableMap.of(PATH_COLUMN_NAME, pathColumnHandle()));
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
         List<String> paths = drain(hiveSplitSource);
         assertEquals(paths.size(), 1);
@@ -182,7 +179,7 @@ public class TestBackgroundHiveSplitLoader
                 ImmutableList.of(locatedFileStatusWithNoBlocks(RETURNED_PATH)),
                 Optional.empty());
 
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, TupleDomain.none(), ImmutableMap.of());
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
 
         List<HiveSplit> splits = drainSplits(hiveSplitSource);
@@ -196,7 +193,7 @@ public class TestBackgroundHiveSplitLoader
             throws Exception
     {
         BackgroundHiveSplitLoader backgroundHiveSplitLoader = backgroundHiveSplitLoaderOfflinePartitions();
-        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader, TupleDomain.all(), ImmutableMap.of());
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
 
         assertThrows(RuntimeException.class, () -> drain(hiveSplitSource));
@@ -316,18 +313,12 @@ public class TestBackgroundHiveSplitLoader
         };
     }
 
-    private static HiveSplitSource hiveSplitSource(
-            BackgroundHiveSplitLoader backgroundHiveSplitLoader,
-            TupleDomain<Subfield> effectivePredicate,
-            Map<String, HiveColumnHandle> predicateColumns)
+    private static HiveSplitSource hiveSplitSource(BackgroundHiveSplitLoader backgroundHiveSplitLoader)
     {
         return HiveSplitSource.allAtOnce(
                 SESSION,
                 SIMPLE_TABLE.getDatabaseName(),
                 SIMPLE_TABLE.getTableName(),
-                effectivePredicate,
-                TRUE_CONSTANT,
-                predicateColumns,
                 1,
                 1,
                 new DataSize(32, MEGABYTE),
@@ -407,24 +398,9 @@ public class TestBackgroundHiveSplitLoader
         }
 
         @Override
-        public RemoteIterator<LocatedFileStatus> list(FileSystem fs, Path path)
+        public Iterator<LocatedFileStatus> list(FileSystem fs, Path path, NamenodeStats namenodeStats, NestedDirectoryPolicy nestedDirectoryPolicy)
         {
-            return new RemoteIterator<LocatedFileStatus>()
-            {
-                private final Iterator<LocatedFileStatus> iterator = files.iterator();
-
-                @Override
-                public boolean hasNext()
-                {
-                    return iterator.hasNext();
-                }
-
-                @Override
-                public LocatedFileStatus next()
-                {
-                    return iterator.next();
-                }
-            };
+            return files.iterator();
         }
     }
 
@@ -434,7 +410,7 @@ public class TestBackgroundHiveSplitLoader
         public TestingHdfsEnvironment()
         {
             super(
-                    new HiveHdfsConfiguration(new HdfsConfigurationUpdater(new HiveClientConfig())),
+                    new HiveHdfsConfiguration(new HdfsConfigurationInitializer(new HiveClientConfig()), ImmutableSet.of()),
                     new HiveClientConfig(),
                     new NoHdfsAuthentication());
         }

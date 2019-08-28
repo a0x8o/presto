@@ -15,9 +15,13 @@ package com.facebook.presto.orc;
 
 import com.facebook.presto.orc.TupleDomainFilter.BigintRange;
 import com.facebook.presto.orc.TupleDomainFilter.BooleanValue;
+import com.facebook.presto.orc.TupleDomainFilter.FloatRange;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.SqlDate;
+import com.facebook.presto.spi.type.SqlTimestamp;
+import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.type.TypeRegistry;
@@ -61,7 +65,9 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
+import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
@@ -156,12 +162,12 @@ public class BenchmarkSelectiveStreamReaders
                 throws IOException
         {
             OrcDataSource dataSource = new FileOrcDataSource(orcFile, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
-            OrcReader orcReader = new OrcReader(dataSource, ORC, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
+            OrcReader orcReader = new OrcReader(dataSource, ORC, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
 
             return orcReader.createSelectiveRecordReader(
                     ImmutableMap.of(0, type),
                     ImmutableList.of(0),
-                    filter.map(f -> ImmutableMap.of(0, f)).orElse(ImmutableMap.of()),
+                    filter.isPresent() ? ImmutableMap.of(0, ImmutableMap.of(new Subfield("c"), filter.get())) : ImmutableMap.of(),
                     ImmutableList.of(),
                     ImmutableMap.of(),
                     ImmutableMap.of(),
@@ -187,7 +193,9 @@ public class BenchmarkSelectiveStreamReaders
                 "bigint",
                 "smallint",
                 "tinyint",
-                "date"
+                "date",
+                "timestamp",
+                "real"
         })
         private String typeSignature;
 
@@ -216,7 +224,9 @@ public class BenchmarkSelectiveStreamReaders
                 "bigint",
                 "smallint",
                 "tinyint",
-                "date"
+                "date",
+                "timestamp",
+                "real"
         })
         private String typeSignature;
 
@@ -246,8 +256,12 @@ public class BenchmarkSelectiveStreamReaders
                 return Optional.of(BooleanValue.of(true, true));
             }
 
-            if (type == TINYINT || type == BIGINT || type == INTEGER || type == SMALLINT || type == DATE) {
+            if (type == TINYINT || type == BIGINT || type == INTEGER || type == SMALLINT || type == DATE || type == TIMESTAMP) {
                 return Optional.of(BigintRange.of(0, Long.MAX_VALUE, true));
+            }
+
+            if (type == REAL) {
+                return Optional.of(FloatRange.of(0, true, true, Integer.MAX_VALUE, true, true, true));
             }
 
             throw new UnsupportedOperationException("Unsupported type: " + type);
@@ -286,6 +300,14 @@ public class BenchmarkSelectiveStreamReaders
 
             if (getType() == DATE) {
                 return new SqlDate(random.nextInt());
+            }
+
+            if (getType() == TIMESTAMP) {
+                return new SqlTimestamp(random.nextLong(), TimeZoneKey.UTC_KEY);
+            }
+
+            if (getType() == REAL) {
+                return random.nextFloat();
             }
 
             throw new UnsupportedOperationException("Unsupported type: " + getType());

@@ -19,6 +19,7 @@ import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.CharType;
@@ -45,6 +46,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
@@ -118,6 +120,8 @@ import static com.facebook.presto.orc.OrcTester.Format.ORC_11;
 import static com.facebook.presto.orc.OrcTester.Format.ORC_12;
 import static com.facebook.presto.orc.OrcWriteValidation.OrcWriteValidationMode.BOTH;
 import static com.facebook.presto.orc.TestingOrcPredicate.createOrcPredicate;
+import static com.facebook.presto.orc.TupleDomainFilter.IS_NOT_NULL;
+import static com.facebook.presto.orc.TupleDomainFilter.IS_NULL;
 import static com.facebook.presto.orc.metadata.CompressionKind.LZ4;
 import static com.facebook.presto.orc.metadata.CompressionKind.NONE;
 import static com.facebook.presto.orc.metadata.CompressionKind.SNAPPY;
@@ -287,6 +291,8 @@ public class OrcTester
     public static OrcTester quickSelectiveOrcTester()
     {
         OrcTester orcTester = new OrcTester();
+        orcTester.listTestsEnabled = true;
+        orcTester.structTestsEnabled = true;
         orcTester.nullTestsEnabled = true;
         orcTester.skipBatchTestsEnabled = true;
         orcTester.formats = ImmutableSet.of(ORC_12, ORC_11, DWRF);
@@ -702,7 +708,17 @@ public class OrcTester
             }
 
             Object value = values.get(column).get(row);
-            if (value == null) {
+            if (filter == IS_NULL) {
+                if (value != null) {
+                    return false;
+                }
+            }
+            else if (filter == IS_NOT_NULL) {
+                if (value == null) {
+                    return false;
+                }
+            }
+            else if (value == null) {
                 if (!filter.testNull()) {
                     return false;
                 }
@@ -724,6 +740,17 @@ public class OrcTester
                         return false;
                     }
                 }
+                else if (type == REAL) {
+                    if (!filter.testFloat(((Number) value).floatValue())) {
+                        return false;
+                    }
+                }
+                else if (type == TIMESTAMP) {
+                    if (!filter.testLong(((SqlTimestamp) value).getMillisUtc())) {
+                        return false;
+                    }
+                }
+
                 else {
                     fail("Unsupported type: " + type);
                 }
@@ -815,7 +842,7 @@ public class OrcTester
             throws IOException
     {
         OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
-        OrcReader orcReader = new OrcReader(orcDataSource, orcEncoding, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
+        OrcReader orcReader = new OrcReader(orcDataSource, orcEncoding, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
 
         assertEquals(orcReader.getColumnNames(), ImmutableList.of("test"));
         assertEquals(orcReader.getFooter().getRowsInRowGroup(), 10_000);
@@ -874,7 +901,7 @@ public class OrcTester
             throws IOException
     {
         OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
-        OrcReader orcReader = new OrcReader(orcDataSource, orcEncoding, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
+        OrcReader orcReader = new OrcReader(orcDataSource, orcEncoding, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
 
         assertEquals(orcReader.getColumnNames(), makeColumnNames(types.size()));
         assertEquals(orcReader.getFooter().getRowsInRowGroup(), 10_000);
@@ -886,7 +913,7 @@ public class OrcTester
         return orcReader.createSelectiveRecordReader(
                 columnTypes,
                 IntStream.range(0, types.size()).boxed().collect(toList()),
-                filters,
+                Maps.transformValues(filters, v -> ImmutableMap.of(new Subfield("c"), v)),
                 ImmutableList.of(),
                 ImmutableMap.of(),
                 ImmutableMap.of(),
@@ -1577,7 +1604,7 @@ public class OrcTester
         return baseTypes.contains(testBaseType);
     }
 
-    private static Type arrayType(Type elementType)
+    public static Type arrayType(Type elementType)
     {
         return TYPE_MANAGER.getParameterizedType(StandardTypes.ARRAY, ImmutableList.of(TypeSignatureParameter.of(elementType.getTypeSignature())));
     }
@@ -1587,7 +1614,7 @@ public class OrcTester
         return TYPE_MANAGER.getParameterizedType(StandardTypes.MAP, ImmutableList.of(TypeSignatureParameter.of(keyType.getTypeSignature()), TypeSignatureParameter.of(valueType.getTypeSignature())));
     }
 
-    private static Type rowType(Type... fieldTypes)
+    public static Type rowType(Type... fieldTypes)
     {
         ImmutableList.Builder<TypeSignatureParameter> typeSignatureParameters = ImmutableList.builder();
         for (int i = 0; i < fieldTypes.length; i++) {

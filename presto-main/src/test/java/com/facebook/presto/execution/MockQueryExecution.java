@@ -122,6 +122,7 @@ public class MockQueryExecution
                         9,
                         10,
                         11,
+                        11,
 
                         12,
                         13,
@@ -262,6 +263,12 @@ public class MockQueryExecution
     public BasicQueryInfo getBasicQueryInfo()
     {
         return new BasicQueryInfo(getQueryInfo());
+    }
+
+    @Override
+    public int getRunningTaskCount()
+    {
+        return getQueryInfo().getQueryStats().getRunningTasks();
     }
 
     @Override

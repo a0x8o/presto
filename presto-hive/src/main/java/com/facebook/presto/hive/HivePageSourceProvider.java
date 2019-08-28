@@ -19,6 +19,7 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
+import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.Subfield;
@@ -54,9 +55,9 @@ import static com.facebook.presto.hive.HiveUtil.getPrefilledColumnValue;
 import static com.facebook.presto.spi.relation.ExpressionOptimizer.Level.MOST_OPTIMIZED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.uniqueIndex;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -93,8 +94,10 @@ public class HivePageSourceProvider
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
+    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, ConnectorTableLayoutHandle layout, List<ColumnHandle> columns)
     {
+        HiveTableLayoutHandle hiveLayout = (HiveTableLayoutHandle) layout;
+
         List<HiveColumnHandle> hiveColumns = columns.stream()
                 .map(HiveColumnHandle.class::cast)
                 .collect(toList());
@@ -105,7 +108,7 @@ public class HivePageSourceProvider
         Configuration configuration = hdfsEnvironment.getConfiguration(new HdfsContext(session, hiveSplit.getDatabase(), hiveSplit.getTable()), path);
 
         if (isPushdownFilterEnabled(session)) {
-            return createSelectivePageSource(selectivePageSourceFactories, configuration, session, hiveSplit, hiveColumns, hiveStorageTimeZone, rowExpressionService);
+            return createSelectivePageSource(selectivePageSourceFactories, configuration, session, hiveSplit, hiveLayout, hiveColumns, hiveStorageTimeZone, rowExpressionService);
         }
 
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
@@ -119,9 +122,9 @@ public class HivePageSourceProvider
                 hiveSplit.getLength(),
                 hiveSplit.getFileSize(),
                 hiveSplit.getSchema(),
-                hiveSplit.getDomainPredicate()
+                hiveLayout.getDomainPredicate()
                         .transform(Subfield::getRootName)
-                        .transform(hiveSplit.getPredicateColumns()::get),
+                        .transform(hiveLayout.getPredicateColumns()::get),
                 hiveColumns,
                 hiveSplit.getPartitionKeys(),
                 hiveStorageTimeZone,
@@ -140,18 +143,21 @@ public class HivePageSourceProvider
             Configuration configuration,
             ConnectorSession session,
             HiveSplit split,
+            HiveTableLayoutHandle layout,
             List<HiveColumnHandle> columns,
             DateTimeZone hiveStorageTimeZone,
             RowExpressionService rowExpressionService)
     {
         Set<HiveColumnHandle> interimColumns = ImmutableSet.<HiveColumnHandle>builder()
-                .addAll(split.getPredicateColumns().values())
+                .addAll(layout.getPredicateColumns().values())
                 .addAll(split.getBucketConversion().map(BucketConversion::getBucketColumnHandles).orElse(ImmutableList.of()))
                 .build();
 
+        Set<String> columnNames = columns.stream().map(HiveColumnHandle::getName).collect(toImmutableSet());
+
         List<HiveColumnHandle> allColumns = ImmutableList.<HiveColumnHandle>builder()
                 .addAll(columns)
-                .addAll(interimColumns.stream().filter(not(columns::contains)).collect(toImmutableList()))
+                .addAll(interimColumns.stream().filter(column -> !columnNames.contains(column.getName())).collect(toImmutableList()))
                 .build();
 
         Path path = new Path(split.getPath());
@@ -174,7 +180,7 @@ public class HivePageSourceProvider
                 .map(HiveColumnHandle::getHiveColumnIndex)
                 .collect(toImmutableList());
 
-        RowExpression optimizedRemainingPredicate = rowExpressionService.getExpressionOptimizer().optimize(split.getRemainingPredicate(), MOST_OPTIMIZED, session);
+        RowExpression optimizedRemainingPredicate = rowExpressionService.getExpressionOptimizer().optimize(layout.getRemainingPredicate(), MOST_OPTIMIZED, session);
 
         for (HiveSelectivePageSourceFactory pageSourceFactory : selectivePageSourceFactories) {
             Optional<? extends ConnectorPageSource> pageSource = pageSourceFactory.createPageSource(
@@ -188,7 +194,7 @@ public class HivePageSourceProvider
                     toColumnHandles(columnMappings, true),
                     prefilledValues,
                     outputColumns,
-                    split.getDomainPredicate(),
+                    layout.getDomainPredicate(),
                     optimizedRemainingPredicate,
                     hiveStorageTimeZone);
             if (pageSource.isPresent()) {

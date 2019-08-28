@@ -38,8 +38,9 @@ import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collection;
+import java.util.Optional;
 import java.util.Properties;
-import java.util.Set;
 
 import static com.facebook.presto.plugin.jdbc.DriverConnectionFactory.basicConnectionProperties;
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
@@ -88,16 +89,15 @@ public class MySqlClient
     }
 
     @Override
-    public Set<String> getSchemaNames(JdbcIdentity identity)
+    protected Collection<String> listSchemas(Connection connection)
     {
         // for MySQL, we need to list catalogs instead of schemas
-        try (Connection connection = connectionFactory.openConnection(identity);
-                ResultSet resultSet = connection.getMetaData().getCatalogs()) {
+        try (ResultSet resultSet = connection.getMetaData().getCatalogs()) {
             ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
             while (resultSet.next()) {
-                String schemaName = resultSet.getString("TABLE_CAT").toLowerCase(ENGLISH);
+                String schemaName = resultSet.getString("TABLE_CAT");
                 // skip internal schemas
-                if (!schemaName.equals("information_schema") && !schemaName.equals("mysql")) {
+                if (!schemaName.equalsIgnoreCase("information_schema") && !schemaName.equalsIgnoreCase("mysql")) {
                     schemaNames.add(schemaName);
                 }
             }
@@ -129,27 +129,25 @@ public class MySqlClient
     }
 
     @Override
-    protected ResultSet getTables(Connection connection, String schemaName, String tableName)
+    protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
             throws SQLException
     {
         // MySQL maps their "database" to SQL catalogs and does not have schemas
         DatabaseMetaData metadata = connection.getMetaData();
-        String escape = metadata.getSearchStringEscape();
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
         return metadata.getTables(
-                schemaName,
+                schemaName.orElse(null),
                 null,
-                escapeNamePattern(tableName, escape),
+                escapeNamePattern(tableName, escape).orElse(null),
                 new String[] {"TABLE", "VIEW"});
     }
 
     @Override
-    protected SchemaTableName getSchemaTableName(ResultSet resultSet)
+    protected String getTableSchemaName(ResultSet resultSet)
             throws SQLException
     {
         // MySQL uses catalogs instead of schemas
-        return new SchemaTableName(
-                resultSet.getString("TABLE_CAT").toLowerCase(ENGLISH),
-                resultSet.getString("TABLE_NAME").toLowerCase(ENGLISH));
+        return resultSet.getString("TABLE_CAT");
     }
 
     @Override

@@ -41,6 +41,7 @@ import com.facebook.presto.hive.rcfile.RcFilePageSource;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorPageSink;
@@ -64,6 +65,7 @@ import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.Subfield;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.ViewNotFoundException;
 import com.facebook.presto.spi.block.Block;
@@ -764,7 +766,7 @@ public abstract class AbstractTestHiveClient
         setupHive(connectorId.toString(), databaseName, hiveClientConfig.getTimeZone());
 
         metastoreClient = hiveMetastore;
-        HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationUpdater(hiveClientConfig));
+        HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationInitializer(hiveClientConfig), ImmutableSet.of());
         hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hiveClientConfig, new NoHdfsAuthentication());
         locationService = new HiveLocationService(hdfsEnvironment);
         metadataFactory = new HiveMetadataFactory(
@@ -1350,7 +1352,8 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
-            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, Constraint.alwaysTrue());
+            List<ColumnHandle> allColumnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, allColumnHandles, Constraint.alwaysTrue());
 
             assertFalse(tableStatistics.getRowCount().isUnknown(), "row count is unknown");
 
@@ -1645,16 +1648,16 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
+            ConnectorTableHandle hiveTableHandle = getTableHandle(metadata, tableName);
 
             // read entire table
             List<ColumnHandle> columnHandles = ImmutableList.<ColumnHandle>builder()
-                    .addAll(metadata.getColumnHandles(session, tableHandle).values())
+                    .addAll(metadata.getColumnHandles(session, hiveTableHandle).values())
                     .build();
 
             List<ConnectorTableLayoutResult> tableLayoutResults = transaction.getMetadata().getTableLayouts(
                     session,
-                    tableHandle,
+                    hiveTableHandle,
                     new Constraint<>(TupleDomain.all()),
                     Optional.empty());
 
@@ -1672,12 +1675,14 @@ public abstract class AbstractTestHiveClient
                     Optional.of(new HiveBucketHandle(bucketHandle.getColumns(), bucketHandle.getTableBucketCount(), 2)),
                     layoutHandle.getBucketFilter());
 
-            List<ConnectorSplit> splits = getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), session, modifiedReadBucketCountLayoutHandle, SPLIT_SCHEDULING_CONTEXT));
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, modifiedReadBucketCountLayoutHandle);
             assertEquals(splits.size(), 16);
+
+            TableHandle tableHandle = toTableHandle(transaction, hiveTableHandle, modifiedReadBucketCountLayoutHandle);
 
             ImmutableList.Builder<MaterializedRow> allRows = ImmutableList.builder();
             for (ConnectorSplit split : splits) {
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, tableHandle.getLayout().get(), columnHandles)) {
                     MaterializedResult intermediateResult = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
                     allRows.addAll(intermediateResult.getMaterializedRows());
                 }
@@ -1847,13 +1852,15 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle tableHandle = getTableHandle(metadata, tablePartitionFormat);
-            ConnectorTableMetadata tableMetadata = metadata.getTableMetadata(session, tableHandle);
-            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+            ConnectorTableHandle hiveTableHandle = getTableHandle(metadata, tablePartitionFormat);
+            ConnectorTableMetadata tableMetadata = metadata.getTableMetadata(session, hiveTableHandle);
+            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, hiveTableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(transaction, tableHandle, TupleDomain.all());
+            ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, hiveTableHandle, TupleDomain.all());
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
             assertEquals(splits.size(), partitionCount);
+
             for (ConnectorSplit split : splits) {
                 HiveSplit hiveSplit = (HiveSplit) split;
 
@@ -1865,7 +1872,7 @@ public abstract class AbstractTestHiveClient
 
                 long rowNumber = 0;
                 long completedBytes = 0;
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, layoutHandle, columnHandles)) {
                     MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
 
                     assertPageSourceType(pageSource, fileType);
@@ -1938,12 +1945,14 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle tableHandle = getTableHandle(metadata, tablePartitionFormat);
-            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+            ConnectorTableHandle hiveTableHandle = getTableHandle(metadata, tablePartitionFormat);
+            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, hiveTableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(transaction, tableHandle, TupleDomain.all());
+            ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, hiveTableHandle, TupleDomain.all());
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
             assertEquals(splits.size(), partitionCount);
+
             for (ConnectorSplit split : splits) {
                 HiveSplit hiveSplit = (HiveSplit) split;
 
@@ -1954,7 +1963,7 @@ public abstract class AbstractTestHiveClient
                 int dummyPartition = Integer.parseInt(partitionKeys.get(2).getValue());
 
                 long rowNumber = 0;
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, layoutHandle, columnHandles)) {
                     assertPageSourceType(pageSource, fileType);
                     MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
                     for (MaterializedRow row : result) {
@@ -1979,11 +1988,12 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle tableHandle = getTableHandle(metadata, tableUnpartitioned);
-            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+            ConnectorTableHandle hiveTableHandle = getTableHandle(metadata, tableUnpartitioned);
+            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, hiveTableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(transaction, tableHandle, TupleDomain.all());
+            ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, hiveTableHandle, TupleDomain.all());
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
             assertEquals(splits.size(), 1);
 
             for (ConnectorSplit split : splits) {
@@ -1992,7 +2002,7 @@ public abstract class AbstractTestHiveClient
                 assertEquals(hiveSplit.getPartitionKeys(), ImmutableList.of());
 
                 long rowNumber = 0;
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, layoutHandle, columnHandles)) {
                     assertPageSourceType(pageSource, TEXTFILE);
                     MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
 
@@ -2060,7 +2070,7 @@ public abstract class AbstractTestHiveClient
             ConnectorSplit split = getOnlyElement(getAllSplits(splitSource));
 
             ImmutableList<ColumnHandle> columnHandles = ImmutableList.of(column);
-            try (ConnectorPageSource ignored = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+            try (ConnectorPageSource ignored = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, layoutHandle, columnHandles)) {
                 fail("expected exception");
             }
             catch (PrestoException e) {
@@ -2486,15 +2496,18 @@ public abstract class AbstractTestHiveClient
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle tableHandle = getTableHandle(metadata, table);
-            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+            ConnectorTableHandle hiveTableHandle = getTableHandle(metadata, table);
+            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, hiveTableHandle).values());
 
-            List<ConnectorSplit> splits = getAllSplits(transaction, tableHandle, TupleDomain.all());
+            ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, hiveTableHandle, TupleDomain.all());
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
             assertThat(splits).hasSize(bucketCount);
+
+            TableHandle tableHandle = toTableHandle(transaction, hiveTableHandle, layoutHandle);
 
             int actualRowCount = 0;
             for (ConnectorSplit split : splits) {
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, layoutHandle, columnHandles)) {
                     String lastValueAsc = null;
                     long lastValueDesc = -1;
 
@@ -2531,6 +2544,15 @@ public abstract class AbstractTestHiveClient
             }
             assertThat(actualRowCount).isEqualTo(expectedRowCount);
         }
+    }
+
+    private TableHandle toTableHandle(Transaction transaction, ConnectorTableHandle connectorTableHandle, ConnectorTableLayoutHandle connectorLayoutHandle)
+    {
+        return new TableHandle(
+                new ConnectorId(clientId),
+                connectorTableHandle,
+                transaction.getTransactionHandle(),
+                Optional.of(connectorLayoutHandle));
     }
 
     @Test
@@ -3228,8 +3250,9 @@ public abstract class AbstractTestHiveClient
                 ConnectorMetadata metadata = transaction.getMetadata();
 
                 ConnectorTableHandle tableHandle = metadata.getTableHandle(session, tableName);
-                TableStatistics unsampledStatistics = metadata.getTableStatistics(sampleSize(2), tableHandle, Constraint.alwaysTrue());
-                TableStatistics sampledStatistics = metadata.getTableStatistics(sampleSize(1), tableHandle, Constraint.alwaysTrue());
+                List<ColumnHandle> allColumnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
+                TableStatistics unsampledStatistics = metadata.getTableStatistics(sampleSize(2), tableHandle, allColumnHandles, Constraint.alwaysTrue());
+                TableStatistics sampledStatistics = metadata.getTableStatistics(sampleSize(1), tableHandle, allColumnHandles, Constraint.alwaysTrue());
                 assertEquals(sampledStatistics, unsampledStatistics);
             }
         }
@@ -4126,20 +4149,18 @@ public abstract class AbstractTestHiveClient
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, new SchemaTableName(database, tableName));
             ConnectorTableMetadata tableMetadata = metadata.getTableMetadata(session, tableHandle);
-            HiveSplit hiveSplit = getHiveSplit(transaction, tableHandle);
+
+            ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, tableHandle, TupleDomain.all());
+            List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
+            assertEquals(splits.size(), 1);
+
+            HiveSplit hiveSplit = (HiveSplit) getOnlyElement(splits);
 
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
 
-            ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, columnHandles);
+            ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, hiveSplit, layoutHandle, columnHandles);
             assertGetRecords(hiveStorageFormat, tableMetadata, hiveSplit, pageSource, columnHandles);
         }
-    }
-
-    protected HiveSplit getHiveSplit(Transaction transaction, ConnectorTableHandle tableHandle)
-    {
-        List<ConnectorSplit> splits = getAllSplits(transaction, tableHandle, TupleDomain.all());
-        assertEquals(splits.size(), 1);
-        return (HiveSplit) getOnlyElement(splits);
     }
 
     protected void assertGetRecords(
@@ -4394,7 +4415,7 @@ public abstract class AbstractTestHiveClient
 
     private MaterializedResult readTable(
             Transaction transaction,
-            ConnectorTableHandle tableHandle,
+            ConnectorTableHandle hiveTableHandle,
             List<ColumnHandle> columnHandles,
             ConnectorSession session,
             TupleDomain<ColumnHandle> tupleDomain,
@@ -4404,18 +4425,20 @@ public abstract class AbstractTestHiveClient
     {
         List<ConnectorTableLayoutResult> tableLayoutResults = transaction.getMetadata().getTableLayouts(
                 session,
-                tableHandle,
+                hiveTableHandle,
                 new Constraint<>(tupleDomain),
                 Optional.empty());
         ConnectorTableLayoutHandle layoutHandle = getOnlyElement(tableLayoutResults).getTableLayout().getHandle();
-        List<ConnectorSplit> splits = getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), session, layoutHandle, SPLIT_SCHEDULING_CONTEXT));
+        List<ConnectorSplit> splits = getAllSplits(session, transaction, layoutHandle);
         if (expectedSplitCount.isPresent()) {
             assertEquals(splits.size(), expectedSplitCount.getAsInt());
         }
 
+        TableHandle tableHandle = toTableHandle(transaction, hiveTableHandle, layoutHandle);
+
         ImmutableList.Builder<MaterializedRow> allRows = ImmutableList.builder();
         for (ConnectorSplit split : splits) {
-            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, tableHandle.getLayout().get(), columnHandles)) {
                 expectedStorageFormat.ifPresent(format -> assertPageSourceType(pageSource, format));
                 MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
                 allRows.addAll(result.getMaterializedRows());
@@ -4446,10 +4469,20 @@ public abstract class AbstractTestHiveClient
     private List<ConnectorSplit> getAllSplits(Transaction transaction, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> tupleDomain)
     {
         ConnectorSession session = newSession();
+        ConnectorTableLayoutHandle layoutHandle = getLayout(session, transaction, tableHandle, tupleDomain);
+        return getAllSplits(session, transaction, layoutHandle);
+    }
+
+    private List<ConnectorSplit> getAllSplits(ConnectorSession session, Transaction transaction, ConnectorTableLayoutHandle layoutHandle)
+    {
+        return getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), session, layoutHandle, SPLIT_SCHEDULING_CONTEXT));
+    }
+
+    private static ConnectorTableLayoutHandle getLayout(ConnectorSession session, Transaction transaction, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> tupleDomain)
+    {
         ConnectorMetadata metadata = transaction.getMetadata();
         List<ConnectorTableLayoutResult> tableLayoutResults = metadata.getTableLayouts(session, tableHandle, new Constraint<>(tupleDomain), Optional.empty());
-        ConnectorTableLayoutHandle layoutHandle = getOnlyElement(tableLayoutResults).getTableLayout().getHandle();
-        return getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), session, layoutHandle, SPLIT_SCHEDULING_CONTEXT));
+        return getOnlyElement(tableLayoutResults).getTableLayout().getHandle();
     }
 
     protected static List<ConnectorSplit> getAllSplits(ConnectorSplitSource splitSource)

@@ -19,6 +19,7 @@ import com.facebook.presto.raptor.RaptorColumnHandle;
 import com.facebook.presto.raptor.backup.BackupManager;
 import com.facebook.presto.raptor.backup.BackupStore;
 import com.facebook.presto.raptor.backup.FileBackupStore;
+import com.facebook.presto.raptor.filesystem.RaptorLocalFileSystem;
 import com.facebook.presto.raptor.metadata.ColumnStats;
 import com.facebook.presto.raptor.metadata.ShardDelta;
 import com.facebook.presto.raptor.metadata.ShardInfo;
@@ -45,6 +46,8 @@ import com.google.common.collect.Iterables;
 import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.joda.time.DateTime;
 import org.joda.time.Days;
 import org.joda.time.chrono.ISOChronology;
@@ -53,7 +56,6 @@ import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.IDBI;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
@@ -72,12 +74,11 @@ import java.util.stream.IntStream;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.orc.metadata.CompressionKind.SNAPPY;
+import static com.facebook.presto.raptor.filesystem.FileSystemUtil.xxhash64;
 import static com.facebook.presto.raptor.metadata.SchemaDaoUtil.createTablesWithRetry;
 import static com.facebook.presto.raptor.metadata.TestDatabaseShardManager.createShardManager;
-import static com.facebook.presto.raptor.storage.OrcStorageManager.xxhash64;
 import static com.facebook.presto.raptor.storage.OrcTestingUtil.createReader;
 import static com.facebook.presto.raptor.storage.OrcTestingUtil.octets;
-import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.DISABLED;
 import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.ENABLED_AND_VALIDATED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -139,18 +140,12 @@ public class TestOrcStorageManager
     private Optional<BackupStore> backupStore;
     private InMemoryShardRecorder shardRecorder;
 
-    @DataProvider(name = "useOptimizedOrcWriter")
-    public static Object[][] useOptimizedOrcWriter()
-    {
-        return new Object[][] {{true}, {false}};
-    }
-
     @BeforeMethod
     public void setup()
     {
         temporary = createTempDir();
         File directory = new File(temporary, "data");
-        storageService = new FileStorageService(directory);
+        storageService = new FileStorageService(new LocalOrcDataEnvironment(), directory);
         storageService.start();
 
         File backupDirectory = new File(temporary, "backup");
@@ -164,7 +159,7 @@ public class TestOrcStorageManager
 
         ShardManager shardManager = createShardManager(dbi);
         Duration discoveryInterval = new Duration(5, TimeUnit.MINUTES);
-        recoveryManager = new ShardRecoveryManager(storageService, backupStore, nodeManager, shardManager, discoveryInterval, 10);
+        recoveryManager = new ShardRecoveryManager(storageService, backupStore, new LocalOrcDataEnvironment(), nodeManager, shardManager, discoveryInterval, 10);
 
         shardRecorder = new InMemoryShardRecorder();
     }
@@ -179,11 +174,11 @@ public class TestOrcStorageManager
         deleteRecursively(temporary.toPath(), ALLOW_INSECURE);
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testWriter(boolean useOptimizedOrcWriter)
+    @Test
+    public void testWriter()
             throws Exception
     {
-        OrcStorageManager manager = createOrcStorageManager(useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager();
 
         List<Long> columnIds = ImmutableList.of(3L, 7L);
         List<Type> columnTypes = ImmutableList.of(BIGINT, createVarcharType(10));
@@ -210,7 +205,7 @@ public class TestOrcStorageManager
         ShardInfo shardInfo = Iterables.getOnlyElement(shards);
 
         UUID shardUuid = shardInfo.getShardUuid();
-        File file = storageService.getStorageFile(shardUuid);
+        File file = new File(storageService.getStorageFile(shardUuid).toString());
         File backupFile = fileBackupStore.getBackupFile(shardUuid);
 
         assertEquals(recordedShards.get(0).getTransactionId(), TRANSACTION_ID);
@@ -218,7 +213,7 @@ public class TestOrcStorageManager
 
         assertEquals(shardInfo.getRowCount(), 2);
         assertEquals(shardInfo.getCompressedSize(), file.length());
-        assertEquals(shardInfo.getXxhash64(), xxhash64(file));
+        assertEquals(shardInfo.getXxhash64(), xxhash64(new RaptorLocalFileSystem(new Configuration()), new Path(file.toURI())));
 
         // verify primary and backup shard exist
         assertFile(file, "primary shard");
@@ -252,11 +247,11 @@ public class TestOrcStorageManager
         }
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testReader(boolean useOptimizedOrcWriter)
+    @Test
+    public void testReader()
             throws Exception
     {
-        OrcStorageManager manager = createOrcStorageManager(useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager();
 
         List<Long> columnIds = ImmutableList.of(2L, 4L, 6L, 7L, 8L, 9L);
         List<Type> columnTypes = ImmutableList.of(BIGINT, createVarcharType(10), VARBINARY, DATE, BOOLEAN, DOUBLE);
@@ -326,11 +321,11 @@ public class TestOrcStorageManager
         }
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testRewriter(boolean useOptimizedOrcWriter)
+    @Test
+    public void testRewriter()
             throws Exception
     {
-        OrcStorageManager manager = createOrcStorageManager(useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager();
 
         long transactionId = TRANSACTION_ID;
         List<Long> columnIds = ImmutableList.of(3L, 7L);
@@ -365,7 +360,7 @@ public class TestOrcStorageManager
         assertEquals(shardInfo.getRowCount(), 1);
 
         // check that storage file is same as backup file
-        File storageFile = storageService.getStorageFile(shardInfo.getShardUuid());
+        File storageFile = new File(storageService.getStorageFile(shardInfo.getShardUuid()).toString());
         File backupFile = fileBackupStore.getBackupFile(shardInfo.getShardUuid());
         assertFileEquals(storageFile, backupFile);
 
@@ -376,8 +371,7 @@ public class TestOrcStorageManager
         assertEquals(recordedShards.get(1).getShardUuid(), shardInfo.getShardUuid());
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testWriterRollback(boolean useOptimizedOrcWriter)
+    public void testWriterRollback()
     {
         // verify staging directory is empty
         File staging = new File(new File(temporary, "data"), "staging");
@@ -385,7 +379,7 @@ public class TestOrcStorageManager
         assertEquals(staging.list(), new String[] {});
 
         // create a shard in staging
-        OrcStorageManager manager = createOrcStorageManager(useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager();
 
         List<Long> columnIds = ImmutableList.of(3L, 7L);
         List<Type> columnTypes = ImmutableList.of(BIGINT, createVarcharType(10));
@@ -530,10 +524,10 @@ public class TestOrcStorageManager
         assertColumnStats(columnStats, 1, minTime, maxTime);
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testMaxShardRows(boolean useOptimizedOrcWriter)
+    @Test
+    public void testMaxShardRows()
     {
-        OrcStorageManager manager = createOrcStorageManager(2, new DataSize(2, MEGABYTE), useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager(2, new DataSize(2, MEGABYTE));
 
         List<Long> columnIds = ImmutableList.of(3L, 7L);
         List<Type> columnTypes = ImmutableList.of(BIGINT, createVarcharType(10));
@@ -547,8 +541,8 @@ public class TestOrcStorageManager
         assertTrue(sink.isFull());
     }
 
-    @Test(dataProvider = "useOptimizedOrcWriter")
-    public void testMaxFileSize(boolean useOptimizedOrcWriter)
+    @Test
+    public void testMaxFileSize()
     {
         List<Long> columnIds = ImmutableList.of(3L, 7L);
         List<Type> columnTypes = ImmutableList.of(BIGINT, createVarcharType(5));
@@ -559,7 +553,7 @@ public class TestOrcStorageManager
                 .build();
 
         // Set maxFileSize to 1 byte, so adding any page makes the StoragePageSink full
-        OrcStorageManager manager = createOrcStorageManager(20, new DataSize(1, BYTE), useOptimizedOrcWriter);
+        OrcStorageManager manager = createOrcStorageManager(20, new DataSize(1, BYTE));
         StoragePageSink sink = createStoragePageSink(manager, columnIds, columnTypes);
         sink.appendPages(pages);
         assertTrue(sink.isFull());
@@ -581,25 +575,25 @@ public class TestOrcStorageManager
         return manager.createStoragePageSink(transactionId, OptionalInt.empty(), columnIds, columnTypes, false);
     }
 
-    private OrcStorageManager createOrcStorageManager(boolean useOptimizedWriter)
+    private OrcStorageManager createOrcStorageManager()
     {
-        return createOrcStorageManager(MAX_SHARD_ROWS, MAX_FILE_SIZE, useOptimizedWriter);
+        return createOrcStorageManager(MAX_SHARD_ROWS, MAX_FILE_SIZE);
     }
 
-    private OrcStorageManager createOrcStorageManager(int maxShardRows, DataSize maxFileSize, boolean useOptimizedWriter)
+    private OrcStorageManager createOrcStorageManager(int maxShardRows, DataSize maxFileSize)
     {
-        return createOrcStorageManager(storageService, backupStore, recoveryManager, shardRecorder, maxShardRows, maxFileSize, useOptimizedWriter);
+        return createOrcStorageManager(storageService, backupStore, recoveryManager, shardRecorder, maxShardRows, maxFileSize);
     }
 
-    public static OrcStorageManager createOrcStorageManager(IDBI dbi, File temporary, boolean useOptimizedWriter)
+    public static OrcStorageManager createOrcStorageManager(IDBI dbi, File temporary)
     {
-        return createOrcStorageManager(dbi, temporary, MAX_SHARD_ROWS, useOptimizedWriter);
+        return createOrcStorageManager(dbi, temporary, MAX_SHARD_ROWS);
     }
 
-    public static OrcStorageManager createOrcStorageManager(IDBI dbi, File temporary, int maxShardRows, boolean useOptimizedWriter)
+    public static OrcStorageManager createOrcStorageManager(IDBI dbi, File temporary, int maxShardRows)
     {
         File directory = new File(temporary, "data");
-        StorageService storageService = new FileStorageService(directory);
+        StorageService storageService = new FileStorageService(new LocalOrcDataEnvironment(), directory);
         storageService.start();
 
         File backupDirectory = new File(temporary, "backup");
@@ -611,6 +605,7 @@ public class TestOrcStorageManager
         ShardRecoveryManager recoveryManager = new ShardRecoveryManager(
                 storageService,
                 backupStore,
+                new LocalOrcDataEnvironment(),
                 new TestingNodeManager(),
                 shardManager,
                 MISSING_SHARD_DISCOVERY,
@@ -621,8 +616,7 @@ public class TestOrcStorageManager
                 recoveryManager,
                 new InMemoryShardRecorder(),
                 maxShardRows,
-                MAX_FILE_SIZE,
-                useOptimizedWriter);
+                MAX_FILE_SIZE);
     }
 
     public static OrcStorageManager createOrcStorageManager(
@@ -631,18 +625,18 @@ public class TestOrcStorageManager
             ShardRecoveryManager recoveryManager,
             ShardRecorder shardRecorder,
             int maxShardRows,
-            DataSize maxFileSize,
-            boolean useOptimizedWriter)
+            DataSize maxFileSize)
     {
         return new OrcStorageManager(
                 CURRENT_NODE,
                 storageService,
                 backupStore,
                 READER_ATTRIBUTES,
-                new BackupManager(backupStore, storageService, 1),
+                new BackupManager(backupStore, storageService, new LocalOrcDataEnvironment(), 1),
                 recoveryManager,
                 shardRecorder,
                 new TypeRegistry(),
+                new LocalOrcDataEnvironment(),
                 CONNECTOR_ID,
                 DELETION_THREADS,
                 SHARD_RECOVERY_TIMEOUT,
@@ -650,7 +644,7 @@ public class TestOrcStorageManager
                 maxFileSize,
                 new DataSize(0, BYTE),
                 SNAPPY,
-                useOptimizedWriter ? ENABLED_AND_VALIDATED : DISABLED);
+                ENABLED_AND_VALIDATED);
     }
 
     private static void assertFileEquals(File actual, File expected)
@@ -704,7 +698,7 @@ public class TestOrcStorageManager
 
     private List<ColumnStats> columnStats(boolean useOptimizedWriter, List<Long> columnIds, List<Type> columnTypes, Object[]... rows)
     {
-        OrcStorageManager manager = createOrcStorageManager(useOptimizedWriter);
+        OrcStorageManager manager = createOrcStorageManager();
         StoragePageSink sink = createStoragePageSink(manager, columnIds, columnTypes);
         sink.appendPages(rowPagesBuilder(columnTypes).rows(rows).build());
         List<ShardInfo> shards = getFutureValue(sink.commit());

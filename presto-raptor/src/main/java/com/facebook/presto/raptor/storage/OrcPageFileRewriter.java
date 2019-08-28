@@ -13,12 +13,10 @@
  */
 package com.facebook.presto.raptor.storage;
 
-import com.facebook.presto.orc.FileOrcDataSource;
 import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.orc.OrcWriter;
 import com.facebook.presto.orc.OrcWriterStats;
-import com.facebook.presto.orc.OutputStreamOrcDataSink;
 import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.raptor.util.Closer;
 import com.facebook.presto.spi.Page;
@@ -32,9 +30,8 @@ import com.google.common.collect.ImmutableMap;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.BitSet;
@@ -71,31 +68,33 @@ public final class OrcPageFileRewriter
     private final OrcWriterStats stats;
     private final TypeManager typeManager;
     private final CompressionKind compression;
+    private final OrcDataEnvironment orcDataEnvironment;
 
     OrcPageFileRewriter(
             ReaderAttributes readerAttributes,
             boolean validate,
             OrcWriterStats stats,
             TypeManager typeManager,
+            OrcDataEnvironment orcDataEnvironment,
             CompressionKind compression)
     {
         this.readerAttributes = requireNonNull(readerAttributes, "readerAttributes is null");
         this.validate = validate;
         this.stats = requireNonNull(stats, "stats is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.orcDataEnvironment = requireNonNull(orcDataEnvironment, "orcDataEnvironment is null");
         this.compression = requireNonNull(compression, "compression is null");
     }
 
     @Override
-    public OrcFileInfo rewrite(Map<String, Type> allColumnTypes, File input, File output, BitSet rowsToDelete)
+    public OrcFileInfo rewrite(Map<String, Type> allColumnTypes, Path input, Path output, BitSet rowsToDelete)
             throws IOException
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(FileSystem.class.getClassLoader())) {
             OrcReader reader = new OrcReader(
-                    new FileOrcDataSource(input, readerAttributes.getMaxMergeDistance(), readerAttributes.getMaxReadSize(), readerAttributes.getStreamBufferSize(), readerAttributes.isLazyReadSmallRanges()),
+                    orcDataEnvironment.createOrcDataSource(input, readerAttributes),
                     ORC,
                     readerAttributes.getMaxMergeDistance(),
-                    readerAttributes.getMaxReadSize(),
                     readerAttributes.getTinyStripeThreshold(),
                     HUGE_MAX_READ_BLOCK_SIZE);
 
@@ -158,7 +157,7 @@ public final class OrcPageFileRewriter
             }
             try (Closer<OrcBatchRecordReader, IOException> recordReader = closer(reader.createBatchRecordReader(readerColumns, TRUE, DEFAULT_STORAGE_TIMEZONE, newSimpleAggregatedMemoryContext(), INITIAL_BATCH_SIZE), OrcBatchRecordReader::close);
                     Closer<OrcWriter, IOException> writer = closer(new OrcWriter(
-                            new OutputStreamOrcDataSink(new FileOutputStream(output)),
+                            orcDataEnvironment.createOrcDataSink(output),
                             writerColumnIds,
                             writerStorageTypes,
                             ORC,

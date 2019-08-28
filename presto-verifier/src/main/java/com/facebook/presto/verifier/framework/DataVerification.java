@@ -20,7 +20,6 @@ import com.facebook.presto.verifier.checksum.ChecksumResult;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.checksum.ColumnMatchResult;
 import com.facebook.presto.verifier.framework.MatchResult.MatchType;
-import com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster;
 import com.facebook.presto.verifier.resolver.FailureResolver;
 import com.google.common.collect.ImmutableMap;
 
@@ -29,14 +28,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 
+import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.COLUMN_MISMATCH;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.MATCH;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.ROW_COUNT_MISMATCH;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.SCHEMA_MISMATCH;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.TEST;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forChecksum;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forDescribe;
+import static com.facebook.presto.verifier.framework.QueryStage.CHECKSUM;
+import static com.facebook.presto.verifier.framework.QueryStage.DESCRIBE;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
@@ -51,20 +49,21 @@ public class DataVerification
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
             List<FailureResolver> failureResolvers,
-            VerifierConfig config,
+            VerificationContext verificationContext,
+            VerifierConfig verifierConfig,
             ChecksumValidator checksumValidator)
     {
-        super(verificationResubmitter, prestoAction, sourceQuery, queryRewriter, failureResolvers, config);
+        super(verificationResubmitter, prestoAction, sourceQuery, queryRewriter, failureResolvers, verificationContext, verifierConfig);
         this.checksumValidator = requireNonNull(checksumValidator, "checksumValidator is null");
     }
 
     @Override
     public VerificationResult verify(QueryBundle control, QueryBundle test)
     {
-        List<Column> controlColumns = getColumns(control.getTableName(), CONTROL);
-        List<Column> testColumns = getColumns(test.getTableName(), TEST);
-        ChecksumQueryAndResult controlChecksum = computeChecksum(control, controlColumns, CONTROL);
-        ChecksumQueryAndResult testChecksum = computeChecksum(test, testColumns, TEST);
+        List<Column> controlColumns = getColumns(control.getTableName());
+        List<Column> testColumns = getColumns(test.getTableName());
+        ChecksumQueryAndResult controlChecksum = computeChecksum(control, controlColumns);
+        ChecksumQueryAndResult testChecksum = computeChecksum(test, testColumns);
         return new VerificationResult(
                 controlChecksum.getQueryId(),
                 testChecksum.getQueryId(),
@@ -80,20 +79,20 @@ public class DataVerification
     @Override
     protected Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksum)
     {
-        List<Column> columns = getColumns(control.getTableName(), CONTROL);
+        List<Column> columns = getColumns(control.getTableName());
 
         QueryBundle secondRun = null;
         QueryBundle thirdRun = null;
         try {
-            secondRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
-            setupAndRun(secondRun, CONTROL);
-            if (!match(columns, columns, firstChecksum, computeChecksum(secondRun, columns, CONTROL).getResult()).isMatched()) {
+            secondRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL);
+            setupAndRun(secondRun, true);
+            if (!match(columns, columns, firstChecksum, computeChecksum(secondRun, columns).getResult()).isMatched()) {
                 return Optional.of(false);
             }
 
-            thirdRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL, getConfiguration(CONTROL), getVerificationContext());
-            setupAndRun(thirdRun, CONTROL);
-            if (!match(columns, columns, firstChecksum, computeChecksum(thirdRun, columns, CONTROL).getResult()).isMatched()) {
+            thirdRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL);
+            setupAndRun(thirdRun, true);
+            if (!match(columns, columns, firstChecksum, computeChecksum(thirdRun, columns).getResult()).isMatched()) {
                 return Optional.of(false);
             }
 
@@ -103,12 +102,8 @@ public class DataVerification
             return Optional.empty();
         }
         finally {
-            if (secondRun != null) {
-                teardownSafely(secondRun, CONTROL);
-            }
-            if (thirdRun != null) {
-                teardownSafely(thirdRun, CONTROL);
-            }
+            teardownSafely(secondRun);
+            teardownSafely(thirdRun);
         }
     }
 
@@ -148,26 +143,19 @@ public class DataVerification
                 mismatchedColumns);
     }
 
-    private List<Column> getColumns(QualifiedName tableName, TargetCluster cluster)
+    private List<Column> getColumns(QualifiedName tableName)
     {
         return getPrestoAction()
-                .execute(
-                        new ShowColumns(tableName),
-                        getConfiguration(cluster),
-                        forDescribe(),
-                        getVerificationContext(),
-                        Column::fromResultSet)
+                .execute(new ShowColumns(tableName), DESCRIBE, Column::fromResultSet)
                 .getResults();
     }
 
-    private ChecksumQueryAndResult computeChecksum(QueryBundle bundle, List<Column> columns, TargetCluster cluster)
+    private ChecksumQueryAndResult computeChecksum(QueryBundle bundle, List<Column> columns)
     {
         Query checksumQuery = checksumValidator.generateChecksumQuery(bundle.getTableName(), columns);
         QueryResult<ChecksumResult> queryResult = getPrestoAction().execute(
                 checksumQuery,
-                getConfiguration(cluster),
-                forChecksum(),
-                getVerificationContext(),
+                CHECKSUM,
                 ChecksumResult::fromResultSet);
         return new ChecksumQueryAndResult(
                 queryResult.getQueryStats().getQueryId(),

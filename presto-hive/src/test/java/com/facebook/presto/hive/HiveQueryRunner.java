@@ -27,6 +27,7 @@ import com.facebook.presto.tests.DistributedQueryRunner;
 import com.facebook.presto.tpch.TpchPlugin;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
 import io.airlift.log.Logging;
 import io.airlift.tpch.TpchTable;
@@ -107,7 +108,7 @@ public final class HiveQueryRunner
             File baseDir = queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data").toFile();
 
             HiveClientConfig hiveClientConfig = new HiveClientConfig();
-            HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationUpdater(hiveClientConfig));
+            HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationInitializer(hiveClientConfig), ImmutableSet.of());
             HdfsEnvironment hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hiveClientConfig, new NoHdfsAuthentication());
 
             FileHiveMetastore metastore = new FileHiveMetastore(hdfsEnvironment, baseDir.toURI().toString(), "test");
@@ -197,7 +198,8 @@ public final class HiveQueryRunner
                         "hive",
                         Optional.empty(),
                         role.map(selectedRole -> ImmutableMap.of(HIVE_CATALOG, selectedRole))
-                                .orElse(ImmutableMap.of())))
+                                .orElse(ImmutableMap.of()),
+                        ImmutableMap.of()))
                 .setCatalog(HIVE_CATALOG)
                 .setSchema(TPCH_SCHEMA)
                 .build();
@@ -210,7 +212,8 @@ public final class HiveQueryRunner
                         "hive",
                         Optional.empty(),
                         role.map(selectedRole -> ImmutableMap.of(HIVE_BUCKETED_CATALOG, selectedRole))
-                                .orElse(ImmutableMap.of())))
+                                .orElse(ImmutableMap.of()),
+                        ImmutableMap.of()))
                 .setCatalog(HIVE_BUCKETED_CATALOG)
                 .setSchema(TPCH_BUCKETED_SCHEMA)
                 .build();
@@ -223,7 +226,8 @@ public final class HiveQueryRunner
                         "hive",
                         Optional.empty(),
                         role.map(selectedRole -> ImmutableMap.of("hive", selectedRole))
-                                .orElse(ImmutableMap.of())))
+                                .orElse(ImmutableMap.of()),
+                        ImmutableMap.of()))
                 .setSystemProperty(PARTITIONING_PROVIDER_CATALOG, HIVE_CATALOG)
                 .setSystemProperty(EXCHANGE_MATERIALIZATION_STRATEGY, ExchangeMaterializationStrategy.ALL.toString())
                 .setSystemProperty(HASH_PARTITION_COUNT, "13")

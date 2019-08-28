@@ -34,10 +34,12 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DATA;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.SizeOf.sizeOf;
@@ -141,7 +143,7 @@ public class ByteSelectiveStreamReader
         }
 
         if (filter != null) {
-            ensureOutputPositionsCapacity(positionCount);
+            outputPositions = ensureCapacity(outputPositions, positionCount);
         }
         else {
             outputPositions = positions;
@@ -268,21 +270,10 @@ public class ByteSelectiveStreamReader
 
     private void ensureValuesCapacity(int capacity, boolean recordNulls)
     {
-        if (values == null || values.length < capacity) {
-            values = new byte[capacity];
-        }
+        values = ensureCapacity(values, capacity);
 
         if (recordNulls) {
-            if (nulls == null || nulls.length < capacity) {
-                nulls = new boolean[capacity];
-            }
-        }
-    }
-
-    private void ensureOutputPositionsCapacity(int capacity)
-    {
-        if (outputPositions == null || outputPositions.length < capacity) {
-            outputPositions = new int[capacity];
+            nulls = ensureCapacity(nulls, capacity);
         }
     }
 
@@ -363,6 +354,11 @@ public class ByteSelectiveStreamReader
         return newLease(new ByteArrayBlock(positionCount, Optional.ofNullable(includeNulls ? nulls : null), values));
     }
 
+    @Override
+    public void throwAnyError(int[] positions, int positionCount)
+    {
+    }
+
     private BlockLease newLease(Block block)
     {
         valuesInUse = true;
@@ -394,6 +390,14 @@ public class ByteSelectiveStreamReader
         }
 
         outputPositionCount = positionCount;
+    }
+
+    @Override
+    public String toString()
+    {
+        return toStringHelper(this)
+                .addValue(streamDescriptor)
+                .toString();
     }
 
     @Override

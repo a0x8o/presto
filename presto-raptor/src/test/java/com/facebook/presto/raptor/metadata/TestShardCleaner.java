@@ -16,12 +16,14 @@ package com.facebook.presto.raptor.metadata;
 import com.facebook.presto.raptor.backup.BackupStore;
 import com.facebook.presto.raptor.backup.FileBackupStore;
 import com.facebook.presto.raptor.storage.FileStorageService;
+import com.facebook.presto.raptor.storage.LocalOrcDataEnvironment;
 import com.facebook.presto.raptor.storage.StorageService;
 import com.facebook.presto.raptor.util.DaoSupplier;
 import com.facebook.presto.raptor.util.UuidUtil.UuidArgumentFactory;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.testing.TestingTicker;
 import io.airlift.units.Duration;
+import org.apache.hadoop.fs.Path;
 import org.intellij.lang.annotations.Language;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
@@ -77,7 +79,7 @@ public class TestShardCleaner
 
         temporary = createTempDir();
         File directory = new File(temporary, "data");
-        storageService = new FileStorageService(directory);
+        storageService = new FileStorageService(new LocalOrcDataEnvironment(), directory);
         storageService.start();
 
         File backupDirectory = new File(temporary, "backup");
@@ -94,6 +96,7 @@ public class TestShardCleaner
                 ticker,
                 storageService,
                 Optional.of(backupStore),
+                new LocalOrcDataEnvironment(),
                 config.getMaxTransactionAge(),
                 config.getTransactionCleanerInterval(),
                 config.getLocalCleanerInterval(),
@@ -387,14 +390,14 @@ public class TestShardCleaner
 
     private boolean shardFileExists(UUID uuid)
     {
-        return storageService.getStorageFile(uuid).exists();
+        return new File(storageService.getStorageFile(uuid).toString()).exists();
     }
 
     private void createShardFile(UUID uuid)
             throws IOException
     {
-        File file = storageService.getStorageFile(uuid);
-        storageService.createParents(file);
+        File file = new File(storageService.getStorageFile(uuid).toString());
+        storageService.createParents(new Path(file.toURI()));
         assertTrue(file.createNewFile());
     }
 

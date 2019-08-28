@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 
 import java.util.Optional;
 
+import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
@@ -77,6 +78,11 @@ abstract class AbstractLongSelectiveStreamReader
     public int[] getReadPositions()
     {
         return outputPositions;
+    }
+
+    @Override
+    public void throwAnyError(int[] positions, int positionCount)
+    {
     }
 
     protected BlockLease buildOutputBlockView(int[] positions, int positionCount, boolean includeNulls)
@@ -275,21 +281,10 @@ abstract class AbstractLongSelectiveStreamReader
 
     protected void ensureValuesCapacity(int capacity, boolean recordNulls)
     {
-        if (values == null || values.length < capacity) {
-            values = new long[capacity];
-        }
+        values = ensureCapacity(values, capacity);
 
         if (recordNulls) {
-            if (nulls == null || nulls.length < capacity) {
-                nulls = new boolean[capacity];
-            }
-        }
-    }
-
-    protected void ensureOutputPositionsCapacity(int capacity)
-    {
-        if (outputPositions == null || outputPositions.length < capacity) {
-            outputPositions = new int[capacity];
+            nulls = ensureCapacity(nulls, capacity);
         }
     }
 

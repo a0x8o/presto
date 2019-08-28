@@ -16,7 +16,9 @@ package com.facebook.presto.orc;
 import com.facebook.presto.orc.TupleDomainFilter.BigintRange;
 import com.facebook.presto.orc.TupleDomainFilter.BigintValues;
 import com.facebook.presto.orc.TupleDomainFilter.BooleanValue;
+import com.facebook.presto.orc.TupleDomainFilter.FloatRange;
 import com.facebook.presto.spi.type.SqlDate;
+import com.facebook.presto.spi.type.SqlTimestamp;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ContiguousSet;
 import com.google.common.collect.DiscreteDomain;
@@ -36,14 +38,22 @@ import java.util.Random;
 import java.util.stream.IntStream;
 
 import static com.facebook.presto.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
+import static com.facebook.presto.orc.OrcTester.arrayType;
 import static com.facebook.presto.orc.OrcTester.quickSelectiveOrcTester;
+import static com.facebook.presto.orc.OrcTester.rowType;
+import static com.facebook.presto.orc.TupleDomainFilter.IS_NOT_NULL;
 import static com.facebook.presto.orc.TupleDomainFilter.IS_NULL;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
+import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
+import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
+import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Iterables.cycle;
 import static com.google.common.collect.Iterables.limit;
@@ -204,6 +214,78 @@ public class TestSelectiveOrcReader
         testRoundTripNumeric(concat(ImmutableList.of(1), nCopies(9999, 123), ImmutableList.of(2), nCopies(9999, 123)), BigintRange.of(123, 123, true));
     }
 
+    @Test
+    public void testFloats()
+            throws Exception
+    {
+        List<Map<Integer, TupleDomainFilter>> filters = ImmutableList.of(
+                ImmutableMap.of(0, FloatRange.of(0.0f, false, true, 100.0f, false, true, true)),
+                ImmutableMap.of(0, FloatRange.of(-100.0f, false, true, 0.0f, false, true, false)),
+                ImmutableMap.of(0, IS_NULL));
+
+        tester.testRoundTrip(REAL, ImmutableList.copyOf(repeatEach(10, ImmutableList.of(-100.0f, 0.0f, 100.0f))), filters);
+        tester.testRoundTrip(REAL, ImmutableList.copyOf(repeatEach(10, ImmutableList.of(1000.0f, -1.23f, Float.POSITIVE_INFINITY))));
+
+        List<Float> floatValues = ImmutableList.of(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f);
+        tester.testRoundTripTypes(
+                ImmutableList.of(REAL, REAL),
+                ImmutableList.of(
+                        ImmutableList.copyOf(limit(repeatEach(4, cycle(floatValues)), 100)),
+                        ImmutableList.copyOf(limit(repeatEach(4, cycle(floatValues)), 100))),
+                ImmutableList.of(
+                        ImmutableMap.of(
+                                0, FloatRange.of(1.0f, false, true, 7.0f, false, true, true),
+                                1, FloatRange.of(3.0f, false, true, 9.0f, false, true, false)),
+                        ImmutableMap.of(
+                                1, FloatRange.of(1.0f, false, true, 7.0f, false, true, true))));
+    }
+
+    @Test
+    public void testArrays()
+            throws Exception
+    {
+        Random random = new Random(0);
+
+        tester.testRoundTripTypes(ImmutableList.of(INTEGER, arrayType(INTEGER)),
+                ImmutableList.of(
+                        IntStream.range(0, 30_000).boxed().map(i -> random.nextInt()).collect(toImmutableList()),
+                        IntStream.range(0, 30_000).boxed().map(i -> IntStream.range(0, random.nextInt(10)).map(j -> j + i).boxed().collect(toImmutableList())).collect(toImmutableList())),
+                ImmutableList.of(
+                        ImmutableMap.of(0, BigintRange.of(0, Integer.MAX_VALUE, false)),
+                        ImmutableMap.of(1, IS_NULL),
+                        ImmutableMap.of(1, IS_NOT_NULL)));
+
+        tester.testRoundTripTypes(ImmutableList.of(arrayType(INTEGER), INTEGER),
+                ImmutableList.of(
+                        IntStream.range(0, 30_000).boxed().map(i -> i % 7 == 0 ? null : IntStream.range(0, random.nextInt(10)).map(j -> j + i).boxed().collect(toImmutableList())).collect(toList()),
+                        IntStream.range(0, 30_000).boxed().map(i -> i % 11 == 0 ? null : random.nextInt()).collect(toList())),
+                ImmutableList.of(
+                        ImmutableMap.of(0, IS_NOT_NULL, 1, IS_NULL)));
+    }
+
+    @Test
+    public void testStructs()
+            throws Exception
+    {
+        Random random = new Random(0);
+
+        tester.testRoundTripTypes(ImmutableList.of(INTEGER, rowType(INTEGER, BOOLEAN)),
+                ImmutableList.of(
+                        IntStream.range(0, 30_000).boxed().map(i -> random.nextInt()).collect(toImmutableList()),
+                        IntStream.range(0, 30_000).boxed().map(i -> ImmutableList.of(random.nextInt(), random.nextBoolean())).collect(toImmutableList())),
+                ImmutableList.of(
+                        ImmutableMap.of(0, BigintRange.of(0, Integer.MAX_VALUE, false)),
+                        ImmutableMap.of(1, IS_NULL),
+                        ImmutableMap.of(1, IS_NOT_NULL)));
+
+        tester.testRoundTripTypes(ImmutableList.of(rowType(INTEGER, BOOLEAN), INTEGER),
+                ImmutableList.of(
+                        IntStream.range(0, 30_000).boxed().map(i -> i % 7 == 0 ? null : ImmutableList.of(random.nextInt(), random.nextBoolean())).collect(toList()),
+                        IntStream.range(0, 30_000).boxed().map(i -> i % 11 == 0 ? null : random.nextInt()).collect(toList())),
+                ImmutableList.of(
+                        ImmutableMap.of(0, IS_NOT_NULL, 1, IS_NULL)));
+    }
+
     private void testRoundTripNumeric(Iterable<? extends Number> values, TupleDomainFilter filter)
             throws Exception
     {
@@ -224,6 +306,10 @@ public class TestSelectiveOrcReader
                 .map(SqlDate::new)
                 .collect(toList());
 
+        List<SqlTimestamp> timestamps = longValues.stream()
+                .map(timestamp -> sqlTimestampOf(timestamp, SESSION))
+                .collect(toList());
+
         tester.testRoundTrip(BIGINT, longValues, ImmutableList.of(ImmutableMap.of(0, filter)));
 
         tester.testRoundTrip(INTEGER, intValues, ImmutableList.of(ImmutableMap.of(0, filter)));
@@ -232,18 +318,24 @@ public class TestSelectiveOrcReader
 
         tester.testRoundTrip(DATE, dateValues, ImmutableList.of(ImmutableMap.of(0, filter)));
 
+        tester.testRoundTrip(TIMESTAMP, timestamps, ImmutableList.of(ImmutableMap.of(0, filter)));
+
         List<Integer> reversedIntValues = new ArrayList<>(intValues);
         Collections.reverse(reversedIntValues);
 
         List<SqlDate> reversedDateValues = new ArrayList<>(dateValues);
         Collections.reverse(reversedDateValues);
 
-        tester.testRoundTripTypes(ImmutableList.of(BIGINT, INTEGER, SMALLINT, DATE),
+        List<SqlTimestamp> reversedTimestampValues = new ArrayList<>(timestamps);
+        Collections.reverse(reversedTimestampValues);
+
+        tester.testRoundTripTypes(ImmutableList.of(BIGINT, INTEGER, SMALLINT, DATE, TIMESTAMP),
                 ImmutableList.of(
                         longValues,
                         reversedIntValues,
                         shortValues,
-                        reversedDateValues),
+                        reversedDateValues,
+                        reversedTimestampValues),
                 ImmutableList.of(
                         ImmutableMap.of(0, filter),
                         ImmutableMap.of(1, filter),

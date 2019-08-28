@@ -101,12 +101,12 @@ public class TestRaptorConnector
         NodeManager nodeManager = new TestingNodeManager();
         NodeSupplier nodeSupplier = nodeManager::getWorkerNodes;
         ShardManager shardManager = createShardManager(dbi);
-        StorageManager storageManager = createOrcStorageManager(dbi, dataDir, true);
+        StorageManager storageManager = createOrcStorageManager(dbi, dataDir);
         StorageManagerConfig config = new StorageManagerConfig();
         connector = new RaptorConnector(
                 new LifeCycleManager(ImmutableList.of(), null),
                 new TestingNodeManager(),
-                new RaptorMetadataFactory(connectorId, dbi, shardManager),
+                new RaptorMetadataFactory(connectorId, dbi, shardManager, new TypeRegistry()),
                 new RaptorSplitManager(connectorId, nodeSupplier, shardManager, false),
                 new RaptorPageSourceProvider(storageManager),
                 new RaptorPageSinkProvider(storageManager,
@@ -118,7 +118,8 @@ public class TestRaptorConnector
                 new RaptorTableProperties(typeRegistry),
                 ImmutableSet.of(),
                 new AllowAllAccessControl(),
-                dbi);
+                dbi,
+                ImmutableSet.of());
     }
 
     @AfterMethod(alwaysRun = true)

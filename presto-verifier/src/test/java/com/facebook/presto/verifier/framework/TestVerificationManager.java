@@ -25,7 +25,6 @@ import com.facebook.presto.verifier.checksum.SimpleColumnValidator;
 import com.facebook.presto.verifier.resolver.ExceededGlobalMemoryLimitFailureResolver;
 import com.facebook.presto.verifier.resolver.ExceededTimeLimitFailureResolver;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.Test;
 
@@ -52,31 +51,25 @@ public class TestVerificationManager
         }
 
         @Override
-        public QueryStats execute(
-                Statement statement,
-                QueryConfiguration configuration,
-                QueryOrigin queryOrigin,
-                VerificationContext context)
+        public QueryStats execute(Statement statement, QueryStage queryStage)
         {
-            throw QueryException.forPresto(new RuntimeException(), Optional.of(errorCode), false, Optional.empty(), queryOrigin);
+            throw QueryException.forPresto(new RuntimeException(), Optional.of(errorCode), false, Optional.empty(), queryStage);
         }
 
         @Override
         public <R> QueryResult<R> execute(
                 Statement statement,
-                QueryConfiguration configuration,
-                QueryOrigin queryOrigin,
-                VerificationContext context,
+                QueryStage queryStage,
                 ResultSetConverter<R> converter)
         {
-            throw QueryException.forPresto(new RuntimeException(), Optional.of(errorCode), false, Optional.empty(), queryOrigin);
+            throw QueryException.forPresto(new RuntimeException(), Optional.of(errorCode), false, Optional.empty(), queryStage);
         }
     }
 
     private static final String SUITE = "test-suite";
     private static final String NAME = "test-query";
     private static final SqlParser SQL_PARSER = new SqlParser(new SqlParserOptions().allowIdentifierSymbol(AT_SIGN, COLON));
-    private static final QueryConfiguration QUERY_CONFIGURATION = new QueryConfiguration("test", "di", "user", Optional.empty(), ImmutableMap.of());
+    private static final QueryConfiguration QUERY_CONFIGURATION = new QueryConfiguration("test", "di", Optional.of("user"), Optional.empty(), Optional.empty());
     private static final SourceQuery SOURCE_QUERY = new SourceQuery(
             SUITE,
             NAME,
@@ -113,20 +106,22 @@ public class TestVerificationManager
         assertEquals(manager.getQueriesSubmitted().get(), 1);
     }
 
-    private static VerificationManager getVerificationManager(List<SourceQuery> sourceQueries, PrestoAction prestoAction, VerifierConfig config)
+    private static VerificationManager getVerificationManager(List<SourceQuery> sourceQueries, PrestoAction prestoAction, VerifierConfig verifierConfig)
     {
         return new VerificationManager(
                 () -> sourceQueries,
                 new VerificationFactory(
                         SQL_PARSER,
-                        prestoAction,
-                        new QueryRewriter(SQL_PARSER, prestoAction, ImmutableList.of(), config),
-                        new ChecksumValidator(new SimpleColumnValidator(), new FloatingPointColumnValidator(config), new OrderableArrayColumnValidator()),
+                        (controlConfiguration, testConfiguration, verificationContext) -> prestoAction,
+                        presto -> new QueryRewriter(SQL_PARSER, presto, ImmutableList.of(), verifierConfig),
+                        new ChecksumValidator(new SimpleColumnValidator(), new FloatingPointColumnValidator(verifierConfig), new OrderableArrayColumnValidator()),
                         ImmutableList.of(new ExceededGlobalMemoryLimitFailureResolver(), new ExceededTimeLimitFailureResolver()),
-                        config),
+                        verifierConfig),
                 SQL_PARSER,
                 ImmutableSet.of(),
                 ImmutableList.of(),
-                config);
+                new QueryConfigurationOverridesConfig(),
+                new QueryConfigurationOverridesConfig(),
+                verifierConfig);
     }
 }

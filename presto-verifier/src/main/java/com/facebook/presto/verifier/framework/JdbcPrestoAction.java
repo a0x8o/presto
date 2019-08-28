@@ -17,7 +17,6 @@ import com.facebook.presto.jdbc.PrestoConnection;
 import com.facebook.presto.jdbc.PrestoStatement;
 import com.facebook.presto.jdbc.QueryStats;
 import com.facebook.presto.sql.tree.Statement;
-import com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster;
 import com.facebook.presto.verifier.retry.ForClusterConnection;
 import com.facebook.presto.verifier.retry.ForPresto;
 import com.facebook.presto.verifier.retry.RetryConfig;
@@ -25,8 +24,6 @@ import com.facebook.presto.verifier.retry.RetryDriver;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.Duration;
-
-import javax.inject.Inject;
 
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -38,12 +35,11 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 import static com.facebook.presto.sql.SqlFormatter.formatSql;
+import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
+import static com.facebook.presto.verifier.framework.ClusterType.TEST;
 import static com.facebook.presto.verifier.framework.QueryException.Type.CLUSTER_CONNECTION;
 import static com.facebook.presto.verifier.framework.QueryException.Type.PRESTO;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.TEST;
 import static com.google.common.base.Preconditions.checkState;
-import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class JdbcPrestoAction
@@ -52,8 +48,10 @@ public class JdbcPrestoAction
     private static final String QUERY_MAX_EXECUTION_TIME = "query_max_execution_time";
 
     private final SqlExceptionClassifier exceptionClassifier;
+    private final Map<ClusterType, QueryConfiguration> configurations;
+    private final VerificationContext context;
 
-    private final Map<TargetCluster, String> clusterUrls;
+    private final Map<ClusterType, String> clusterUrls;
     private final Duration controlTimeout;
     private final Duration testTimeout;
     private final Duration metadataTimeout;
@@ -62,14 +60,21 @@ public class JdbcPrestoAction
     private final RetryDriver networkRetry;
     private final RetryDriver prestoRetry;
 
-    @Inject
     public JdbcPrestoAction(
             SqlExceptionClassifier exceptionClassifier,
+            QueryConfiguration controlConfiguration,
+            QueryConfiguration testConfiguration,
+            VerificationContext context,
             VerifierConfig config,
             @ForClusterConnection RetryConfig networkRetryConfig,
             @ForPresto RetryConfig prestoRetryConfig)
     {
         this.exceptionClassifier = requireNonNull(exceptionClassifier, "exceptionClassifier is null");
+        this.configurations = ImmutableMap.of(
+                CONTROL, controlConfiguration,
+                TEST, testConfiguration);
+        this.context = requireNonNull(context, "context is null");
+
         this.clusterUrls = ImmutableMap.of(
                 CONTROL, config.getControlJdbcUrl(),
                 TEST, config.getTestJdbcUrl());
@@ -83,32 +88,18 @@ public class JdbcPrestoAction
     }
 
     @Override
-    public QueryStats execute(
-            Statement statement,
-            QueryConfiguration configuration,
-            QueryOrigin queryOrigin,
-            VerificationContext context)
+    public QueryStats execute(Statement statement, QueryStage queryStage)
     {
-        return execute(statement, configuration, queryOrigin, context, Optional.empty()).getQueryStats();
+        return execute(statement, queryStage, Optional.empty()).getQueryStats();
     }
 
     @Override
-    public <R> QueryResult<R> execute(
-            Statement statement,
-            QueryConfiguration configuration,
-            QueryOrigin queryOrigin,
-            VerificationContext context,
-            ResultSetConverter<R> converter)
+    public <R> QueryResult<R> execute(Statement statement, QueryStage queryStage, ResultSetConverter<R> converter)
     {
-        return execute(statement, configuration, queryOrigin, context, Optional.of(converter));
+        return execute(statement, queryStage, Optional.of(converter));
     }
 
-    private <R> QueryResult<R> execute(
-            Statement statement,
-            QueryConfiguration configuration,
-            QueryOrigin queryOrigin,
-            VerificationContext context,
-            Optional<ResultSetConverter<R>> converter)
+    private <R> QueryResult<R> execute(Statement statement, QueryStage queryStage, Optional<ResultSetConverter<R>> converter)
     {
         return prestoRetry.run(
                 "presto",
@@ -116,19 +107,15 @@ public class JdbcPrestoAction
                 () -> networkRetry.run(
                         "presto-cluster-connection",
                         context,
-                        () -> executeOnce(statement, configuration, queryOrigin, converter)));
+                        () -> executeOnce(statement, queryStage, converter)));
     }
 
-    private <R> QueryResult<R> executeOnce(
-            Statement statement,
-            QueryConfiguration configuration,
-            QueryOrigin queryOrigin,
-            Optional<ResultSetConverter<R>> converter)
+    private <R> QueryResult<R> executeOnce(Statement statement, QueryStage queryStage, Optional<ResultSetConverter<R>> converter)
     {
         String query = formatSql(statement, Optional.empty());
         ProgressMonitor progressMonitor = new ProgressMonitor();
 
-        try (PrestoConnection connection = getConnection(configuration, queryOrigin)) {
+        try (PrestoConnection connection = getConnection(queryStage)) {
             try (java.sql.Statement jdbcStatement = connection.createStatement()) {
                 PrestoStatement prestoStatement = jdbcStatement.unwrap(PrestoStatement.class);
                 prestoStatement.setProgressMonitor(progressMonitor);
@@ -164,7 +151,7 @@ public class JdbcPrestoAction
             }
         }
         catch (SQLException e) {
-            throw exceptionClassifier.createException(queryOrigin, progressMonitor.getLastQueryStats(), e);
+            throw exceptionClassifier.createException(queryStage, progressMonitor.getLastQueryStats(), e);
         }
     }
 
@@ -176,14 +163,13 @@ public class JdbcPrestoAction
         }
     }
 
-    private PrestoConnection getConnection(
-            QueryConfiguration configuration,
-            QueryOrigin queryOrigin)
+    private PrestoConnection getConnection(QueryStage queryStage)
             throws SQLException
     {
+        QueryConfiguration configuration = configurations.get(queryStage.getTargetCluster());
         PrestoConnection connection = DriverManager.getConnection(
-                clusterUrls.get(queryOrigin.getCluster()),
-                configuration.getUsername(),
+                clusterUrls.get(queryStage.getTargetCluster()),
+                configuration.getUsername().orElse(null),
                 configuration.getPassword().orElse(null))
                 .unwrap(PrestoConnection.class);
 
@@ -198,7 +184,7 @@ public class JdbcPrestoAction
 
         Map<String, String> sessionProperties = ImmutableMap.<String, String>builder()
                 .putAll(configuration.getSessionProperties())
-                .put(QUERY_MAX_EXECUTION_TIME, getTimeout(queryOrigin).toString())
+                .put(QUERY_MAX_EXECUTION_TIME, getTimeout(queryStage).toString())
                 .build();
         for (Entry<String, String> entry : sessionProperties.entrySet()) {
             connection.setSessionProperty(entry.getKey(), entry.getValue());
@@ -206,23 +192,19 @@ public class JdbcPrestoAction
         return connection;
     }
 
-    private Duration getTimeout(QueryOrigin queryOrigin)
+    private Duration getTimeout(QueryStage queryStage)
     {
-        TargetCluster cluster = queryOrigin.getCluster();
-        checkState(cluster == CONTROL || cluster == TEST, "Invalid TargetCluster: %s", cluster);
+        ClusterType cluster = queryStage.getTargetCluster();
+        checkState(cluster == CONTROL || cluster == TEST, "Invalid cluster: %s", cluster);
 
-        switch (queryOrigin.getStage()) {
-            case SETUP:
-            case MAIN:
-            case TEARDOWN:
-                return cluster == CONTROL ? controlTimeout : testTimeout;
+        switch (queryStage) {
             case REWRITE:
             case DESCRIBE:
                 return metadataTimeout;
             case CHECKSUM:
                 return checksumTimeout;
             default:
-                throw new IllegalArgumentException(format("Invalid QueryStage: %s", queryOrigin.getStage()));
+                return cluster == CONTROL ? controlTimeout : testTimeout;
         }
     }
 

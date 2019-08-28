@@ -229,7 +229,7 @@ public class SqlQueryExecution
                 }
             });
 
-            this.remoteTaskFactory = new MemoryTrackingRemoteTaskFactory(requireNonNull(remoteTaskFactory, "remoteTaskFactory is null"), stateMachine);
+            this.remoteTaskFactory = new TrackingRemoteTaskFactory(requireNonNull(remoteTaskFactory, "remoteTaskFactory is null"), stateMachine);
         }
     }
 
@@ -323,6 +323,12 @@ public class SqlQueryExecution
         return stateMachine.getFinalQueryInfo()
                 .map(BasicQueryInfo::new)
                 .orElseGet(() -> stateMachine.getBasicQueryInfo(Optional.ofNullable(queryScheduler.get()).map(SqlQueryScheduler::getBasicStageStats)));
+    }
+
+    @Override
+    public int getRunningTaskCount()
+    {
+        return stateMachine.getCurrentRunningTaskCount();
     }
 
     @Override

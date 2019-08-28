@@ -62,7 +62,11 @@ public class TestRaptorIntegrationSmokeTest
     @SuppressWarnings("unused")
     public TestRaptorIntegrationSmokeTest()
     {
-        this(() -> createRaptorQueryRunner(ImmutableMap.of(), true, false, ImmutableMap.of("storage.orc.optimized-writer-stage", "DISABLED")));
+        this(() -> createRaptorQueryRunner(
+                ImmutableMap.of(),
+                true,
+                false,
+                ImmutableMap.of("storage.orc.optimized-writer-stage", "ENABLED_AND_VALIDATED")));
     }
 
     protected TestRaptorIntegrationSmokeTest(QueryRunnerSupplier supplier)
@@ -76,6 +80,13 @@ public class TestRaptorIntegrationSmokeTest
         assertUpdate("CREATE TABLE array_test AS SELECT ARRAY [1, 2, 3] AS c", 1);
         assertQuery("SELECT cardinality(c) FROM array_test", "SELECT 3");
         assertUpdate("DROP TABLE array_test");
+    }
+
+    @Test
+    public void testCreateTableUnsupportedType()
+    {
+        assertQueryFails("CREATE TABLE rowtype_test AS SELECT row(1) AS c", "Type not supported: row\\(integer\\)");
+        assertQueryFails("CREATE TABLE rowtype_test(row_type_field row(s varchar))", "Type not supported: row\\(s varchar\\)");
     }
 
     @Test
@@ -839,6 +850,14 @@ public class TestRaptorIntegrationSmokeTest
     }
 
     @Test
+    public void testAlterTableUnsupportedType()
+    {
+        assertUpdate("CREATE TABLE test_alter_table_unsupported_type (c1 bigint, c2 bigint)");
+        assertQueryFails("ALTER TABLE test_alter_table_unsupported_type ADD COLUMN c3 row(bigint)", "Type not supported: row\\(bigint\\)");
+        assertUpdate("DROP TABLE test_alter_table_unsupported_type");
+    }
+
+    @Test
     public void testDelete()
     {
         assertUpdate("CREATE TABLE test_delete_table (c1 bigint, c2 bigint)");
@@ -860,5 +879,11 @@ public class TestRaptorIntegrationSmokeTest
         assertQuery("SELECT * FROM test_delete_table", "VALUES (3, 1), (3, 2), (3, 3), (3, 4)");
 
         assertUpdate("DROP TABLE test_delete_table");
+    }
+
+    @Test
+    public void testTriggerBucketBalancer()
+    {
+        assertUpdate("CALL system.trigger_bucket_balancer()");
     }
 }

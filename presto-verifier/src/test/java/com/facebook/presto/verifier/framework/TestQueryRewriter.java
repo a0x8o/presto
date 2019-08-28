@@ -20,10 +20,8 @@ import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.sql.tree.Statement;
 import com.facebook.presto.tests.StandaloneQueryRunner;
-import com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster;
 import com.facebook.presto.verifier.retry.RetryConfig;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.AfterClass;
@@ -38,7 +36,7 @@ import static com.facebook.presto.sql.parser.IdentifierSymbol.COLON;
 import static com.facebook.presto.verifier.VerifierTestUtil.CATALOG;
 import static com.facebook.presto.verifier.VerifierTestUtil.SCHEMA;
 import static com.facebook.presto.verifier.VerifierTestUtil.setupPresto;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
+import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
 import static com.facebook.presto.verifier.framework.VerifierUtil.PARSING_OPTIONS;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.String.format;
@@ -49,7 +47,7 @@ import static org.testng.Assert.assertTrue;
 public class TestQueryRewriter
 {
     private static final String DEFAULT_PREFIX = "local.tmp";
-    private static final QueryConfiguration CONFIGURATION = new QueryConfiguration(CATALOG, SCHEMA, "test_user", Optional.empty(), ImmutableMap.of());
+    private static final QueryConfiguration CONFIGURATION = new QueryConfiguration(CATALOG, SCHEMA, Optional.of("user"), Optional.empty(), Optional.empty());
     private static final List<Property> TABLE_PROPERTIES_OVERRIDE = ImmutableList.of(new Property(new Identifier("test_property"), new LongLiteral("21")));
     private static final SqlParser sqlParser = new SqlParser(new SqlParserOptions().allowIdentifierSymbol(COLON, AT_SIGN));
 
@@ -164,8 +162,8 @@ public class TestQueryRewriter
             @Language("SQL") String expectedTemplates,
             List<String> expectedTeardownTemplates)
     {
-        for (TargetCluster cluster : TargetCluster.values()) {
-            QueryBundle bundle = queryRewriter.rewriteQuery(query, cluster, CONFIGURATION, new VerificationContext());
+        for (ClusterType cluster : ClusterType.values()) {
+            QueryBundle bundle = queryRewriter.rewriteQuery(query, cluster);
 
             String tableName = bundle.getTableName().toString();
             assertTrue(tableName.startsWith(prefix + "_"));
@@ -178,7 +176,7 @@ public class TestQueryRewriter
 
     private void assertTableName(QueryRewriter queryRewriter, @Language("SQL") String query, String expectedPrefix)
     {
-        QueryBundle bundle = queryRewriter.rewriteQuery(query, CONTROL, CONFIGURATION, new VerificationContext());
+        QueryBundle bundle = queryRewriter.rewriteQuery(query, CONTROL);
         assertTrue(bundle.getTableName().toString().startsWith(expectedPrefix));
     }
 
@@ -202,6 +200,9 @@ public class TestQueryRewriter
                 sqlParser,
                 new JdbcPrestoAction(
                         new PrestoExceptionClassifier(ImmutableSet.of(), ImmutableSet.of()),
+                        CONFIGURATION,
+                        CONFIGURATION,
+                        new VerificationContext(),
                         config,
                         new RetryConfig(),
                         new RetryConfig()),
