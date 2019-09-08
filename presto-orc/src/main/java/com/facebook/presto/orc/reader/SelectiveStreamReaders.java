@@ -43,7 +43,7 @@ public final class SelectiveStreamReaders
             DateTimeZone hiveStorageTimeZone,
             AggregatedMemoryContext systemMemoryContext)
     {
-        OrcTypeKind type = streamDescriptor.getStreamType();
+        OrcTypeKind type = streamDescriptor.getOrcTypeKind();
         switch (type) {
             case BOOLEAN: {
                 checkArgument(requiredSubfields.isEmpty(), "Boolean stream reader doesn't support subfields");
@@ -65,11 +65,13 @@ public final class SelectiveStreamReaders
                 return new FloatSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             }
             case DOUBLE:
+                checkArgument(requiredSubfields.isEmpty(), "Double stream reader doesn't support subfields");
+                return new DoubleSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             case BINARY:
             case STRING:
             case VARCHAR:
             case CHAR:
-                throw new IllegalArgumentException("Unsupported type: " + streamDescriptor.getStreamType());
+                throw new IllegalArgumentException("Unsupported type: " + streamDescriptor.getOrcTypeKind());
             case TIMESTAMP: {
                 checkArgument(requiredSubfields.isEmpty(), "Timestamp stream reader doesn't support subfields");
                 return new TimestampSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), hiveStorageTimeZone, outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
@@ -79,6 +81,7 @@ public final class SelectiveStreamReaders
             case STRUCT:
                 return new StructSelectiveStreamReader(streamDescriptor, filters, requiredSubfields, outputType, hiveStorageTimeZone, systemMemoryContext);
             case MAP:
+                return new MapSelectiveStreamReader(streamDescriptor, filters, requiredSubfields, outputType, hiveStorageTimeZone, systemMemoryContext);
             case DECIMAL:
             case UNION:
             default:
@@ -104,7 +107,7 @@ public final class SelectiveStreamReaders
             DateTimeZone hiveStorageTimeZone,
             AggregatedMemoryContext systemMemoryContext)
     {
-        switch (streamDescriptor.getStreamType()) {
+        switch (streamDescriptor.getOrcTypeKind()) {
             case BOOLEAN:
             case BYTE:
             case SHORT:
@@ -139,7 +142,7 @@ public final class SelectiveStreamReaders
             case MAP:
             case UNION:
             default:
-                throw new IllegalArgumentException("Unsupported type: " + streamDescriptor.getStreamType());
+                throw new IllegalArgumentException("Unsupported type: " + streamDescriptor.getOrcTypeKind());
         }
     }
 }
