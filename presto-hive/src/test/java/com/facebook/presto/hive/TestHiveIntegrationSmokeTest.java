@@ -2645,7 +2645,7 @@ public class TestHiveIntegrationSmokeTest
         assertQueryFails(
                 materializeAllWrongPartitioningProvider,
                 "SELECT orderkey, COUNT(*) lines FROM lineitem GROUP BY orderkey",
-                "Catalog \"tpch\" does not support custom partitioning and cannot be used as a partitioning provider");
+                "Catalog \"tpch\" cannot be used as a partitioning provider: This connector does not support custom partitioning");
 
         // make sure that bucketing is not ignored for temporary tables
         Session bucketingIgnored = Session.builder(materializeExchangesSession)
@@ -4250,7 +4250,7 @@ public class TestHiveIntegrationSmokeTest
         Session pushdownFilterEnabled = Session.builder(getQueryRunner().getDefaultSession())
                 .setCatalogSessionProperty(catalog, PUSHDOWN_FILTER_ENABLED, "true")
                 .build();
-        assertQueryFails(pushdownFilterEnabled, "SELECT comment FROM lineitem WHERE comment LIKE 'abc%'", "Error opening Hive split.*Unsupported type: VARCHAR");
+        assertQuerySucceeds(pushdownFilterEnabled, "SELECT comment FROM lineitem WHERE comment LIKE 'abc%'");
     }
 
     @Test

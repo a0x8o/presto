@@ -19,6 +19,7 @@ import com.facebook.presto.spi.block.DictionaryBlock;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.DecimalType;
+import com.facebook.presto.spi.type.MapType;
 import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
 
@@ -28,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -43,7 +45,9 @@ import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_W
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
+import static com.facebook.presto.util.StructuralTestUtil.appendToBlockBuilder;
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.lang.Float.floatToRawIntBits;
 import static java.util.Objects.requireNonNull;
 import static org.testng.Assert.assertEquals;
@@ -175,6 +179,18 @@ public final class BlockAssertions
         }
 
         return builder.build();
+    }
+
+    public static <K, V> Block createMapBlock(MapType type, Map<K, V> map)
+    {
+        BlockBuilder blockBuilder = type.createBlockBuilder(null, map.size());
+        for (Map.Entry<K, V> entry : map.entrySet()) {
+            BlockBuilder entryBuilder = blockBuilder.beginBlockEntry();
+            appendToBlockBuilder(BIGINT, entry.getKey(), entryBuilder);
+            appendToBlockBuilder(BIGINT, entry.getValue(), entryBuilder);
+            blockBuilder.closeEntry();
+        }
+        return blockBuilder.build();
     }
 
     public static Block createBooleansBlock(Boolean... values)
@@ -517,6 +533,13 @@ public final class BlockAssertions
     {
         BlockBuilder blockBuilder = BIGINT.createBlockBuilder(null, 1);
         BIGINT.writeLong(blockBuilder, value);
+        return new RunLengthEncodedBlock(blockBuilder.build(), positionCount);
+    }
+
+    public static RunLengthEncodedBlock createRLEBlock(String value, int positionCount)
+    {
+        BlockBuilder blockBuilder = VARCHAR.createBlockBuilder(null, 1);
+        VARCHAR.writeSlice(blockBuilder, wrappedBuffer(value.getBytes()));
         return new RunLengthEncodedBlock(blockBuilder.build(), positionCount);
     }
 }

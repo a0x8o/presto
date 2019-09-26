@@ -58,6 +58,7 @@ import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStr
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -134,13 +135,34 @@ public class MapDirectSelectiveStreamReader
                 .map(f -> ImmutableMap.of(new Subfield("c"), f))
                 .orElse(ImmutableMap.of());
 
-        this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, systemMemoryContext.newAggregatedMemoryContext());
-        this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, ImmutableList.of(), hiveStorageTimeZone, systemMemoryContext.newAggregatedMemoryContext());
+        if (outputRequired) {
+            List<Subfield> elementRequiredSubfields = ImmutableList.of();
+            if (requiredSubfields.stream().map(Subfield::getPath).allMatch(path -> path.size() > 1)) {
+                elementRequiredSubfields = requiredSubfields.stream()
+                        .map(subfield -> subfield.tail(subfield.getRootName()))
+                        .distinct()
+                        .collect(toImmutableList());
+            }
+
+            this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, systemMemoryContext.newAggregatedMemoryContext());
+            this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, elementRequiredSubfields, hiveStorageTimeZone, systemMemoryContext.newAggregatedMemoryContext());
+        }
+        else {
+            this.keyReader = null;
+            this.valueReader = null;
+        }
     }
 
     private static Optional<TupleDomainFilter> makeKeyFilter(OrcType.OrcTypeKind orcType, List<Subfield> requiredSubfields)
     {
         if (requiredSubfields.isEmpty()) {
+            return Optional.empty();
+        }
+
+        if (requiredSubfields.stream()
+                .map(Subfield::getPath)
+                .map(path -> path.get(0))
+                .anyMatch(Subfield.AllSubscripts.class::isInstance)) {
             return Optional.empty();
         }
 
@@ -273,16 +295,17 @@ public class MapDirectSelectiveStreamReader
             nestedOffsets[i] = nestedOffset;
             nestedOffset += length;
         }
-        nestedOffsets[positionCount] = nestedOffset;
-
-        int nestedPositionCount = populateNestedPositions(positionCount, nestedOffset);
 
         outputPositions = positions;
         outputPositionCount = positionCount;
         outputPositionsReadOnly = true;
         readOffset = offset + streamPosition;
 
-        readKeyValueStreams(nestedPositionCount);
+        if (outputRequired) {
+            nestedOffsets[positionCount] = nestedOffset;
+            int nestedPositionCount = populateNestedPositions(positionCount, nestedOffset);
+            readKeyValueStreams(nestedPositionCount);
+        }
         nestedReadOffset += nestedOffset;
     }
 
@@ -294,7 +317,9 @@ public class MapDirectSelectiveStreamReader
             nestedReadOffset += lengthStream.sum(dataToSkip);
         }
 
-        nulls = ensureCapacity(nulls, positionCount);
+        if (outputRequired) {
+            nulls = ensureCapacity(nulls, positionCount);
+        }
         outputPositionCount = 0;
 
         int streamPosition = 0;
@@ -315,34 +340,38 @@ public class MapDirectSelectiveStreamReader
                 // not null
                 int length = toIntExact(lengthStream.next());
                 if (nonNullsAllowed) {
-                    nulls[outputPositionCount] = false;
-                    offsets[outputPositionCount + 1] = offsets[outputPositionCount] + length;
+                    if (outputRequired) {
+                        nulls[outputPositionCount] = false;
+                        offsets[outputPositionCount + 1] = offsets[outputPositionCount] + length;
+
+                        nestedLengths[nonNullPositionCount] = length;
+                        nestedOffsets[nonNullPositionCount] = nestedOffset;
+                        nonNullPositionCount++;
+                    }
+
                     outputPositions[outputPositionCount] = position;
                     outputPositionCount++;
-
-                    nestedLengths[nonNullPositionCount] = length;
-                    nestedOffsets[nonNullPositionCount] = nestedOffset;
-                    nonNullPositionCount++;
                 }
                 nestedOffset += length;
             }
             else {
                 // null
                 if (nullsAllowed) {
-                    nulls[outputPositionCount] = true;
-                    offsets[outputPositionCount + 1] = offsets[outputPositionCount];
+                    if (outputRequired) {
+                        nulls[outputPositionCount] = true;
+                        offsets[outputPositionCount + 1] = offsets[outputPositionCount];
+                    }
                     outputPositions[outputPositionCount] = position;
                     outputPositionCount++;
                 }
             }
         }
 
-        nestedOffsets[nonNullPositionCount] = nestedOffset;
-
         if (nonNullPositionCount == 0) {
             allNulls = true;
         }
-        else {
+        else if (outputRequired) {
+            nestedOffsets[nonNullPositionCount] = nestedOffset;
             int nestedPositionCount = populateNestedPositions(nonNullPositionCount, nestedOffset);
             readKeyValueStreams(nestedPositionCount);
         }
@@ -638,8 +667,10 @@ public class MapDirectSelectiveStreamReader
 
         rowGroupOpen = false;
 
-        keyReader.startStripe(dictionaryStreamSources, encoding);
-        valueReader.startStripe(dictionaryStreamSources, encoding);
+        if (outputRequired) {
+            keyReader.startStripe(dictionaryStreamSources, encoding);
+            valueReader.startStripe(dictionaryStreamSources, encoding);
+        }
     }
 
     @Override
@@ -657,8 +688,10 @@ public class MapDirectSelectiveStreamReader
 
         rowGroupOpen = false;
 
-        keyReader.startRowGroup(dataStreamSources);
-        valueReader.startRowGroup(dataStreamSources);
+        if (outputRequired) {
+            keyReader.startRowGroup(dataStreamSources);
+            valueReader.startRowGroup(dataStreamSources);
+        }
     }
 
     @Override
@@ -672,7 +705,7 @@ public class MapDirectSelectiveStreamReader
                 sizeOf(nestedOffsets) +
                 sizeOf(nestedPositions) +
                 sizeOf(nestedOutputPositions) +
-                keyReader.getRetainedSizeInBytes() +
-                valueReader.getRetainedSizeInBytes();
+                (keyReader != null ? keyReader.getRetainedSizeInBytes() : 0) +
+                (valueReader != null ? valueReader.getRetainedSizeInBytes() : 0);
     }
 }

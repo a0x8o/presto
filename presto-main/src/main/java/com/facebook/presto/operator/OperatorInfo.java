@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.operator.PartitionedOutputOperator.PartitionedOutputInfo;
 import com.facebook.presto.operator.TableWriterOperator.TableWriterInfo;
 import com.facebook.presto.operator.exchange.LocalExchangeBufferInfo;
+import com.facebook.presto.operator.repartition.PartitionedOutputInfo;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 

@@ -20,8 +20,10 @@ import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.Range;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.DomainTranslator;
 import com.facebook.presto.spi.relation.DomainTranslator.ExtractionResult;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
@@ -42,12 +44,17 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.block.BlockAssertions.createArrayBigintBlock;
+import static com.facebook.presto.block.BlockAssertions.createMapBlock;
+import static com.facebook.presto.hive.HiveTestUtils.mapType;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
 import static com.facebook.presto.spi.predicate.TupleDomain.withColumnDomains;
+import static com.facebook.presto.spi.relation.ConstantExpression.createConstantExpression;
 import static com.facebook.presto.spi.relation.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.DEREFERENCE;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IN;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
@@ -56,7 +63,6 @@ import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.specialForm;
-import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static org.testng.Assert.assertEquals;
 
@@ -75,7 +81,7 @@ public class TestDomainTranslator
 
     private Metadata metadata;
     private RowExpressionDomainTranslator domainTranslator;
-    private SubfieldExtractor columnExtractor;
+    private DomainTranslator.ColumnExtractor<Subfield> columnExtractor;
 
     @BeforeClass
     public void setup()
@@ -85,7 +91,7 @@ public class TestDomainTranslator
         columnExtractor = new SubfieldExtractor(
                 new FunctionResolution(metadata.getFunctionManager()),
                 (rowExpression, level, session) -> rowExpression,
-                TestingSession.SESSION);
+                TestingSession.SESSION).toColumnExtractor();
     }
 
     @Test
@@ -94,12 +100,12 @@ public class TestDomainTranslator
         Map<String, RowExpression> expressions = ImmutableMap.<String, RowExpression>builder()
                 .put("c_bigint", C_BIGINT)
                 .put("c_bigint_array[5]", arraySubscript(C_BIGINT_ARRAY, 5))
-                .put("c_bigint_to_bigint_map[5]", mapSubscript(C_BIGINT_TO_BIGINT_MAP, constant(5, BIGINT)))
+                .put("c_bigint_to_bigint_map[5]", mapSubscript(C_BIGINT_TO_BIGINT_MAP, constant(5L, BIGINT)))
                 .put("c_varchar_to_bigint_map[\"foo\"]", mapSubscript(C_VARCHAR_TO_BIGINT_MAP, constant(Slices.utf8Slice("foo"), VARCHAR)))
                 .put("c_struct.a", dereference(C_STRUCT, 0))
                 .put("c_struct.b.x", dereference(dereference(C_STRUCT, 1), 0))
                 .put("c_struct.c[5]", arraySubscript(dereference(C_STRUCT, 2), 5))
-                .put("c_struct.d[5]", mapSubscript(dereference(C_STRUCT, 3), constant(5, BIGINT)))
+                .put("c_struct.d[5]", mapSubscript(dereference(C_STRUCT, 3), constant(5L, BIGINT)))
                 .put("c_struct.e[\"foo\"]", mapSubscript(dereference(C_STRUCT, 4), constant(Slices.utf8Slice("foo"), VARCHAR)))
                 .build();
 
@@ -117,12 +123,32 @@ public class TestDomainTranslator
 
             assertPredicateTranslates(bigintIn(expression, ImmutableList.of(1L, 2L)), subfield, Domain.create(ValueSet.ofRanges(Range.equal(BIGINT, 1L), Range.equal(BIGINT, 2L)), false));
         }
+
+        Type arrayType = C_BIGINT_ARRAY.getType();
+        assertPredicateTranslates(isNull(C_BIGINT_ARRAY), C_BIGINT_ARRAY.getName(), Domain.create(ValueSet.none(arrayType), true));
+        assertPredicateTranslates(not(isNull(C_BIGINT_ARRAY)), C_BIGINT_ARRAY.getName(), Domain.create(ValueSet.all(arrayType), false));
+        assertPredicateDoesNotTranslate(equal(C_BIGINT_ARRAY, createConstantExpression(createArrayBigintBlock(ImmutableList.of(ImmutableList.of(1L, 2L, 3L))), arrayType)));
+
+        MapType mapType = (MapType) C_BIGINT_TO_BIGINT_MAP.getType();
+        assertPredicateTranslates(isNull(C_BIGINT_TO_BIGINT_MAP), C_BIGINT_TO_BIGINT_MAP.getName(), Domain.create(ValueSet.none(mapType), true));
+        assertPredicateTranslates(not(isNull(C_BIGINT_TO_BIGINT_MAP)), C_BIGINT_TO_BIGINT_MAP.getName(), Domain.create(ValueSet.all(mapType), false));
+        assertPredicateDoesNotTranslate(equal(C_BIGINT_TO_BIGINT_MAP, createConstantExpression(createMapBlock(mapType, ImmutableMap.of(1, 100)), mapType)));
     }
 
     private RowExpression dereference(RowExpression base, int field)
     {
         Type fieldType = base.getType().getTypeParameters().get(field);
-        return specialForm(DEREFERENCE, fieldType, ImmutableList.of(base, new ConstantExpression(field, INTEGER)));
+        return specialForm(DEREFERENCE, fieldType, ImmutableList.of(base, new ConstantExpression((long) field, INTEGER)));
+    }
+
+    private RowExpression isNull(RowExpression expression)
+    {
+        return specialForm(IS_NULL, BOOLEAN, expression);
+    }
+
+    private RowExpression not(RowExpression expression)
+    {
+        return call("not", new FunctionResolution(metadata.getFunctionManager()).notFunction(), BOOLEAN, expression);
     }
 
     private RowExpression arraySubscript(RowExpression arrayExpression, int index)
@@ -132,7 +158,7 @@ public class TestDomainTranslator
         return call(SUBSCRIPT.name(),
                 operator(SUBSCRIPT, arrayType, elementType),
                 elementType,
-                ImmutableList.of(arrayExpression, constant(index, INTEGER)));
+                ImmutableList.of(arrayExpression, constant((long) index, INTEGER)));
     }
 
     private RowExpression mapSubscript(RowExpression mapExpression, RowExpression keyExpression)
@@ -142,22 +168,6 @@ public class TestDomainTranslator
                 operator(SUBSCRIPT, mapType(mapType.getKeyType(), mapType.getValueType()), mapType.getKeyType()),
                 mapType.getValueType(),
                 ImmutableList.of(mapExpression, keyExpression));
-    }
-
-    private static MapType mapType(Type keyType, Type valueType)
-    {
-        return new MapType(
-                keyType,
-                valueType,
-                methodHandle(TestDomainTranslator.class, "throwUnsupportedOperationException"),
-                methodHandle(TestDomainTranslator.class, "throwUnsupportedOperationException"),
-                methodHandle(TestDomainTranslator.class, "throwUnsupportedOperationException"),
-                methodHandle(TestDomainTranslator.class, "throwUnsupportedOperationException"));
-    }
-
-    public static void throwUnsupportedOperationException()
-    {
-        throw new UnsupportedOperationException();
     }
 
     private FunctionHandle operator(OperatorType operatorType, Type... types)
@@ -170,6 +180,13 @@ public class TestDomainTranslator
         ExtractionResult<Subfield> result = domainTranslator.fromPredicate(TEST_SESSION.toConnectorSession(), predicate, columnExtractor);
         assertEquals(result.getRemainingExpression(), TRUE_CONSTANT);
         assertEquals(result.getTupleDomain(), withColumnDomains(ImmutableMap.of(new Subfield(subfield), domain)));
+    }
+
+    private void assertPredicateDoesNotTranslate(RowExpression predicate)
+    {
+        ExtractionResult<Subfield> result = domainTranslator.fromPredicate(TEST_SESSION.toConnectorSession(), predicate, columnExtractor);
+        assertEquals(result.getTupleDomain(), TupleDomain.all());
+        assertEquals(result.getRemainingExpression(), predicate);
     }
 
     private RowExpression greaterThan(RowExpression left, RowExpression right)

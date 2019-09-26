@@ -13,13 +13,10 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
-import io.airlift.units.Duration;
-import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -28,25 +25,9 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.verifier.source.MySqlSourceQuerySupplier.MYSQL_SOURCE_QUERY_SUPPLIER;
-import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class VerifierConfig
 {
-    private Optional<String> additionalJdbcDriverPath = Optional.empty();
-    private Optional<String> controlJdbcDriverClass = Optional.empty();
-    private Optional<String> testJdbcDriverClass = Optional.empty();
-
-    private String controlJdbcUrl;
-    private String testJdbcUrl;
-
-    private Duration controlTimeout = new Duration(10, MINUTES);
-    private Duration testTimeout = new Duration(30, MINUTES);
-    private Duration metadataTimeout = new Duration(3, MINUTES);
-    private Duration checksumTimeout = new Duration(20, MINUTES);
-
-    private QualifiedName controlTablePrefix = QualifiedName.of("tmp_verifier_control");
-    private QualifiedName testTablePrefix = QualifiedName.of("tmp_verifier_test");
-
     private Optional<Set<String>> whitelist = Optional.empty();
     private Optional<Set<String>> blacklist = Optional.empty();
 
@@ -64,164 +45,8 @@ public class VerifierConfig
     private double relativeErrorMargin = 1e-4;
     private double absoluteErrorMargin = 1e-12;
     private boolean runTearDownOnResultMismatch;
-    private boolean failureResolverEnabled = true;
+    private boolean enableLimitQueryDeterminismAnalyzer = true;
     private int verificationResubmissionLimit = 2;
-
-    @NotNull
-    public Optional<String> getAdditionalJdbcDriverPath()
-    {
-        return additionalJdbcDriverPath;
-    }
-
-    @ConfigDescription("Path for test jdbc driver")
-    @Config("additional-jdbc-driver-path")
-    public VerifierConfig setAdditionalJdbcDriverPath(String additionalJdbcDriverPath)
-    {
-        this.additionalJdbcDriverPath = Optional.ofNullable(additionalJdbcDriverPath);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getControlJdbcDriverClass()
-    {
-        return controlJdbcDriverClass;
-    }
-
-    @ConfigDescription("Fully qualified control JDBC driver name")
-    @Config("control.jdbc-driver-class")
-    public VerifierConfig setControlJdbcDriverClass(String controlJdbcDriverClass)
-    {
-        this.controlJdbcDriverClass = Optional.ofNullable(controlJdbcDriverClass);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getTestJdbcDriverClass()
-    {
-        return testJdbcDriverClass;
-    }
-
-    @ConfigDescription("Fully qualified test JDBC driver name")
-    @Config("test.jdbc-driver-class")
-    public VerifierConfig setTestJdbcDriverClass(String testJdbcDriverClass)
-    {
-        this.testJdbcDriverClass = Optional.ofNullable(testJdbcDriverClass);
-        return this;
-    }
-
-    @NotNull
-    public String getControlJdbcUrl()
-    {
-        return controlJdbcUrl;
-    }
-
-    @ConfigDescription("URL for the control cluster")
-    @Config("control.jdbc-url")
-    public VerifierConfig setControlJdbcUrl(String controlJdbcUrl)
-    {
-        this.controlJdbcUrl = controlJdbcUrl;
-        return this;
-    }
-
-    @NotNull
-    public String getTestJdbcUrl()
-    {
-        return testJdbcUrl;
-    }
-
-    @ConfigDescription("URL for the test cluster")
-    @Config("test.jdbc-url")
-    public VerifierConfig setTestJdbcUrl(String testJdbcUrl)
-    {
-        this.testJdbcUrl = testJdbcUrl;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getControlTimeout()
-    {
-        return controlTimeout;
-    }
-
-    @ConfigDescription("Timeout for queries to the control cluster")
-    @Config("control.timeout")
-    public VerifierConfig setControlTimeout(Duration controlTimeout)
-    {
-        this.controlTimeout = controlTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getTestTimeout()
-    {
-        return testTimeout;
-    }
-
-    @ConfigDescription("Timeout for queries to the test cluster")
-    @Config("test.timeout")
-    public VerifierConfig setTestTimeout(Duration testTimeout)
-    {
-        this.testTimeout = testTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getMetadataTimeout()
-    {
-        return metadataTimeout;
-    }
-
-    @Config("metadata.timeout")
-    public VerifierConfig setMetadataTimeout(Duration metadataTimeout)
-    {
-        this.metadataTimeout = metadataTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getChecksumTimeout()
-    {
-        return checksumTimeout;
-    }
-
-    @Config("checksum.timeout")
-    public VerifierConfig setChecksumTimeout(Duration checksumTimeout)
-    {
-        this.checksumTimeout = checksumTimeout;
-        return this;
-    }
-
-    @NotNull
-    public QualifiedName getControlTablePrefix()
-    {
-        return controlTablePrefix;
-    }
-
-    @ConfigDescription("The prefix to use for temporary control shadow tables. May be fully qualified like 'tmp_catalog.tmp_schema.tmp_'")
-    @Config("control.table-prefix")
-    public VerifierConfig setControlTablePrefix(String controlTablePrefix)
-    {
-        this.controlTablePrefix = controlTablePrefix == null ?
-                null :
-                QualifiedName.of(Splitter.on(".").splitToList(controlTablePrefix));
-        return this;
-    }
-
-    @NotNull
-    public QualifiedName getTestTablePrefix()
-    {
-        return testTablePrefix;
-    }
-
-    @ConfigDescription("The prefix to use for temporary test shadow tables. May be fully qualified like 'tmp_catalog.tmp_schema.tmp_'")
-    @Config("test.table-prefix")
-    public VerifierConfig setTestTablePrefix(String testTablePrefix)
-    {
-        this.testTablePrefix = testTablePrefix == null ?
-                null :
-                QualifiedName.of(Splitter.on(".").splitToList(testTablePrefix));
-        return this;
-    }
 
     @NotNull
     public Optional<Set<String>> getWhitelist()
@@ -407,15 +232,15 @@ public class VerifierConfig
         return this;
     }
 
-    public boolean isFailureResolverEnabled()
+    public boolean isEnableLimitQueryDeterminismAnalyzer()
     {
-        return failureResolverEnabled;
+        return enableLimitQueryDeterminismAnalyzer;
     }
 
-    @Config("failure-resolver.enabled")
-    public VerifierConfig setFailureResolverEnabled(boolean failureResolverEnabled)
+    @Config("enable-limit-query-determinism-analyzer")
+    public VerifierConfig setEnableLimitQueryDeterminismAnalyzer(boolean enableLimitQueryDeterminismAnalyzer)
     {
-        this.failureResolverEnabled = failureResolverEnabled;
+        this.enableLimitQueryDeterminismAnalyzer = enableLimitQueryDeterminismAnalyzer;
         return this;
     }
 

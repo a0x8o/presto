@@ -20,7 +20,9 @@ import com.facebook.presto.verifier.checksum.ChecksumResult;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.checksum.ColumnMatchResult;
 import com.facebook.presto.verifier.framework.MatchResult.MatchType;
-import com.facebook.presto.verifier.resolver.FailureResolver;
+import com.facebook.presto.verifier.prestoaction.PrestoAction;
+import com.facebook.presto.verifier.resolver.FailureResolverManager;
+import com.facebook.presto.verifier.rewrite.QueryRewriter;
 import com.google.common.collect.ImmutableMap;
 
 import java.util.List;
@@ -29,6 +31,14 @@ import java.util.Optional;
 import java.util.OptionalLong;
 
 import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.ANALYSIS_FAILED;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.ANALYSIS_FAILED_DATA_CHANGED;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.ANALYSIS_FAILED_INCONSISTENT_SCHEMA;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.ANALYSIS_FAILED_QUERY_FAILURE;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.DETERMINISTIC;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_COLUMNS;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_LIMIT_CLAUSE;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_ROW_COUNT;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.COLUMN_MISMATCH;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.MATCH;
 import static com.facebook.presto.verifier.framework.MatchResult.MatchType.ROW_COUNT_MISMATCH;
@@ -36,25 +46,29 @@ import static com.facebook.presto.verifier.framework.MatchResult.MatchType.SCHEM
 import static com.facebook.presto.verifier.framework.QueryStage.CHECKSUM;
 import static com.facebook.presto.verifier.framework.QueryStage.DESCRIBE;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class DataVerification
         extends AbstractVerification
 {
     private final ChecksumValidator checksumValidator;
+    private final LimitQueryDeterminismAnalyzer limitQueryDeterminismAnalyzer;
 
     public DataVerification(
             VerificationResubmitter verificationResubmitter,
             PrestoAction prestoAction,
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
-            List<FailureResolver> failureResolvers,
+            FailureResolverManager failureResolverManager,
             VerificationContext verificationContext,
             VerifierConfig verifierConfig,
-            ChecksumValidator checksumValidator)
+            ChecksumValidator checksumValidator,
+            LimitQueryDeterminismAnalyzer limitQueryDeterminismAnalyzer)
     {
-        super(verificationResubmitter, prestoAction, sourceQuery, queryRewriter, failureResolvers, verificationContext, verifierConfig);
+        super(verificationResubmitter, prestoAction, sourceQuery, queryRewriter, failureResolverManager, verificationContext, verifierConfig);
         this.checksumValidator = requireNonNull(checksumValidator, "checksumValidator is null");
+        this.limitQueryDeterminismAnalyzer = requireNonNull(limitQueryDeterminismAnalyzer, "limitQueryDeterminismAnalyzer is null");
     }
 
     @Override
@@ -77,7 +91,7 @@ public class DataVerification
     }
 
     @Override
-    protected Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksum)
+    protected DeterminismAnalysis analyzeDeterminism(QueryBundle control, ChecksumResult firstChecksum)
     {
         List<Column> columns = getColumns(control.getTableName());
 
@@ -86,20 +100,36 @@ public class DataVerification
         try {
             secondRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL);
             setupAndRun(secondRun, true);
-            if (!match(columns, columns, firstChecksum, computeChecksum(secondRun, columns).getResult()).isMatched()) {
-                return Optional.of(false);
+            DeterminismAnalysis determinismAnalysis = matchResultToDeterminism(match(columns, columns, firstChecksum, computeChecksum(secondRun, columns).getResult()));
+            if (determinismAnalysis != DETERMINISTIC) {
+                return determinismAnalysis;
             }
 
             thirdRun = getQueryRewriter().rewriteQuery(getSourceQuery().getControlQuery(), CONTROL);
             setupAndRun(thirdRun, true);
-            if (!match(columns, columns, firstChecksum, computeChecksum(thirdRun, columns).getResult()).isMatched()) {
-                return Optional.of(false);
+            determinismAnalysis = matchResultToDeterminism(match(columns, columns, firstChecksum, computeChecksum(thirdRun, columns).getResult()));
+            if (determinismAnalysis != DETERMINISTIC) {
+                return determinismAnalysis;
             }
 
-            return Optional.of(true);
+            LimitQueryDeterminismAnalyzer.Analysis analysis = limitQueryDeterminismAnalyzer.analyze(control, firstChecksum.getRowCount());
+            switch (analysis) {
+                case NON_DETERMINISTIC:
+                    return NON_DETERMINISTIC_LIMIT_CLAUSE;
+                case NOT_RUN:
+                case DETERMINISTIC:
+                    return DETERMINISTIC;
+                case FAILED_DATA_CHANGED:
+                    return ANALYSIS_FAILED_DATA_CHANGED;
+                default:
+                    throw new IllegalArgumentException(format("Invalid analysis: %s", analysis));
+            }
+        }
+        catch (QueryException qe) {
+            return ANALYSIS_FAILED_QUERY_FAILURE;
         }
         catch (Throwable t) {
-            return Optional.empty();
+            return ANALYSIS_FAILED;
         }
         finally {
             teardownSafely(secondRun);
@@ -141,6 +171,22 @@ public class DataVerification
                 controlRowCount,
                 testRowCount,
                 mismatchedColumns);
+    }
+
+    private DeterminismAnalysis matchResultToDeterminism(MatchResult matchResult)
+    {
+        switch (matchResult.getMatchType()) {
+            case MATCH:
+                return DETERMINISTIC;
+            case SCHEMA_MISMATCH:
+                return ANALYSIS_FAILED_INCONSISTENT_SCHEMA;
+            case ROW_COUNT_MISMATCH:
+                return NON_DETERMINISTIC_ROW_COUNT;
+            case COLUMN_MISMATCH:
+                return NON_DETERMINISTIC_COLUMNS;
+            default:
+                throw new IllegalArgumentException(format("Invalid MatchResult: %s", matchResult));
+        }
     }
 
     private List<Column> getColumns(QualifiedName tableName)

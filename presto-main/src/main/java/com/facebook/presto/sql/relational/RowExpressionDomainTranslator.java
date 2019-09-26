@@ -69,6 +69,7 @@ import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.spi.relation.ExpressionOptimizer.Level.OPTIMIZED;
 import static com.facebook.presto.spi.relation.LogicalRowExpressions.FALSE_CONSTANT;
 import static com.facebook.presto.spi.relation.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.spi.relation.LogicalRowExpressions.and;
@@ -104,7 +105,7 @@ public final class RowExpressionDomainTranslator
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.functionManager = metadata.getFunctionManager();
-        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager), new FunctionResolution(functionManager));
+        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager), new FunctionResolution(functionManager), functionManager);
         this.functionResolution = new FunctionResolution(functionManager);
     }
 
@@ -310,7 +311,7 @@ public final class RowExpressionDomainTranslator
             this.metadata = metadata;
             this.session = session;
             this.functionManager = metadata.getFunctionManager();
-            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager), new FunctionResolution(functionManager));
+            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(functionManager), new FunctionResolution(functionManager), functionManager);
             this.determinismEvaluator = new RowExpressionDeterminismEvaluator(functionManager);
             this.resolution = new FunctionResolution(functionManager);
             this.columnExtractor = requireNonNull(columnExtractor, "columnExtractor is null");
@@ -347,12 +348,12 @@ public final class RowExpressionDomainTranslator
                 }
                 case IS_NULL: {
                     RowExpression value = node.getArguments().get(0);
-                    Optional<T> column = columnExtractor.extract(value);
+                    Domain domain = complementIfNecessary(Domain.onlyNull(value.getType()), complement);
+                    Optional<T> column = columnExtractor.extract(value, domain);
                     if (!column.isPresent()) {
                         return visitRowExpression(node, complement);
                     }
 
-                    Domain domain = complementIfNecessary(Domain.onlyNull(value.getType()), complement);
                     return new ExtractionResult<>(TupleDomain.withColumnDomains(ImmutableMap.of(column.get(), domain)), TRUE_CONSTANT);
                 }
                 default:
@@ -408,13 +409,17 @@ public final class RowExpressionDomainTranslator
                 NormalizedSimpleComparison normalized = optionalNormalized.get();
 
                 RowExpression expression = normalized.getExpression();
-                Optional<T> column = columnExtractor.extract(expression);
+                NullableValue value = normalized.getValue();
+                Domain domain = createComparisonDomain(normalized.getComparisonOperator(), value.getType(), value.getValue(), complement);
+                Optional<T> column = columnExtractor.extract(expression, domain);
                 if (column.isPresent()) {
-                    NullableValue value = normalized.getValue();
-                    Type type = value.getType(); // common type for symbol and value
-                    return createComparisonExtractionResult(normalized.getComparisonOperator(), column.get(), type, value.getValue(), complement);
+                    if (domain.isNone()) {
+                        return new ExtractionResult<>(TupleDomain.none(), TRUE_CONSTANT);
+                    }
+                    return new ExtractionResult<>(TupleDomain.withColumnDomains(ImmutableMap.of(column.get(), domain)), TRUE_CONSTANT);
                 }
-                else if (expression instanceof CallExpression && resolution.isCastFunction(((CallExpression) expression).getFunctionHandle())) {
+
+                if (expression instanceof CallExpression && resolution.isCastFunction(((CallExpression) expression).getFunctionHandle())) {
                     CallExpression castExpression = (CallExpression) expression;
                     if (!isImplicitCoercion(castExpression)) {
                         //
@@ -636,13 +641,13 @@ public final class RowExpressionDomainTranslator
                 left = leftExpression;
             }
             else {
-                left = new RowExpressionInterpreter(leftExpression, metadata, session, true).optimize();
+                left = new RowExpressionInterpreter(leftExpression, metadata, session, OPTIMIZED).optimize();
             }
             if (rightExpression instanceof VariableReferenceExpression) {
                 right = rightExpression;
             }
             else {
-                right = new RowExpressionInterpreter(rightExpression, metadata, session, true).optimize();
+                right = new RowExpressionInterpreter(rightExpression, metadata, session, OPTIMIZED).optimize();
             }
 
             if (left instanceof RowExpression == right instanceof RowExpression) {
@@ -668,7 +673,7 @@ public final class RowExpressionDomainTranslator
             return Optional.of(new NormalizedSimpleComparison(expression, comparisonOperator, value));
         }
 
-        private static <T> ExtractionResult<T> createComparisonExtractionResult(OperatorType comparisonOperator, T column, Type type, @Nullable Object value, boolean complement)
+        private static Domain createComparisonDomain(OperatorType comparisonOperator, Type type, @Nullable Object value, boolean complement)
         {
             if (value == null) {
                 switch (comparisonOperator) {
@@ -678,13 +683,10 @@ public final class RowExpressionDomainTranslator
                     case LESS_THAN:
                     case LESS_THAN_OR_EQUAL:
                     case NOT_EQUAL:
-                        return new ExtractionResult<>(TupleDomain.none(), TRUE_CONSTANT);
+                        return Domain.none(type);
 
                     case IS_DISTINCT_FROM:
-                        Domain domain = complementIfNecessary(Domain.notNull(type), complement);
-                        return new ExtractionResult<>(
-                                TupleDomain.withColumnDomains(ImmutableMap.of(column, domain)),
-                                TRUE_CONSTANT);
+                        return complementIfNecessary(Domain.notNull(type), complement);
 
                     default:
                         throw new AssertionError("Unhandled operator: " + comparisonOperator);
@@ -702,7 +704,7 @@ public final class RowExpressionDomainTranslator
                 throw new AssertionError("Type cannot be used in a comparison expression (should have been caught in analysis): " + type);
             }
 
-            return new ExtractionResult<>(TupleDomain.withColumnDomains(ImmutableMap.of(column, domain)), TRUE_CONSTANT);
+            return domain;
         }
 
         private static OperatorType flip(OperatorType operatorType)

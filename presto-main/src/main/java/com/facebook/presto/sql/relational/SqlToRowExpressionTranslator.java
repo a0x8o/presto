@@ -29,7 +29,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
-import com.facebook.presto.sql.relational.optimizer.ExpressionOptimizer;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
 import com.facebook.presto.sql.tree.ArrayConstructor;
@@ -42,7 +41,6 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CharLiteral;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.CurrentPath;
 import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DereferenceExpression;
@@ -147,8 +145,7 @@ public final class SqlToRowExpressionTranslator
             Map<VariableReferenceExpression, Integer> layout,
             FunctionManager functionManager,
             TypeManager typeManager,
-            Session session,
-            boolean optimize)
+            Session session)
     {
         Visitor visitor = new Visitor(
                 types,
@@ -157,14 +154,7 @@ public final class SqlToRowExpressionTranslator
                 functionManager,
                 session);
         RowExpression result = visitor.process(expression, null);
-
         requireNonNull(result, "translated expression is null");
-
-        if (optimize) {
-            ExpressionOptimizer optimizer = new ExpressionOptimizer(functionManager, session.toConnectorSession());
-            return optimizer.optimize(result);
-        }
-
         return result;
     }
 
@@ -215,12 +205,6 @@ public final class SqlToRowExpressionTranslator
         protected RowExpression visitCurrentUser(CurrentUser node, Void context)
         {
             return constant(Slices.utf8Slice(session.getUser()), VARCHAR);
-        }
-
-        @Override
-        protected RowExpression visitCurrentPath(CurrentPath node, Void context)
-        {
-            return constant(Slices.utf8Slice(session.getPath().toString()), VARCHAR);
         }
 
         @Override

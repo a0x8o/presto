@@ -16,14 +16,20 @@ package com.facebook.presto.verifier.framework;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
 import com.facebook.presto.sql.tree.Property;
+import com.facebook.presto.verifier.annotation.ForControl;
+import com.facebook.presto.verifier.annotation.ForTest;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.checksum.FloatingPointColumnValidator;
 import com.facebook.presto.verifier.checksum.OrderableArrayColumnValidator;
 import com.facebook.presto.verifier.checksum.SimpleColumnValidator;
-import com.facebook.presto.verifier.resolver.FailureResolver;
+import com.facebook.presto.verifier.prestoaction.SqlExceptionClassifier;
+import com.facebook.presto.verifier.prestoaction.VerificationPrestoActionModule;
+import com.facebook.presto.verifier.resolver.FailureResolverFactory;
+import com.facebook.presto.verifier.resolver.FailureResolverModule;
 import com.facebook.presto.verifier.retry.ForClusterConnection;
 import com.facebook.presto.verifier.retry.ForPresto;
 import com.facebook.presto.verifier.retry.RetryConfig;
+import com.facebook.presto.verifier.rewrite.VerificationQueryRewriterModule;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
 import com.google.inject.Inject;
@@ -47,20 +53,20 @@ public class VerifierModule
     private final SqlParserOptions sqlParserOptions;
     private final List<Class<? extends Predicate<SourceQuery>>> customQueryFilterClasses;
     private final SqlExceptionClassifier exceptionClassifier;
-    private final List<FailureResolver> failureResolvers;
+    private final List<FailureResolverFactory> failureResolverFactories;
     private final List<Property> tablePropertyOverrides;
 
     public VerifierModule(
             SqlParserOptions sqlParserOptions,
             List<Class<? extends Predicate<SourceQuery>>> customQueryFilterClasses,
             SqlExceptionClassifier exceptionClassifier,
-            List<FailureResolver> failureResolvers,
+            List<FailureResolverFactory> failureResolverFactories,
             List<Property> tablePropertyOverrides)
     {
         this.sqlParserOptions = requireNonNull(sqlParserOptions, "sqlParserOptions is null");
         this.customQueryFilterClasses = ImmutableList.copyOf(customQueryFilterClasses);
         this.exceptionClassifier = requireNonNull(exceptionClassifier, "exceptionClassifier is null");
-        this.failureResolvers = requireNonNull(failureResolvers, "failureResolvers is null");
+        this.failureResolverFactories = requireNonNull(failureResolverFactories, "failureResolverFactories is null");
         this.tablePropertyOverrides = requireNonNull(tablePropertyOverrides, "tablePropertyOverrides is null");
     }
 
@@ -79,10 +85,12 @@ public class VerifierModule
             binder.bind(customQueryFilterClass).in(SINGLETON);
         }
 
+        install(new VerificationPrestoActionModule(exceptionClassifier));
+        install(new VerificationQueryRewriterModule());
+        install(new FailureResolverModule(failureResolverFactories));
+
         binder.bind(SqlParserOptions.class).toInstance(sqlParserOptions);
         binder.bind(SqlParser.class).in(SINGLETON);
-        binder.bind(QueryRewriterFactory.class).to(PrestoQueryRewriterFactory.class).in(SINGLETON);
-        binder.bind(PrestoActionFactory.class).to(JdbcPrestoActionFactory.class).in(SINGLETON);
         binder.bind(VerificationManager.class).in(SINGLETON);
         binder.bind(VerificationFactory.class).in(SINGLETON);
         binder.bind(ChecksumValidator.class).in(SINGLETON);
@@ -90,8 +98,6 @@ public class VerifierModule
         binder.bind(FloatingPointColumnValidator.class).in(SINGLETON);
         binder.bind(OrderableArrayColumnValidator.class).in(SINGLETON);
         binder.bind(new TypeLiteral<List<Predicate<SourceQuery>>>() {}).toProvider(new CustomQueryFilterProvider(customQueryFilterClasses));
-        binder.bind(SqlExceptionClassifier.class).toInstance(exceptionClassifier);
-        binder.bind(new TypeLiteral<List<FailureResolver>>() {}).toInstance(failureResolvers);
         binder.bind(new TypeLiteral<List<Property>>() {}).toInstance(tablePropertyOverrides);
     }
 

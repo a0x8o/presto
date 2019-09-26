@@ -15,6 +15,7 @@ package com.facebook.presto.verifier.framework;
 
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.tests.StandaloneQueryRunner;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.checksum.FloatingPointColumnValidator;
@@ -22,8 +23,15 @@ import com.facebook.presto.verifier.checksum.OrderableArrayColumnValidator;
 import com.facebook.presto.verifier.checksum.SimpleColumnValidator;
 import com.facebook.presto.verifier.event.VerifierQueryEvent;
 import com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus;
+import com.facebook.presto.verifier.prestoaction.JdbcPrestoAction;
+import com.facebook.presto.verifier.prestoaction.PrestoAction;
+import com.facebook.presto.verifier.prestoaction.PrestoClusterConfig;
+import com.facebook.presto.verifier.prestoaction.PrestoExceptionClassifier;
+import com.facebook.presto.verifier.resolver.FailureResolverManager;
 import com.facebook.presto.verifier.retry.RetryConfig;
+import com.facebook.presto.verifier.rewrite.QueryRewriter;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -35,11 +43,14 @@ import static com.facebook.presto.sql.parser.IdentifierSymbol.AT_SIGN;
 import static com.facebook.presto.sql.parser.IdentifierSymbol.COLON;
 import static com.facebook.presto.verifier.VerifierTestUtil.CATALOG;
 import static com.facebook.presto.verifier.VerifierTestUtil.SCHEMA;
-import static com.facebook.presto.verifier.VerifierTestUtil.getJdbcUrl;
 import static com.facebook.presto.verifier.VerifierTestUtil.setupPresto;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.FAILED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SKIPPED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SUCCEEDED;
+import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
+import static com.facebook.presto.verifier.framework.ClusterType.TEST;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.DETERMINISTIC;
+import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_COLUMNS;
 import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_SETUP_QUERY_FAILED;
 import static com.facebook.presto.verifier.framework.SkippedReason.FAILED_BEFORE_CONTROL_QUERY;
 import static com.facebook.presto.verifier.framework.SkippedReason.NON_DETERMINISTIC;
@@ -49,6 +60,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
+@Test(singleThreaded = true)
 public class TestDataVerification
 {
     private static final String SUITE = "test-suite";
@@ -66,28 +78,24 @@ public class TestDataVerification
 
     private DataVerification createVerification(String controlQuery, String testQuery)
     {
-        String jdbcUrl = getJdbcUrl(queryRunner);
         QueryConfiguration configuration = new QueryConfiguration(CATALOG, SCHEMA, Optional.of("user"), Optional.empty(), Optional.empty());
         VerificationContext verificationContext = new VerificationContext();
         RetryConfig retryConfig = new RetryConfig();
-        VerifierConfig verifierConfig = new VerifierConfig()
-                .setControlJdbcUrl(jdbcUrl)
-                .setTestJdbcUrl(jdbcUrl)
-                .setTestId(TEST_ID)
-                .setFailureResolverEnabled(false);
+        VerifierConfig verifierConfig = new VerifierConfig().setTestId(TEST_ID);
         PrestoAction prestoAction = new JdbcPrestoAction(
                 new PrestoExceptionClassifier(ImmutableSet.of(), ImmutableSet.of()),
                 configuration,
-                configuration,
                 verificationContext,
-                verifierConfig,
+                new PrestoClusterConfig()
+                        .setHost(queryRunner.getServer().getAddress().getHost())
+                        .setJdbcPort(queryRunner.getServer().getAddress().getPort()),
                 retryConfig,
                 retryConfig);
         QueryRewriter queryRewriter = new QueryRewriter(
                 new SqlParser(new SqlParserOptions().allowIdentifierSymbol(COLON, AT_SIGN)),
                 prestoAction,
                 ImmutableList.of(),
-                verifierConfig);
+                ImmutableMap.of(CONTROL, QualifiedName.of("tmp_verifier_c"), TEST, QualifiedName.of("tmp_verifier_t")));
         ChecksumValidator checksumValidator = new ChecksumValidator(
                 new SimpleColumnValidator(),
                 new FloatingPointColumnValidator(verifierConfig),
@@ -98,10 +106,11 @@ public class TestDataVerification
                 prestoAction,
                 sourceQuery,
                 queryRewriter,
-                ImmutableList.of(),
+                new FailureResolverManager(ImmutableList.of()),
                 verificationContext,
                 verifierConfig,
-                checksumValidator);
+                checksumValidator,
+                new LimitQueryDeterminismAnalyzer(prestoAction, verifierConfig));
     }
 
     @Test
@@ -122,7 +131,7 @@ public class TestDataVerification
                 FAILED,
                 Optional.empty(),
                 Optional.of("SCHEMA_MISMATCH"),
-                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED\n" +
+                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED.\n\n" +
                         "SCHEMA MISMATCH\n"));
     }
 
@@ -136,9 +145,9 @@ public class TestDataVerification
         assertEvent(
                 event.get(),
                 FAILED,
-                Optional.of(true),
+                Optional.of(DETERMINISTIC),
                 Optional.of("ROW_COUNT_MISMATCH"),
-                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED\n" +
+                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED.\n\n" +
                         "ROW COUNT MISMATCH\n" +
                         "Control 1 rows, Test 2 rows\n"));
     }
@@ -151,9 +160,9 @@ public class TestDataVerification
         assertEvent(
                 event.get(),
                 FAILED,
-                Optional.of(true),
+                Optional.of(DETERMINISTIC),
                 Optional.of("COLUMN_MISMATCH"),
-                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED\n" +
+                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED.\n\n" +
                         "COLUMN MISMATCH\n" +
                         "Control 1 rows, Test 1 rows\n" +
                         "Mismatched Columns:\n" +
@@ -178,7 +187,8 @@ public class TestDataVerification
                 SKIPPED,
                 Optional.empty(),
                 Optional.of("PRESTO(SYNTAX_ERROR)"),
-                Optional.of("Test state NOT_RUN, Control state NOT_RUN\n.*"));
+                Optional.of("Test state NOT_RUN, Control state NOT_RUN.\n\n" +
+                        "REWRITE query failed on CONTROL cluster:\n.*"));
     }
 
     @Test
@@ -192,7 +202,8 @@ public class TestDataVerification
                 SKIPPED,
                 Optional.empty(),
                 Optional.of("PRESTO(SYNTAX_ERROR)"),
-                Optional.of("Test state NOT_RUN, Control state FAILED_TO_SETUP\n.*"));
+                Optional.of("Test state NOT_RUN, Control state FAILED_TO_SETUP.\n\n" +
+                        "CONTROL SETUP query failed on CONTROL cluster:\n.*"));
     }
 
     @Test
@@ -204,9 +215,9 @@ public class TestDataVerification
         assertEvent(
                 event.get(),
                 SKIPPED,
-                Optional.of(false),
+                Optional.of(NON_DETERMINISTIC_COLUMNS),
                 Optional.of("COLUMN_MISMATCH"),
-                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED\n" +
+                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED.\n\n" +
                         "COLUMN MISMATCH\n" +
                         "Control 1 rows, Test 1 rows\n" +
                         "Mismatched Columns:\n" +
@@ -225,9 +236,9 @@ public class TestDataVerification
         assertEvent(
                 event.get(),
                 FAILED,
-                Optional.of(true),
+                Optional.of(DETERMINISTIC),
                 Optional.of("COLUMN_MISMATCH"),
-                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED\n" +
+                Optional.of("Test state SUCCEEDED, Control state SUCCEEDED.\n\n" +
                         "COLUMN MISMATCH\n" +
                         "Control 1 rows, Test 1 rows\n" +
                         "Mismatched Columns:\n" +
@@ -237,7 +248,7 @@ public class TestDataVerification
     private void assertEvent(
             VerifierQueryEvent event,
             EventStatus expectedStatus,
-            Optional<Boolean> expectedDeterministic,
+            Optional<DeterminismAnalysis> expectedDeterminismAnalysis,
             Optional<String> expectedErrorCode,
             Optional<String> expectedErrorMessageRegex)
     {
@@ -245,7 +256,7 @@ public class TestDataVerification
         assertEquals(event.getTestId(), TEST_ID);
         assertEquals(event.getName(), NAME);
         assertEquals(event.getStatus(), expectedStatus.name());
-        assertEquals(event.getDeterministic(), expectedDeterministic.orElse(null));
+        assertEquals(event.getDeterminismAnalysis(), expectedDeterminismAnalysis.map(DeterminismAnalysis::name).orElse(null));
         assertEquals(event.getErrorCode(), expectedErrorCode.orElse(null));
         if (event.getErrorMessage() == null) {
             assertFalse(expectedErrorMessageRegex.isPresent());

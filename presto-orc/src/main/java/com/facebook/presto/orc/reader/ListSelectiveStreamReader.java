@@ -31,6 +31,7 @@ import com.facebook.presto.spi.block.BlockLease;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.Type;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import org.joda.time.DateTimeZone;
@@ -56,6 +57,7 @@ import static com.facebook.presto.spi.block.ClosingBlockLease.newLease;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -64,6 +66,7 @@ public class ListSelectiveStreamReader
         implements SelectiveStreamReader
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(ListSelectiveStreamReader.class).instanceSize();
+    private static final int ELEMENT_LENGTH_UNBOUNDED = -1;
 
     private final StreamDescriptor streamDescriptor;
     private final int level;
@@ -74,6 +77,7 @@ public class ListSelectiveStreamReader
     private final boolean outputRequired;
     @Nullable
     private final ArrayType outputType;
+    private final int maxElementLength;
     // elementStreamReader is null if output is not required and filter is a simple IS [NOT] NULL
     @Nullable
     private final SelectiveStreamReader elementStreamReader;
@@ -135,6 +139,23 @@ public class ListSelectiveStreamReader
         this.outputType = (ArrayType) outputType.orElse(null);
         this.level = subfieldLevel;
 
+        if (subfields.stream()
+                .map(Subfield::getPath)
+                .map(path -> path.get(0))
+                .anyMatch(Subfield.AllSubscripts.class::isInstance)) {
+            maxElementLength = ELEMENT_LENGTH_UNBOUNDED;
+        }
+        else {
+            maxElementLength = subfields.stream()
+                    .map(Subfield::getPath)
+                    .map(path -> path.get(0))
+                    .map(Subfield.LongSubscript.class::cast)
+                    .map(Subfield.LongSubscript::getIndex)
+                    .mapToInt(Long::intValue)
+                    .max()
+                    .orElse(ELEMENT_LENGTH_UNBOUNDED);
+        }
+
         if (listFilter != null) {
             nullsAllowed = true;
             nonNullsAllowed = true;
@@ -171,7 +192,15 @@ public class ListSelectiveStreamReader
         StreamDescriptor elementStreamDescriptor = streamDescriptor.getNestedStreams().get(0);
         Optional<Type> elementOutputType = outputType.map(type -> type.getTypeParameters().get(0));
 
-        this.elementStreamReader = createNestedStreamReader(elementStreamDescriptor, level + 1, Optional.ofNullable(this.listFilter), elementOutputType, hiveStorageTimeZone, systemMemoryContext);
+        List<Subfield> elementSubfields = ImmutableList.of();
+        if (subfields.stream().map(Subfield::getPath).allMatch(path -> path.size() > 1)) {
+            elementSubfields = subfields.stream()
+                    .map(subfield -> subfield.tail(subfield.getRootName()))
+                    .distinct()
+                    .collect(toImmutableList());
+        }
+
+        this.elementStreamReader = createNestedStreamReader(elementStreamDescriptor, level + 1, Optional.ofNullable(this.listFilter), elementOutputType, elementSubfields, hiveStorageTimeZone, systemMemoryContext);
         this.systemMemoryContext = systemMemoryContext.newLocalMemoryContext(ListSelectiveStreamReader.class.getSimpleName());
     }
 
@@ -376,7 +405,7 @@ public class ListSelectiveStreamReader
         }
         elementOffsets[outputPositionCount] = elementPositionCount + skippedElements;
 
-        populateElementPositions(elementPositionCount);
+        elementPositionCount = populateElementPositions(elementPositionCount);
 
         if (listFilter != null) {
             listFilter.populateElementFilters(outputPositionCount, nulls, elementLengths, elementPositionCount);
@@ -388,7 +417,7 @@ public class ListSelectiveStreamReader
         else if (listFilter != null && listFilter.getChild() != null) {
             elementStreamReader.read(elementReadOffset, elementPositions, elementPositionCount);
         }
-        elementReadOffset += elementPositionCount + skippedElements;
+        elementReadOffset += elementOffsets[outputPositionCount];
 
         if (listFilter == null || level > 0) {
             populateOutputPositionsNoFilter(elementPositionCount);
@@ -400,17 +429,24 @@ public class ListSelectiveStreamReader
         return streamPosition;
     }
 
-    private void populateElementPositions(int elementPositionCount)
+    private int populateElementPositions(int elementPositionCount)
     {
         elementPositions = ensureCapacity(elementPositions, elementPositionCount);
 
         int index = 0;
         for (int i = 0; i < outputPositionCount; i++) {
-            for (int j = 0; j < elementLengths[i]; j++) {
+            int length = elementLengths[i];
+            if (maxElementLength != ELEMENT_LENGTH_UNBOUNDED && length > maxElementLength) {
+                length = maxElementLength;
+                elementLengths[i] = length;
+            }
+
+            for (int j = 0; j < length; j++) {
                 elementPositions[index] = elementOffsets[i] + j;
                 index++;
             }
         }
+        return index;
     }
 
     private void populateOutputPositionsNoFilter(int elementPositionCount)

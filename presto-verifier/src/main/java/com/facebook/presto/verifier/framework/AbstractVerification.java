@@ -21,7 +21,9 @@ import com.facebook.presto.verifier.event.QueryInfo;
 import com.facebook.presto.verifier.event.VerifierQueryEvent;
 import com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus;
 import com.facebook.presto.verifier.framework.MatchResult.MatchType;
-import com.facebook.presto.verifier.resolver.FailureResolver;
+import com.facebook.presto.verifier.prestoaction.PrestoAction;
+import com.facebook.presto.verifier.resolver.FailureResolverManager;
+import com.facebook.presto.verifier.rewrite.QueryRewriter;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 
@@ -66,19 +68,18 @@ public abstract class AbstractVerification
     private final PrestoAction prestoAction;
     private final SourceQuery sourceQuery;
     private final QueryRewriter queryRewriter;
-    private final List<FailureResolver> failureResolvers;
+    private final FailureResolverManager failureResolverManager;
     private final VerificationContext verificationContext;
 
     private final String testId;
     private final boolean runTearDownOnResultMismatch;
-    private final boolean failureResolverEnabled;
 
     public AbstractVerification(
             VerificationResubmitter verificationResubmitter,
             PrestoAction prestoAction,
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
-            List<FailureResolver> failureResolvers,
+            FailureResolverManager failureResolverManager,
             VerificationContext verificationContext,
             VerifierConfig verifierConfig)
     {
@@ -86,17 +87,16 @@ public abstract class AbstractVerification
         this.prestoAction = requireNonNull(prestoAction, "prestoAction is null");
         this.sourceQuery = requireNonNull(sourceQuery, "sourceQuery is null");
         this.queryRewriter = requireNonNull(queryRewriter, "queryRewriter is null");
-        this.failureResolvers = requireNonNull(failureResolvers, "failureResolvers is null");
+        this.failureResolverManager = requireNonNull(failureResolverManager, "failureResolverManager is null");
         this.verificationContext = requireNonNull(verificationContext, "verificationContext is null");
 
         this.testId = requireNonNull(verifierConfig.getTestId(), "testId is null");
         this.runTearDownOnResultMismatch = verifierConfig.isRunTearDownOnResultMismatch();
-        this.failureResolverEnabled = verifierConfig.isFailureResolverEnabled();
     }
 
     protected abstract VerificationResult verify(QueryBundle control, QueryBundle test);
 
-    protected abstract Optional<Boolean> isDeterministic(QueryBundle control, ChecksumResult firstChecksum);
+    protected abstract DeterminismAnalysis analyzeDeterminism(QueryBundle control, ChecksumResult firstChecksum);
 
     @Override
     public SourceQuery getSourceQuery()
@@ -111,7 +111,7 @@ public abstract class AbstractVerification
         QueryBundle control = null;
         QueryBundle test = null;
         VerificationResult verificationResult = null;
-        Optional<Boolean> deterministic = Optional.empty();
+        Optional<DeterminismAnalysis> determinismAnalysis = Optional.empty();
 
         QueryStats controlQueryStats = null;
         QueryStats testQueryStats = null;
@@ -123,10 +123,13 @@ public abstract class AbstractVerification
             testQueryStats = setupAndRun(test, false);
             verificationResult = verify(control, test);
 
-            deterministic = verificationResult.getMatchResult().isMismatchPossiblyCausedByNonDeterminism() ?
-                    isDeterministic(control, verificationResult.getMatchResult().getControlChecksum()) :
-                    Optional.empty();
-            resultMismatched = deterministic.orElse(true) && !verificationResult.getMatchResult().isMatched();
+            if (verificationResult.getMatchResult().isMismatchPossiblyCausedByNonDeterminism()) {
+                determinismAnalysis = Optional.of(analyzeDeterminism(control, verificationResult.getMatchResult().getControlChecksum()));
+            }
+            boolean maybeDeterministic = !determinismAnalysis.isPresent() ||
+                    determinismAnalysis.get().isDeterministic() ||
+                    determinismAnalysis.get().isUnknown();
+            resultMismatched = maybeDeterministic && !verificationResult.getMatchResult().isMatched();
 
             return Optional.of(buildEvent(
                     Optional.of(control),
@@ -135,7 +138,7 @@ public abstract class AbstractVerification
                     Optional.ofNullable(testQueryStats),
                     Optional.empty(),
                     Optional.of(verificationResult),
-                    deterministic));
+                    determinismAnalysis));
         }
         catch (QueryException e) {
             if (verificationResubmitter.resubmit(this, e)) {
@@ -148,7 +151,7 @@ public abstract class AbstractVerification
                     Optional.ofNullable(testQueryStats),
                     Optional.of(e),
                     Optional.ofNullable(verificationResult),
-                    deterministic));
+                    determinismAnalysis));
         }
         catch (Throwable t) {
             log.error(t);
@@ -207,7 +210,7 @@ public abstract class AbstractVerification
             Optional<QueryStats> testStats,
             Optional<QueryException> queryException,
             Optional<VerificationResult> verificationResult,
-            Optional<Boolean> deterministic)
+            Optional<DeterminismAnalysis> determinismAnalysis)
     {
         boolean succeeded = verificationResult.isPresent() && verificationResult.get().getMatchResult().isMatched();
 
@@ -215,10 +218,14 @@ public abstract class AbstractVerification
         QueryState testState = getQueryState(testStats, queryException, TEST);
         String errorMessage = null;
         if (!succeeded) {
-            errorMessage = format("Test state %s, Control state %s\n", testState.name(), controlState.name());
+            errorMessage = format("Test state %s, Control state %s.\n\n", testState.name(), controlState.name());
 
             if (queryException.isPresent()) {
-                errorMessage += getStackTraceAsString(queryException.get().getCause());
+                errorMessage += format(
+                        "%s query failed on %s cluster:\n%s",
+                        queryException.get().getQueryStage().name().replace("_", " "),
+                        queryException.get().getQueryStage().getTargetCluster(),
+                        getStackTraceAsString(queryException.get().getCause()));
             }
             if (verificationResult.isPresent()) {
                 errorMessage += verificationResult.get().getMatchResult().getResultsComparison();
@@ -226,7 +233,7 @@ public abstract class AbstractVerification
         }
 
         EventStatus status;
-        Optional<SkippedReason> skippedReason = getSkippedReason(controlState, deterministic);
+        Optional<SkippedReason> skippedReason = getSkippedReason(controlState, determinismAnalysis);
         Optional<String> resolveMessage = Optional.empty();
         if (succeeded) {
             status = SUCCEEDED;
@@ -237,7 +244,7 @@ public abstract class AbstractVerification
         else {
             if (controlState == QueryState.SUCCEEDED && queryException.isPresent()) {
                 checkState(controlStats.isPresent(), "control succeeded but control stats is missing");
-                resolveMessage = resolveFailure(controlStats.get(), queryException.get());
+                resolveMessage = failureResolverManager.resolve(controlStats.get(), queryException.get(), test);
             }
             status = resolveMessage.isPresent() ? FAILED_RESOLVED : FAILED;
         }
@@ -261,7 +268,7 @@ public abstract class AbstractVerification
                 sourceQuery.getName(),
                 status,
                 skippedReason,
-                deterministic,
+                determinismAnalysis,
                 resolveMessage,
                 buildQueryInfo(
                         sourceQuery.getControlConfiguration(),
@@ -281,20 +288,6 @@ public abstract class AbstractVerification
                 Optional.ofNullable(errorMessage),
                 queryException.map(QueryException::toQueryFailure),
                 verificationContext.getQueryFailures());
-    }
-
-    private Optional<String> resolveFailure(QueryStats controlStats, QueryException queryException)
-    {
-        if (!failureResolverEnabled) {
-            return Optional.empty();
-        }
-        for (FailureResolver failureResolver : failureResolvers) {
-            Optional<String> resolveMessage = failureResolver.resolve(controlStats, queryException);
-            if (resolveMessage.isPresent()) {
-                return resolveMessage;
-            }
-        }
-        return Optional.empty();
     }
 
     private static QueryInfo buildQueryInfo(
@@ -331,7 +324,7 @@ public abstract class AbstractVerification
                 .collect(toImmutableList());
     }
 
-    private static Optional<SkippedReason> getSkippedReason(QueryState controlState, Optional<Boolean> deterministic)
+    private static Optional<SkippedReason> getSkippedReason(QueryState controlState, Optional<DeterminismAnalysis> determinismAnalysis)
     {
         switch (controlState) {
             case FAILED:
@@ -343,7 +336,7 @@ public abstract class AbstractVerification
             case NOT_RUN:
                 return Optional.of(FAILED_BEFORE_CONTROL_QUERY);
         }
-        if (!deterministic.orElse(true)) {
+        if (determinismAnalysis.isPresent() && determinismAnalysis.get().isNonDeterministic()) {
             return Optional.of(NON_DETERMINISTIC);
         }
         return Optional.empty();
