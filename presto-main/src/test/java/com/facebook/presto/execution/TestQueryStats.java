@@ -40,6 +40,7 @@ public class TestQueryStats
     public static final List<OperatorStats> operatorSummaries = ImmutableList.of(
             new OperatorStats(
                     10,
+                    101,
                     11,
                     12,
                     new PlanNodeId("13"),
@@ -74,6 +75,7 @@ public class TestQueryStats
                     null),
             new OperatorStats(
                     20,
+                    201,
                     21,
                     22,
                     new PlanNodeId("23"),
@@ -108,6 +110,7 @@ public class TestQueryStats
                     null),
             new OperatorStats(
                     30,
+                    301,
                     31,
                     32,
                     new PlanNodeId("33"),
@@ -198,6 +201,7 @@ public class TestQueryStats
 
             ImmutableList.of(new StageGcStatistics(
                     101,
+                    1001,
                     102,
                     103,
                     104,
@@ -276,6 +280,7 @@ public class TestQueryStats
         assertEquals(actual.getStageGcStatistics().size(), 1);
         StageGcStatistics gcStatistics = actual.getStageGcStatistics().get(0);
         assertEquals(gcStatistics.getStageId(), 101);
+        assertEquals(gcStatistics.getStageExecutionId(), 1001);
         assertEquals(gcStatistics.getTasks(), 102);
         assertEquals(gcStatistics.getFullGcTasks(), 103);
         assertEquals(gcStatistics.getMinFullGcSec(), 104);

@@ -26,6 +26,7 @@ import com.facebook.presto.hive.metastore.PrestoTableType;
 import com.facebook.presto.hive.metastore.PrincipalPrivileges;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.hive.metastore.SortingColumn;
+import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.hive.metastore.StorageFormat;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.hive.metastore.thrift.ThriftMetastoreUtil;
@@ -154,6 +155,7 @@ import static com.facebook.presto.hive.HiveSessionProperties.isCollectColumnStat
 import static com.facebook.presto.hive.HiveSessionProperties.isOfflineDataDebugModeEnabled;
 import static com.facebook.presto.hive.HiveSessionProperties.isOptimizedMismatchedBucketCount;
 import static com.facebook.presto.hive.HiveSessionProperties.isRespectTableFormat;
+import static com.facebook.presto.hive.HiveSessionProperties.isSortedWriteToTempPathEnabled;
 import static com.facebook.presto.hive.HiveSessionProperties.isSortedWritingEnabled;
 import static com.facebook.presto.hive.HiveSessionProperties.isStatisticsEnabled;
 import static com.facebook.presto.hive.HiveTableProperties.AVRO_SCHEMA_URL;
@@ -220,6 +222,7 @@ import static com.facebook.presto.spi.security.PrincipalType.USER;
 import static com.facebook.presto.spi.statistics.TableStatisticType.ROW_COUNT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.base.Verify.verify;
@@ -707,7 +710,7 @@ public class HiveMetadata
         }
         else {
             tableType = MANAGED_TABLE;
-            LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
+            LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, isTempPathRequired(session, bucketProperty));
             targetPath = locationService.getQueryWriteInfo(locationHandle).getTargetPath();
         }
 
@@ -1116,7 +1119,7 @@ public class HiveMetadata
                 .collect(toList());
         checkPartitionTypesSupported(partitionColumns);
 
-        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
+        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, isTempPathRequired(session, bucketProperty));
         HiveOutputTableHandle result = new HiveOutputTableHandle(
                 schemaName,
                 tableName,
@@ -1133,7 +1136,14 @@ public class HiveMetadata
                 tableProperties);
 
         WriteInfo writeInfo = locationService.getQueryWriteInfo(locationHandle);
-        metastore.declareIntentionToWrite(session, writeInfo.getWriteMode(), writeInfo.getWritePath(), result.getFilePrefix(), schemaTableName, false);
+        metastore.declareIntentionToWrite(
+                session,
+                writeInfo.getWriteMode(),
+                writeInfo.getWritePath(),
+                writeInfo.getTempPath(),
+                result.getFilePrefix(),
+                schemaTableName,
+                false);
 
         return result;
     }
@@ -1346,11 +1356,12 @@ public class HiveMetadata
         HiveStorageFormat tableStorageFormat = extractHiveStorageFormat(table.get());
         LocationHandle locationHandle;
         boolean isTemporaryTable = table.get().getTableType().equals(TEMPORARY_TABLE);
+        boolean tempPathRequired = isTempPathRequired(session, table.map(Table::getStorage).flatMap(Storage::getBucketProperty));
         if (isTemporaryTable) {
-            locationHandle = locationService.forTemporaryTable(metastore, session, table.get());
+            locationHandle = locationService.forTemporaryTable(metastore, session, table.get(), tempPathRequired);
         }
         else {
-            locationHandle = locationService.forExistingTable(metastore, session, table.get());
+            locationHandle = locationService.forExistingTable(metastore, session, table.get(), tempPathRequired);
         }
         HiveInsertTableHandle result = new HiveInsertTableHandle(
                 tableName.getSchemaName(),
@@ -1365,7 +1376,14 @@ public class HiveMetadata
                 isTemporaryTable ? getTemporaryTableCompressionCodec(session) : getCompressionCodec(session));
 
         WriteInfo writeInfo = locationService.getQueryWriteInfo(locationHandle);
-        metastore.declareIntentionToWrite(session, writeInfo.getWriteMode(), writeInfo.getWritePath(), result.getFilePrefix(), tableName, isTemporaryTable);
+        metastore.declareIntentionToWrite(
+                session,
+                writeInfo.getWriteMode(),
+                writeInfo.getWritePath(),
+                writeInfo.getTempPath(),
+                result.getFilePrefix(),
+                tableName,
+                isTemporaryTable);
         return result;
     }
 
@@ -1471,6 +1489,11 @@ public class HiveMetadata
                         .map(PartitionUpdate::getName)
                         .map(name -> name.isEmpty() ? UNPARTITIONED_ID : name)
                         .collect(Collectors.toList())));
+    }
+
+    private static boolean isTempPathRequired(ConnectorSession session, Optional<HiveBucketProperty> bucketProperty)
+    {
+        return isSortedWriteToTempPathEnabled(session) && bucketProperty.map(property -> !property.getSortedBy().isEmpty()).orElse(false);
     }
 
     private List<String> getTargetFileNames(List<FileWriteInfo> fileWriteInfos)
@@ -1758,12 +1781,16 @@ public class HiveMetadata
                 .map(HiveColumnHandle.class::cast)
                 .collect(toImmutableMap(HiveColumnHandle::getName, Functions.identity()));
 
+        SchemaTableName tableName = ((HiveTableHandle) tableHandle).getSchemaTableName();
         return new ConnectorPushdownFilterResult(
                 getTableLayout(
                         session,
                         new HiveTableLayoutHandle(
-                                ((HiveTableHandle) tableHandle).getSchemaTableName(),
-                                ImmutableList.copyOf(hivePartitionResult.getPartitionColumns()),
+                                tableName,
+                                hivePartitionResult.getPartitionColumns(),
+                                // remove comments to optimize serialization costs
+                                pruneColumnComments(hivePartitionResult.getDataColumns()),
+                                hivePartitionResult.getTableParameters(),
                                 hivePartitionResult.getPartitions(),
                                 domainPredicate,
                                 decomposedFilter.getRemainingExpression(),
@@ -1771,9 +1798,23 @@ public class HiveMetadata
                                 hivePartitionResult.getEnforcedConstraint(),
                                 hivePartitionResult.getBucketHandle(),
                                 hivePartitionResult.getBucketFilter(),
-                                session,
-                                rowExpression -> rowExpressionService.formatRowExpression(session, rowExpression))),
+                                createTableLayoutString(session, tableName, hivePartitionResult.getBucketHandle(), decomposedFilter.getRemainingExpression(), domainPredicate))),
                 TRUE_CONSTANT);
+    }
+
+    private String createTableLayoutString(
+            ConnectorSession session,
+            SchemaTableName tableName,
+            Optional<HiveBucketHandle> bucketHandle,
+            RowExpression remainingPredicate,
+            TupleDomain<Subfield> domainPredicate)
+    {
+        return toStringHelper(tableName.toString())
+                .omitNullValues()
+                .add("buckets", bucketHandle.map(HiveBucketHandle::getReadBucketCount).orElse(null))
+                .add("filter", TRUE_CONSTANT.equals(remainingPredicate) ? null : rowExpressionService.formatRowExpression(session, remainingPredicate))
+                .add("domains", domainPredicate.isAll() ? null : domainPredicate.toString(session))
+                .toString();
     }
 
     private static Set<VariableReferenceExpression> extractAll(RowExpression expression)
@@ -1817,21 +1858,24 @@ public class HiveMetadata
             hiveBucketHandle = Optional.of(createVirtualBucketHandle(virtualBucketCount));
         }
 
+        TupleDomain<Subfield> domainPredicate = hivePartitionResult.getEffectivePredicate().transform(HiveMetadata::toSubfield);
         return ImmutableList.of(new ConnectorTableLayoutResult(
                 getTableLayout(
                         session,
                         new HiveTableLayoutHandle(
                                 handle.getSchemaTableName(),
-                                ImmutableList.copyOf(hivePartitionResult.getPartitionColumns()),
+                                hivePartitionResult.getPartitionColumns(),
+                                // remove comments to optimize serialization costs
+                                pruneColumnComments(hivePartitionResult.getDataColumns()),
+                                hivePartitionResult.getTableParameters(),
                                 hivePartitionResult.getPartitions(),
-                                hivePartitionResult.getEffectivePredicate().transform(HiveMetadata::toSubfield),
+                                domainPredicate,
                                 TRUE_CONSTANT,
                                 predicateColumns,
                                 hivePartitionResult.getEnforcedConstraint(),
                                 hiveBucketHandle,
                                 hivePartitionResult.getBucketFilter(),
-                                session,
-                                rowExpression -> rowExpressionService.formatRowExpression(session, rowExpression))),
+                                createTableLayoutString(session, handle.getSchemaTableName(), hivePartitionResult.getBucketHandle(), TRUE_CONSTANT, domainPredicate))),
                 hivePartitionResult.getUnenforcedConstraint()));
     }
 
@@ -1857,11 +1901,18 @@ public class HiveMetadata
         return false;
     }
 
+    private List<Column> pruneColumnComments(List<Column> columns)
+    {
+        return columns.stream()
+                .map(column -> new Column(column.getName(), column.getType(), Optional.empty()))
+                .collect(toImmutableList());
+    }
+
     @Override
     public ConnectorTableLayout getTableLayout(ConnectorSession session, ConnectorTableLayoutHandle layoutHandle)
     {
         HiveTableLayoutHandle hiveLayoutHandle = (HiveTableLayoutHandle) layoutHandle;
-        List<ColumnHandle> partitionColumns = hiveLayoutHandle.getPartitionColumns();
+        List<ColumnHandle> partitionColumns = ImmutableList.copyOf(hiveLayoutHandle.getPartitionColumns());
         List<HivePartition> partitions = hiveLayoutHandle.getPartitions().get();
 
         TupleDomain<ColumnHandle> predicate = createPredicate(partitionColumns, partitions);
@@ -1997,6 +2048,8 @@ public class HiveMetadata
         return new HiveTableLayoutHandle(
                 hiveLayoutHandle.getSchemaTableName(),
                 hiveLayoutHandle.getPartitionColumns(),
+                hiveLayoutHandle.getDataColumns(),
+                hiveLayoutHandle.getTableParameters(),
                 hiveLayoutHandle.getPartitions().get(),
                 hiveLayoutHandle.getDomainPredicate(),
                 hiveLayoutHandle.getRemainingPredicate(),
@@ -2004,8 +2057,7 @@ public class HiveMetadata
                 hiveLayoutHandle.getPartitionColumnPredicate(),
                 Optional.of(new HiveBucketHandle(bucketHandle.getColumns(), bucketHandle.getTableBucketCount(), hivePartitioningHandle.getBucketCount())),
                 hiveLayoutHandle.getBucketFilter(),
-                session,
-                rowExpression -> rowExpressionService.formatRowExpression(session, rowExpression));
+                hiveLayoutHandle.getLayoutString());
     }
 
     @Override

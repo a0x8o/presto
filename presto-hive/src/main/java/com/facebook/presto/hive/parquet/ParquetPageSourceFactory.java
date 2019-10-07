@@ -17,6 +17,7 @@ import com.facebook.presto.hive.FileFormatDataSourceStats;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveBatchPageSourceFactory;
 import com.facebook.presto.hive.HiveColumnHandle;
+import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.parquet.ParquetCorruptionException;
 import com.facebook.presto.parquet.ParquetDataSource;
@@ -36,6 +37,7 @@ import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -58,7 +60,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.Set;
 
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
@@ -66,9 +67,9 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_MISSING_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_SCHEMA_MISMATCH;
+import static com.facebook.presto.hive.HiveSessionProperties.getParquetMaxReadBlockSize;
 import static com.facebook.presto.hive.HiveSessionProperties.isFailOnCorruptedParquetStatistics;
 import static com.facebook.presto.hive.HiveSessionProperties.isUseParquetColumnNames;
-import static com.facebook.presto.hive.HiveUtil.getDeserializerClassName;
 import static com.facebook.presto.hive.parquet.HdfsParquetDataSource.buildHdfsParquetDataSource;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.parquet.ParquetTypeUtils.getColumnIO;
@@ -96,14 +97,6 @@ import static com.google.common.base.Strings.nullToEmpty;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category.PRIMITIVE;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FIXED_LEN_BYTE_ARRAY;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FLOAT;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT96;
 
 public class ParquetPageSourceFactory
         implements HiveBatchPageSourceFactory
@@ -133,12 +126,13 @@ public class ParquetPageSourceFactory
             long start,
             long length,
             long fileSize,
-            Properties schema,
+            Storage storage,
+            Map<String, String> tableParameters,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone)
     {
-        if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema))) {
+        if (!PARQUET_SERDE_CLASS_NAMES.contains(storage.getStorageFormat().getSerDe())) {
             return Optional.empty();
         }
 
@@ -150,10 +144,10 @@ public class ParquetPageSourceFactory
                 start,
                 length,
                 fileSize,
-                schema,
                 columns,
                 isUseParquetColumnNames(session),
                 isFailOnCorruptedParquetStatistics(session),
+                getParquetMaxReadBlockSize(session),
                 typeManager,
                 effectivePredicate,
                 stats));
@@ -167,10 +161,10 @@ public class ParquetPageSourceFactory
             long start,
             long length,
             long fileSize,
-            Properties schema,
             List<HiveColumnHandle> columns,
             boolean useParquetColumnNames,
             boolean failOnCorruptedParquetStatistics,
+            DataSize maxReadBlockSize,
             TypeManager typeManager,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             FileFormatDataSourceStats stats)
@@ -219,14 +213,14 @@ public class ParquetPageSourceFactory
                     messageColumnIO,
                     blocks.build(),
                     dataSource,
-                    systemMemoryContext);
+                    systemMemoryContext,
+                    maxReadBlockSize);
 
             return new ParquetPageSource(
                     parquetReader,
                     fileSchema,
                     messageColumnIO,
                     typeManager,
-                    schema,
                     columns,
                     effectivePredicate,
                     useParquetColumnNames);

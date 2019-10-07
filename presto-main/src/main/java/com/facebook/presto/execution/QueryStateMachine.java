@@ -41,6 +41,7 @@ import com.google.common.base.Ticker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import com.google.common.collect.Streams;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -67,7 +68,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import static com.facebook.presto.execution.BasicStageStats.EMPTY_STAGE_STATS;
+import static com.facebook.presto.execution.BasicStageExecutionStats.EMPTY_STAGE_STATS;
 import static com.facebook.presto.execution.QueryState.FINISHED;
 import static com.facebook.presto.execution.QueryState.FINISHING;
 import static com.facebook.presto.execution.QueryState.PLANNING;
@@ -317,7 +318,7 @@ public class QueryStateMachine
         peakTaskTotalMemory.accumulateAndGet(taskTotalMemoryInBytes, Math::max);
     }
 
-    public BasicQueryInfo getBasicQueryInfo(Optional<BasicStageStats> rootStage)
+    public BasicQueryInfo getBasicQueryInfo(Optional<BasicStageExecutionStats> rootStage)
     {
         // Query state must be captured first in order to provide a
         // correct view of the query.  For example, building this
@@ -333,7 +334,7 @@ public class QueryStateMachine
             }
         }
 
-        BasicStageStats stageStats = rootStage.orElse(EMPTY_STAGE_STATS);
+        BasicStageExecutionStats stageStats = rootStage.orElse(EMPTY_STAGE_STATS);
         BasicQueryStats queryStats = new BasicQueryStats(
                 queryStateTimer.getCreateTime(),
                 getEndTime().orElse(null),
@@ -401,8 +402,8 @@ public class QueryStateMachine
         // Traversing all tasks is expensive, thus only construct failedTasks list when query finished.
         if (state.isDone()) {
             failedTasks = Optional.of(getAllStages(rootStage).stream()
-                    .map(StageInfo::getTasks)
-                    .flatMap(List::stream)
+                    .flatMap(stageInfo -> Streams.concat(ImmutableList.of(stageInfo.getLatestAttemptExecutionInfo()).stream(), stageInfo.getPreviousAttemptsExecutionInfos().stream()))
+                    .flatMap(execution -> execution.getTasks().stream())
                     .filter(taskInfo -> taskInfo.getTaskStatus().getState() == TaskState.FAILED)
                     .map(TaskInfo::getTaskStatus)
                     .map(TaskStatus::getTaskId)
@@ -487,62 +488,62 @@ public class QueryStateMachine
         ImmutableList.Builder<OperatorStats> operatorStatsSummary = ImmutableList.builder();
         boolean completeInfo = true;
         for (StageInfo stageInfo : getAllStages(rootStage)) {
-            StageStats stageStats = stageInfo.getStageStats();
-            totalTasks += stageStats.getTotalTasks();
-            runningTasks += stageStats.getRunningTasks();
-            completedTasks += stageStats.getCompletedTasks();
+            StageExecutionStats stageExecutionStats = stageInfo.getLatestAttemptExecutionInfo().getStats();
+            totalTasks += stageExecutionStats.getTotalTasks();
+            runningTasks += stageExecutionStats.getRunningTasks();
+            completedTasks += stageExecutionStats.getCompletedTasks();
 
-            totalDrivers += stageStats.getTotalDrivers();
-            queuedDrivers += stageStats.getQueuedDrivers();
-            runningDrivers += stageStats.getRunningDrivers();
-            blockedDrivers += stageStats.getBlockedDrivers();
-            completedDrivers += stageStats.getCompletedDrivers();
+            totalDrivers += stageExecutionStats.getTotalDrivers();
+            queuedDrivers += stageExecutionStats.getQueuedDrivers();
+            runningDrivers += stageExecutionStats.getRunningDrivers();
+            blockedDrivers += stageExecutionStats.getBlockedDrivers();
+            completedDrivers += stageExecutionStats.getCompletedDrivers();
 
-            cumulativeUserMemory += stageStats.getCumulativeUserMemory();
-            userMemoryReservation += stageStats.getUserMemoryReservation().toBytes();
-            totalMemoryReservation += stageStats.getTotalMemoryReservation().toBytes();
-            totalScheduledTime += stageStats.getTotalScheduledTime().roundTo(MILLISECONDS);
-            totalCpuTime += stageStats.getTotalCpuTime().roundTo(MILLISECONDS);
-            totalBlockedTime += stageStats.getTotalBlockedTime().roundTo(MILLISECONDS);
-            if (!stageInfo.getState().isDone()) {
-                fullyBlocked &= stageStats.isFullyBlocked();
-                blockedReasons.addAll(stageStats.getBlockedReasons());
+            cumulativeUserMemory += stageExecutionStats.getCumulativeUserMemory();
+            userMemoryReservation += stageExecutionStats.getUserMemoryReservation().toBytes();
+            totalMemoryReservation += stageExecutionStats.getTotalMemoryReservation().toBytes();
+            totalScheduledTime += stageExecutionStats.getTotalScheduledTime().roundTo(MILLISECONDS);
+            totalCpuTime += stageExecutionStats.getTotalCpuTime().roundTo(MILLISECONDS);
+            totalBlockedTime += stageExecutionStats.getTotalBlockedTime().roundTo(MILLISECONDS);
+            if (!stageInfo.getLatestAttemptExecutionInfo().getState().isDone()) {
+                fullyBlocked &= stageExecutionStats.isFullyBlocked();
+                blockedReasons.addAll(stageExecutionStats.getBlockedReasons());
             }
 
             if (stageInfo.getPlan().isPresent()) {
                 PlanFragment plan = stageInfo.getPlan().get();
                 if (!plan.getTableScanSchedulingOrder().isEmpty()) {
-                    rawInputDataSize += stageStats.getRawInputDataSize().toBytes();
-                    rawInputPositions += stageStats.getRawInputPositions();
+                    rawInputDataSize += stageExecutionStats.getRawInputDataSize().toBytes();
+                    rawInputPositions += stageExecutionStats.getRawInputPositions();
 
-                    processedInputDataSize += stageStats.getProcessedInputDataSize().toBytes();
-                    processedInputPositions += stageStats.getProcessedInputPositions();
+                    processedInputDataSize += stageExecutionStats.getProcessedInputDataSize().toBytes();
+                    processedInputPositions += stageExecutionStats.getProcessedInputPositions();
                 }
 
                 if (plan.isOutputTableWriterFragment()) {
-                    writtenOutputPositions += stageInfo.getStageStats().getOperatorSummaries().stream()
+                    writtenOutputPositions += stageExecutionStats.getOperatorSummaries().stream()
                             .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
                             .mapToLong(OperatorStats::getInputPositions)
                             .sum();
-                    writtenOutputLogicalDataSize += stageInfo.getStageStats().getOperatorSummaries().stream()
+                    writtenOutputLogicalDataSize += stageExecutionStats.getOperatorSummaries().stream()
                             .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
                             .mapToLong(stats -> stats.getInputDataSize().toBytes())
                             .sum();
-                    writtenOutputPhysicalDataSize += stageStats.getPhysicalWrittenDataSize().toBytes();
+                    writtenOutputPhysicalDataSize += stageExecutionStats.getPhysicalWrittenDataSize().toBytes();
                 }
                 else {
-                    writtenIntermediatePhysicalDataSize += stageStats.getPhysicalWrittenDataSize().toBytes();
+                    writtenIntermediatePhysicalDataSize += stageExecutionStats.getPhysicalWrittenDataSize().toBytes();
                 }
             }
 
-            stageGcStatistics.add(stageStats.getGcInfo());
+            stageGcStatistics.add(stageExecutionStats.getGcInfo());
 
             completeInfo = completeInfo && stageInfo.isFinalStageInfo();
-            operatorStatsSummary.addAll(stageInfo.getStageStats().getOperatorSummaries());
+            operatorStatsSummary.addAll(stageExecutionStats.getOperatorSummaries());
         }
 
         if (rootStage.isPresent()) {
-            StageStats outputStageStats = rootStage.get().getStageStats();
+            StageExecutionStats outputStageStats = rootStage.get().getLatestAttemptExecutionInfo().getStats();
             outputDataSize += outputStageStats.getOutputDataSize().toBytes();
             outputPositions += outputStageStats.getOutputPositions();
         }
@@ -936,8 +937,9 @@ public class QueryStateMachine
             return false;
         }
         return getAllStages(rootStage).stream()
-                .map(StageInfo::getState)
-                .allMatch(state -> (state == StageState.RUNNING) || state.isDone());
+                .map(StageInfo::getLatestAttemptExecutionInfo)
+                .map(StageExecutionInfo::getState)
+                .allMatch(state -> (state == StageExecutionState.RUNNING) || state.isDone());
     }
 
     public Optional<ExecutionFailureInfo> getFailureInfo()
@@ -972,14 +974,11 @@ public class QueryStateMachine
         QueryInfo queryInfo = finalInfo.get();
         Optional<StageInfo> prunedOutputStage = queryInfo.getOutputStage().map(outputStage -> new StageInfo(
                 outputStage.getStageId(),
-                outputStage.getState(),
                 outputStage.getSelf(),
                 Optional.empty(), // Remove the plan
-                outputStage.getTypes(),
-                outputStage.getStageStats(),
-                ImmutableList.of(), // Remove the tasks
-                ImmutableList.of(), // Remove the substages
-                outputStage.getFailureCause()));
+                pruneStageExecutionInfo(outputStage.getLatestAttemptExecutionInfo()),
+                ImmutableList.of(), // Remove failed attempts
+                ImmutableList.of())); // Remove the substages
 
         QueryInfo prunedQueryInfo = new QueryInfo(
                 queryInfo.getQueryId(),
@@ -1012,6 +1011,17 @@ public class QueryStateMachine
                 queryInfo.getQueryType(),
                 queryInfo.getFailedTasks());
         finalQueryInfo.compareAndSet(finalInfo, Optional.of(prunedQueryInfo));
+    }
+
+    private static StageExecutionInfo pruneStageExecutionInfo(StageExecutionInfo info)
+    {
+        return new StageExecutionInfo(
+                info.getStageExecutionId(),
+                info.getState(),
+                info.getStats(),
+                // Remove the tasks
+                ImmutableList.of(),
+                info.getFailureCause());
     }
 
     private static QueryStats pruneQueryStats(QueryStats queryStats)

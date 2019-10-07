@@ -16,7 +16,7 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.execution.ExplainAnalyzeContext;
-import com.facebook.presto.execution.StageId;
+import com.facebook.presto.execution.StageExecutionId;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
@@ -264,8 +264,12 @@ import static com.facebook.presto.sql.planner.plan.TableWriterNode.WriterTarget;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.util.Reflection.constructorMethodHandle;
 import static com.facebook.presto.util.SpatialJoinUtils.ST_CONTAINS;
+import static com.facebook.presto.util.SpatialJoinUtils.ST_CROSSES;
 import static com.facebook.presto.util.SpatialJoinUtils.ST_DISTANCE;
+import static com.facebook.presto.util.SpatialJoinUtils.ST_EQUALS;
 import static com.facebook.presto.util.SpatialJoinUtils.ST_INTERSECTS;
+import static com.facebook.presto.util.SpatialJoinUtils.ST_OVERLAPS;
+import static com.facebook.presto.util.SpatialJoinUtils.ST_TOUCHES;
 import static com.facebook.presto.util.SpatialJoinUtils.ST_WITHIN;
 import static com.facebook.presto.util.SpatialJoinUtils.extractSupportedSpatialComparisons;
 import static com.facebook.presto.util.SpatialJoinUtils.extractSupportedSpatialFunctions;
@@ -591,9 +595,9 @@ public class LocalExecutionPlanner
             return taskContext.getSession();
         }
 
-        public StageId getStageId()
+        public StageExecutionId getStageExecutionId()
         {
-            return taskContext.getTaskId().getStageId();
+            return taskContext.getTaskId().getStageExecutionId();
         }
 
         public TypeProvider getTypes()
@@ -1225,7 +1229,7 @@ public class LocalExecutionPlanner
             try {
                 if (columns != null) {
                     Supplier<CursorProcessor> cursorProcessor = expressionCompiler.compileCursorProcessor(filterExpression, projections, sourceNode.getId());
-                    Supplier<PageProcessor> pageProcessor = expressionCompiler.compilePageProcessor(filterExpression, projections, Optional.of(context.getStageId() + "_" + planNodeId));
+                    Supplier<PageProcessor> pageProcessor = expressionCompiler.compilePageProcessor(filterExpression, projections, Optional.of(context.getStageExecutionId() + "_" + planNodeId));
 
                     SourceOperatorFactory operatorFactory = new ScanFilterAndProjectOperatorFactory(
                             context.getNextOperatorId(),
@@ -1243,7 +1247,7 @@ public class LocalExecutionPlanner
                     return new PhysicalOperation(operatorFactory, outputMappings, context, stageExecutionDescriptor.isScanGroupedExecution(sourceNode.getId()) ? GROUPED_EXECUTION : UNGROUPED_EXECUTION);
                 }
                 else {
-                    Supplier<PageProcessor> pageProcessor = expressionCompiler.compilePageProcessor(filterExpression, projections, Optional.of(context.getStageId() + "_" + planNodeId));
+                    Supplier<PageProcessor> pageProcessor = expressionCompiler.compilePageProcessor(filterExpression, projections, Optional.of(context.getStageExecutionId() + "_" + planNodeId));
 
                     OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                             context.getNextOperatorId(),
@@ -1714,8 +1718,20 @@ public class LocalExecutionPlanner
                     return (buildGeometry, probeGeometry, radius) -> buildGeometry.within(probeGeometry);
                 }
             }
+            if (functionName.equals(ST_CROSSES)) {
+                return (buildGeometry, probeGeometry, radius) -> buildGeometry.crosses(probeGeometry);
+            }
+            if (functionName.equals(ST_EQUALS)) {
+                return (buildGeometry, probeGeometry, radius) -> buildGeometry.Equals(probeGeometry);
+            }
             if (functionName.equals(ST_INTERSECTS)) {
                 return (buildGeometry, probeGeometry, radius) -> buildGeometry.intersects(probeGeometry);
+            }
+            if (functionName.equals(ST_OVERLAPS)) {
+                return (buildGeometry, probeGeometry, radius) -> buildGeometry.overlaps(probeGeometry);
+            }
+            if (functionName.equals(ST_TOUCHES)) {
+                return (buildGeometry, probeGeometry, radius) -> buildGeometry.touches(probeGeometry);
             }
             if (functionName.equals(ST_DISTANCE)) {
                 if (comparisonOperator.get() == OperatorType.LESS_THAN) {

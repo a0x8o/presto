@@ -244,6 +244,15 @@ public class TestSelectiveOrcReader
             throws Exception
     {
         testRoundTripNumeric(limit(cycle(ImmutableList.of(1, 3, 5, 7, 11, 13, 17)), NUM_ROWS), BigintRange.of(4, 14, false));
+
+        Random random = new Random(0);
+
+        // read selected positions from all nulls column
+        tester.testRoundTripTypes(ImmutableList.of(INTEGER, INTEGER),
+                ImmutableList.of(
+                        createList(NUM_ROWS, i -> random.nextInt(10)),
+                        createList(NUM_ROWS, i -> null)),
+                toSubfieldFilters(ImmutableMap.of(0, BigintRange.of(0, 5, false))));
     }
 
     @Test
@@ -609,6 +618,13 @@ public class TestSelectiveOrcReader
                         createList(NUM_ROWS, i -> random.nextInt()),
                         Collections.nCopies(NUM_ROWS, ImmutableMap.of())),
                 ImmutableList.of());
+
+        // read selected positions from all nulls map column
+        tester.testRoundTripTypes(ImmutableList.of(INTEGER, mapType(INTEGER, INTEGER)),
+                ImmutableList.of(
+                        createList(NUM_ROWS, i -> random.nextInt(10)),
+                        createList(NUM_ROWS, i -> null)),
+                toSubfieldFilters(ImmutableMap.of(0, BigintRange.of(0, 5, false))));
     }
 
     @Test
@@ -693,7 +709,7 @@ public class TestSelectiveOrcReader
     {
         // dictionary
         tester.testRoundTrip(VARCHAR, newArrayList(limit(cycle(ImmutableList.of("apple", "apple pie", "apple\uD835\uDC03", "apple\uFFFD")), NUM_ROWS)),
-                stringEquals(false, "apple"));
+                stringIn(false, "apple", "apple pie"));
 
         // direct
         tester.testRoundTrip(VARCHAR,
