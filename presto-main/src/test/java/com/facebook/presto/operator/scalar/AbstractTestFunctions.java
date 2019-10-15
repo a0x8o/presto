@@ -14,6 +14,7 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.metadata.BuiltInFunction;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.SqlScalarFunction;
@@ -22,7 +23,6 @@ import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.function.OperatorType;
-import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.type.DecimalParseResult;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.SqlDecimal;
@@ -186,30 +186,30 @@ public abstract class AbstractTestFunctions
     protected void registerScalarFunction(SqlScalarFunction sqlScalarFunction)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        metadata.getFunctionManager().addFunctions(ImmutableList.of(sqlScalarFunction));
+        metadata.getFunctionManager().registerBuiltInFunctions(ImmutableList.of(sqlScalarFunction));
     }
 
     protected void registerScalar(Class<?> clazz)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        List<SqlFunction> functions = new FunctionListBuilder()
+        List<BuiltInFunction> functions = new FunctionListBuilder()
                 .scalars(clazz)
                 .getFunctions();
-        metadata.getFunctionManager().addFunctions(functions);
+        metadata.getFunctionManager().registerBuiltInFunctions(functions);
     }
 
     protected void registerParametricScalar(Class<?> clazz)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        List<SqlFunction> functions = new FunctionListBuilder()
+        List<BuiltInFunction> functions = new FunctionListBuilder()
                 .scalar(clazz)
                 .getFunctions();
-        metadata.getFunctionManager().addFunctions(functions);
+        metadata.getFunctionManager().registerBuiltInFunctions(functions);
     }
 
     protected void registerFunctions(Plugin plugin)
     {
-        functionAssertions.getMetadata().addFunctions(extractFunctions(plugin.getFunctions()));
+        functionAssertions.getMetadata().registerBuiltInFunctions(extractFunctions(plugin.getFunctions()));
     }
 
     protected void registerTypes(Plugin plugin)

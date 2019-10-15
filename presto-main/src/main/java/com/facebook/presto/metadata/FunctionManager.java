@@ -18,7 +18,6 @@ import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionKind;
@@ -26,6 +25,7 @@ import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.function.FunctionMetadataManager;
 import com.facebook.presto.spi.function.FunctionNamespaceManager;
 import com.facebook.presto.spi.function.FunctionNamespaceManagerFactory;
+import com.facebook.presto.spi.function.FunctionNamespaceTransactionHandle;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlFunction;
@@ -36,6 +36,7 @@ import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
 import com.facebook.presto.sql.tree.QualifiedName;
+import com.facebook.presto.transaction.TransactionManager;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
@@ -65,6 +66,7 @@ import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static com.facebook.presto.sql.planner.LiteralEncoder.MAGIC_LITERAL_FUNCTION_PREFIX;
 import static com.facebook.presto.sql.planner.LiteralEncoder.getMagicLiteralFunctionSignature;
+import static com.facebook.presto.transaction.InMemoryTransactionManager.createTestTransactionManager;
 import static com.facebook.presto.type.TypeUtils.resolveTypes;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -83,40 +85,51 @@ public class FunctionManager
         implements FunctionMetadataManager
 {
     private final TypeManager typeManager;
-    private final BuiltInFunctionNamespaceManager builtInFunctionNamespace;
+    private final TransactionManager transactionManager;
+    private final BuiltInFunctionNamespaceManager builtInFunctionNamespaceManager;
     private final FunctionInvokerProvider functionInvokerProvider;
-    private final Map<String, FunctionNamespaceManagerFactory> functionNamespaceFactories = new ConcurrentHashMap<>();
+    private final Map<String, FunctionNamespaceManagerFactory> functionNamespaceManagerFactories = new ConcurrentHashMap<>();
     private final HandleResolver handleResolver;
-    private final Map<FullyQualifiedName.Prefix, FunctionNamespaceManager> functionNamespaces = new ConcurrentHashMap<>();
+    private final Map<FullyQualifiedName.Prefix, FunctionNamespaceManager<?>> functionNamespaces = new ConcurrentHashMap<>();
 
     @Inject
-    public FunctionManager(TypeManager typeManager, BlockEncodingSerde blockEncodingSerde, FeaturesConfig featuresConfig, HandleResolver handleResolver)
+    public FunctionManager(
+            TypeManager typeManager,
+            TransactionManager transactionManager,
+            BlockEncodingSerde blockEncodingSerde,
+            FeaturesConfig featuresConfig,
+            HandleResolver handleResolver)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
-        this.builtInFunctionNamespace = new BuiltInFunctionNamespaceManager(typeManager, blockEncodingSerde, featuresConfig, this);
-        this.functionNamespaces.put(DEFAULT_NAMESPACE, builtInFunctionNamespace);
+        this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
+        this.builtInFunctionNamespaceManager = new BuiltInFunctionNamespaceManager(typeManager, blockEncodingSerde, featuresConfig, this);
+        this.functionNamespaces.put(DEFAULT_NAMESPACE, builtInFunctionNamespaceManager);
         this.functionInvokerProvider = new FunctionInvokerProvider(this);
         this.handleResolver = handleResolver;
         if (typeManager instanceof TypeRegistry) {
             ((TypeRegistry) typeManager).setFunctionManager(this);
         }
+        // TODO: Provide a more encapsulated way for TransactionManager to register FunctionNamespaceManager
+        transactionManager.registerFunctionNamespaceManager(BuiltInFunctionNamespaceManager.NAME, builtInFunctionNamespaceManager);
     }
 
     @VisibleForTesting
     public FunctionManager(TypeManager typeManager, BlockEncodingSerde blockEncodingSerde, FeaturesConfig featuresConfig)
     {
-        this(typeManager, blockEncodingSerde, featuresConfig, new HandleResolver());
+        // TODO: Convert this constructor to a function in the testing package
+        this(typeManager, createTestTransactionManager(), blockEncodingSerde, featuresConfig, new HandleResolver());
     }
 
     public void loadFunctionNamespaces(String functionNamespaceManagerName, List<String> functionNamespacePrefixes, Map<String, String> properties)
     {
         requireNonNull(functionNamespaceManagerName, "connectorName is null");
-        FunctionNamespaceManagerFactory factory = functionNamespaceFactories.get(functionNamespaceManagerName);
+        FunctionNamespaceManagerFactory factory = functionNamespaceManagerFactories.get(functionNamespaceManagerName);
         checkState(factory != null, "No function namespace manager for %s", functionNamespaceManagerName);
-        FunctionNamespaceManager manager = factory.create(properties);
+        FunctionNamespaceManager<?> functionNamespaceManager = factory.create(properties);
 
+        transactionManager.registerFunctionNamespaceManager(functionNamespaceManagerName, functionNamespaceManager);
         for (String functionNamespacePrefix : functionNamespacePrefixes) {
-            if (functionNamespaces.putIfAbsent(FullyQualifiedName.Prefix.of(functionNamespacePrefix), manager) != null) {
+            if (functionNamespaces.putIfAbsent(FullyQualifiedName.Prefix.of(functionNamespacePrefix), functionNamespaceManager) != null) {
                 throw new IllegalArgumentException(format("Function namespace manager '%s' already registered to handle function namespace '%s'", factory.getName(), functionNamespacePrefix));
             }
         }
@@ -129,20 +142,20 @@ public class FunctionManager
 
     public void addFunctionNamespaceFactory(FunctionNamespaceManagerFactory factory)
     {
-        if (functionNamespaceFactories.putIfAbsent(factory.getName(), factory) != null) {
+        if (functionNamespaceManagerFactories.putIfAbsent(factory.getName(), factory) != null) {
             throw new IllegalArgumentException(format("Resource group configuration manager '%s' is already registered", factory.getName()));
         }
         handleResolver.addFunctionNamespace(factory.getName(), factory.getHandleResolver());
     }
 
-    public void addFunctions(List<? extends SqlFunction> functions)
+    public void registerBuiltInFunctions(List<? extends BuiltInFunction> functions)
     {
-        builtInFunctionNamespace.addFunctions(functions);
+        builtInFunctionNamespaceManager.registerBuiltInFunctions(functions);
     }
 
     public List<SqlFunction> listFunctions()
     {
-        return builtInFunctionNamespace.listFunctions().stream()
+        return builtInFunctionNamespaceManager.listFunctions().stream()
                 .filter(function -> !function.isHidden())
                 .collect(toImmutableList());
     }
@@ -157,24 +170,30 @@ public class FunctionManager
      */
     public FunctionHandle resolveFunction(Session session, QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
-        FullyQualifiedName fullyQualifiedName;
+        return resolveFunction(Optional.of(session), name, parameterTypes);
+    }
+
+    private FunctionHandle resolveFunction(Optional<Session> session, QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    {
+        FullyQualifiedName functionName;
         if (!name.getPrefix().isPresent()) {
-            fullyQualifiedName = FullyQualifiedName.of(DEFAULT_NAMESPACE, name.getSuffix());
+            functionName = FullyQualifiedName.of(DEFAULT_NAMESPACE, name.getSuffix());
         }
         else {
-            fullyQualifiedName = FullyQualifiedName.of(name.getOriginalParts());
+            functionName = FullyQualifiedName.of(name.getOriginalParts());
         }
 
-        Optional<FunctionNamespaceManager> servingNamespaceManager = getServingNamespaceManager(fullyQualifiedName);
-        if (!servingNamespaceManager.isPresent()) {
+        Optional<FunctionNamespaceManager<?>> functionNamespaceManager = getServingFunctionNamespaceManager(functionName);
+        if (!functionNamespaceManager.isPresent()) {
             throw new PrestoException(FUNCTION_NOT_FOUND, format("Cannot find function namespace for function %s", name));
         }
 
-        QueryId queryId = session == null ? null : session.getQueryId();
-        Collection<SqlFunction> allCandidates = servingNamespaceManager.get().getCandidates(queryId, fullyQualifiedName);
+        Optional<FunctionNamespaceTransactionHandle> transactionHandle = session.flatMap(Session::getTransactionId)
+                .map(transactionId -> transactionManager.getFunctionNamespaceTransaction(transactionId, functionNamespaceManager.get().getName()));
+        Collection<? extends SqlFunction> candidates = functionNamespaceManager.get().getFunctions(transactionHandle, functionName);
 
         try {
-            return lookupFunction(servingNamespaceManager.get(), queryId, fullyQualifiedName, parameterTypes, allCandidates);
+            return lookupFunction(functionNamespaceManager.get(), transactionHandle, functionName, parameterTypes, candidates);
         }
         catch (PrestoException e) {
             if (e.getErrorCode().getCode() != FUNCTION_NOT_FOUND.toErrorCode().getCode()) {
@@ -182,9 +201,9 @@ public class FunctionManager
             }
         }
 
-        Optional<Signature> match = matchFunctionWithCoercion(allCandidates, parameterTypes);
+        Optional<Signature> match = matchFunctionWithCoercion(candidates, parameterTypes);
         if (match.isPresent()) {
-            return servingNamespaceManager.get().getFunctionHandle(queryId, match.get());
+            return functionNamespaceManager.get().getFunctionHandle(transactionHandle, match.get());
         }
 
         if (name.getSuffix().startsWith(MAGIC_LITERAL_FUNCTION_PREFIX)) {
@@ -200,7 +219,7 @@ public class FunctionManager
             return new BuiltInFunctionHandle(getMagicLiteralFunctionSignature(type));
         }
 
-        throw new PrestoException(FUNCTION_NOT_FOUND, constructFunctionNotFoundErrorMessage(name.toString(), parameterTypes, allCandidates));
+        throw new PrestoException(FUNCTION_NOT_FOUND, constructFunctionNotFoundErrorMessage(name.toString(), parameterTypes, candidates));
     }
 
     @Override
@@ -211,17 +230,17 @@ public class FunctionManager
 
     public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
     {
-        return builtInFunctionNamespace.getWindowFunctionImplementation(functionHandle);
+        return builtInFunctionNamespaceManager.getWindowFunctionImplementation(functionHandle);
     }
 
     public InternalAggregationFunction getAggregateFunctionImplementation(FunctionHandle functionHandle)
     {
-        return builtInFunctionNamespace.getAggregateFunctionImplementation(functionHandle);
+        return builtInFunctionNamespaceManager.getAggregateFunctionImplementation(functionHandle);
     }
 
     public ScalarFunctionImplementation getScalarFunctionImplementation(FunctionHandle functionHandle)
     {
-        return builtInFunctionNamespace.getScalarFunctionImplementation(functionHandle);
+        return builtInFunctionNamespaceManager.getScalarFunctionImplementation(functionHandle);
     }
 
     @VisibleForTesting
@@ -231,7 +250,7 @@ public class FunctionManager
                 .map(OperatorType::getFunctionName)
                 .collect(toImmutableSet());
 
-        return builtInFunctionNamespace.listFunctions().stream()
+        return builtInFunctionNamespaceManager.listFunctions().stream()
                 .filter(function -> operatorNames.contains(function.getSignature().getName()))
                 .collect(toImmutableList());
     }
@@ -239,7 +258,7 @@ public class FunctionManager
     public FunctionHandle resolveOperator(OperatorType operatorType, List<TypeSignatureProvider> argumentTypes)
     {
         try {
-            return resolveFunction(null, QualifiedName.of(operatorType.getFunctionName().getParts()), argumentTypes);
+            return resolveFunction(Optional.empty(), QualifiedName.of(operatorType.getFunctionName().getParts()), argumentTypes);
         }
         catch (PrestoException e) {
             if (e.getErrorCode().getCode() == FUNCTION_NOT_FOUND.toErrorCode().getCode()) {
@@ -263,9 +282,9 @@ public class FunctionManager
      */
     public FunctionHandle lookupFunction(String name, List<TypeSignatureProvider> parameterTypes)
     {
-        FullyQualifiedName fullyQualifiedName = FullyQualifiedName.of(DEFAULT_NAMESPACE, name);
-        Collection<SqlFunction> allCandidates = builtInFunctionNamespace.getCandidates(null, fullyQualifiedName);
-        return lookupFunction(builtInFunctionNamespace, null, fullyQualifiedName, parameterTypes, allCandidates);
+        FullyQualifiedName functionName = FullyQualifiedName.of(DEFAULT_NAMESPACE, name);
+        Collection<? extends SqlFunction> candidates = builtInFunctionNamespaceManager.getFunctions(Optional.empty(), functionName);
+        return lookupFunction(builtInFunctionNamespaceManager, Optional.empty(), functionName, parameterTypes, candidates);
     }
 
     public FunctionHandle lookupCast(CastType castType, TypeSignature fromType, TypeSignature toType)
@@ -273,7 +292,7 @@ public class FunctionManager
         Signature signature = new Signature(castType.getCastName(), SCALAR, emptyList(), emptyList(), toType, singletonList(fromType), false);
 
         try {
-            builtInFunctionNamespace.getScalarFunctionImplementation(signature);
+            builtInFunctionNamespaceManager.getScalarFunctionImplementation(signature);
         }
         catch (PrestoException e) {
             if (castType.isOperatorType() && e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
@@ -281,52 +300,57 @@ public class FunctionManager
             }
             throw e;
         }
-        return builtInFunctionNamespace.getFunctionHandle(null, signature);
+        return builtInFunctionNamespaceManager.getFunctionHandle(Optional.empty(), signature);
     }
 
-    private FunctionHandle lookupFunction(FunctionNamespaceManager functionNamespaceManager, QueryId queryId, FullyQualifiedName name, List<TypeSignatureProvider> parameterTypes, Collection<SqlFunction> allCandidates)
+    private FunctionHandle lookupFunction(
+            FunctionNamespaceManager<?> functionNamespaceManager,
+            Optional<? extends FunctionNamespaceTransactionHandle> transactionHandle,
+            FullyQualifiedName functionName,
+            List<TypeSignatureProvider> parameterTypes,
+            Collection<? extends SqlFunction> candidates)
     {
-        List<SqlFunction> exactCandidates = allCandidates.stream()
+        List<SqlFunction> exactCandidates = candidates.stream()
                 .filter(function -> function.getSignature().getTypeVariableConstraints().isEmpty())
                 .collect(Collectors.toList());
 
         Optional<Signature> match = matchFunctionExact(exactCandidates, parameterTypes);
         if (match.isPresent()) {
-            return functionNamespaceManager.getFunctionHandle(queryId, match.get());
+            return functionNamespaceManager.getFunctionHandle(transactionHandle, match.get());
         }
 
-        List<SqlFunction> genericCandidates = allCandidates.stream()
+        List<SqlFunction> genericCandidates = candidates.stream()
                 .filter(function -> !function.getSignature().getTypeVariableConstraints().isEmpty())
                 .collect(Collectors.toList());
 
         match = matchFunctionExact(genericCandidates, parameterTypes);
         if (match.isPresent()) {
-            return functionNamespaceManager.getFunctionHandle(queryId, match.get());
+            return functionNamespaceManager.getFunctionHandle(transactionHandle, match.get());
         }
 
-        throw new PrestoException(FUNCTION_NOT_FOUND, constructFunctionNotFoundErrorMessage(name.toString(), parameterTypes, allCandidates));
+        throw new PrestoException(FUNCTION_NOT_FOUND, constructFunctionNotFoundErrorMessage(functionName.toString(), parameterTypes, candidates));
     }
 
-    private Optional<FunctionNamespaceManager> getServingNamespaceManager(FullyQualifiedName name)
+    private Optional<FunctionNamespaceManager<?>> getServingFunctionNamespaceManager(FullyQualifiedName functionName)
     {
-        FullyQualifiedName.Prefix functionPrefix = name.getPrefix();
+        FullyQualifiedName.Prefix functionPrefix = functionName.getPrefix();
         if (functionPrefix.equals(DEFAULT_NAMESPACE)) {
-            return Optional.of(builtInFunctionNamespace);
+            return Optional.of(builtInFunctionNamespaceManager);
         }
 
         FullyQualifiedName.Prefix bestMatchNamespace = null;
-        FunctionNamespaceManager servingNamespaceManager = null;
+        FunctionNamespaceManager<?> servingFunctionNamespaceManager = null;
 
-        for (Map.Entry<FullyQualifiedName.Prefix, FunctionNamespaceManager> functionNamespace : functionNamespaces.entrySet()) {
+        for (Map.Entry<FullyQualifiedName.Prefix, FunctionNamespaceManager<?>> functionNamespace : functionNamespaces.entrySet()) {
             if (functionNamespace.getKey().contains(functionPrefix) && (bestMatchNamespace == null || bestMatchNamespace.contains(functionNamespace.getKey()))) {
                 bestMatchNamespace = functionNamespace.getKey();
-                servingNamespaceManager = functionNamespace.getValue();
+                servingFunctionNamespaceManager = functionNamespace.getValue();
             }
         }
-        return Optional.ofNullable(servingNamespaceManager);
+        return Optional.ofNullable(servingFunctionNamespaceManager);
     }
 
-    private String constructFunctionNotFoundErrorMessage(String name, List<TypeSignatureProvider> parameterTypes, Collection<SqlFunction> candidates)
+    private String constructFunctionNotFoundErrorMessage(String name, List<TypeSignatureProvider> parameterTypes, Collection<? extends SqlFunction> candidates)
     {
         List<String> expectedParameters = new ArrayList<>();
         for (SqlFunction function : candidates) {
@@ -349,12 +373,12 @@ public class FunctionManager
         return matchFunction(candidates, actualParameters, false);
     }
 
-    private Optional<Signature> matchFunctionWithCoercion(Collection<SqlFunction> candidates, List<TypeSignatureProvider> actualParameters)
+    private Optional<Signature> matchFunctionWithCoercion(Collection<? extends SqlFunction> candidates, List<TypeSignatureProvider> actualParameters)
     {
         return matchFunction(candidates, actualParameters, true);
     }
 
-    private Optional<Signature> matchFunction(Collection<SqlFunction> candidates, List<TypeSignatureProvider> parameters, boolean coercionAllowed)
+    private Optional<Signature> matchFunction(Collection<? extends SqlFunction> candidates, List<TypeSignatureProvider> parameters, boolean coercionAllowed)
     {
         List<ApplicableFunction> applicableFunctions = identifyApplicableFunctions(candidates, parameters, coercionAllowed);
         if (applicableFunctions.isEmpty()) {
@@ -381,7 +405,7 @@ public class FunctionManager
         throw new PrestoException(AMBIGUOUS_FUNCTION_CALL, errorMessageBuilder.toString());
     }
 
-    private List<ApplicableFunction> identifyApplicableFunctions(Collection<SqlFunction> candidates, List<TypeSignatureProvider> actualParameters, boolean allowCoercion)
+    private List<ApplicableFunction> identifyApplicableFunctions(Collection<? extends SqlFunction> candidates, List<TypeSignatureProvider> actualParameters, boolean allowCoercion)
     {
         ImmutableList.Builder<ApplicableFunction> applicableFunctions = ImmutableList.builder();
         for (SqlFunction function : candidates) {
@@ -551,13 +575,13 @@ public class FunctionManager
     {
         private final Signature declaredSignature;
         private final Signature boundSignature;
-        private final boolean isCalledOnNullInput;
+        private final boolean calledOnNullInput;
 
-        private ApplicableFunction(Signature declaredSignature, Signature boundSignature, boolean isCalledOnNullInput)
+        private ApplicableFunction(Signature declaredSignature, Signature boundSignature, boolean calledOnNullInput)
         {
             this.declaredSignature = declaredSignature;
             this.boundSignature = boundSignature;
-            this.isCalledOnNullInput = isCalledOnNullInput;
+            this.calledOnNullInput = calledOnNullInput;
         }
 
         public Signature getDeclaredSignature()
@@ -572,7 +596,7 @@ public class FunctionManager
 
         public boolean isCalledOnNullInput()
         {
-            return isCalledOnNullInput;
+            return calledOnNullInput;
         }
 
         @Override
@@ -581,6 +605,7 @@ public class FunctionManager
             return toStringHelper(this)
                     .add("declaredSignature", declaredSignature)
                     .add("boundSignature", boundSignature)
+                    .add("calledOnNullInput", calledOnNullInput)
                     .toString();
         }
     }
