@@ -85,15 +85,6 @@ Fixed-Precision
 
     Example literals: ``DECIMAL '10.3'``, ``DECIMAL '1234567890'``, ``1.1``
 
-    .. note::
-
-        For compatibility reasons decimal literals without explicit type specifier (e.g. ``1.2``)
-        are treated as values of the ``DOUBLE`` type by default up to version 0.198. 
-        After 0.198 they are parsed as DECIMAL.
-
-          - System wide property: ``parse-decimal-literals-as-double``
-          - Session wide property: ``parse_decimal_literals_as_double``
-
 String
 ------
 
@@ -132,6 +123,8 @@ String
 
 Date and Time
 -------------
+
+See also :doc:`/language/timestamp`
 
 ``DATE``
 ^^^^^^^^
@@ -212,10 +205,21 @@ Structural
 ``ROW``
 ^^^^^^^
 
-    A structure made up of named fields. The fields may be of any SQL type, and are
-    accessed with field reference operator ``.``
+    A structure made up of fields that allows mixed types.
+    The fields may be of any SQL type.
+
+    By default, row fields are not named, but names can be assigned.
 
     Example: ``CAST(ROW(1, 2.0) AS ROW(x BIGINT, y DOUBLE))``
+
+    Named row fields are accessed with field reference operator ``.``.
+
+    Example: ``CAST(ROW(1, 2.0) AS ROW(x BIGINT, y DOUBLE)).x``
+
+    Named or unnamed row fields are accessed by position with the subscript operator ``[]``.
+    The position starts at ``1`` and must be a constant.
+
+    Example: ``ROW(1, 2.0)[1]``
 
 Network Address
 ---------------
@@ -225,37 +229,28 @@ Network Address
 ``IPADDRESS``
 ^^^^^^^^^^^^^
 
-    An IP address that can represent either an IPv4 or IPv6 address.
-
-    Internally, the type is a pure IPv6 address. Support for IPv4 is handled
-    using the *IPv4-mapped IPv6 address* range (:rfc:`4291#section-2.5.5.2`).
+    An IP address that can represent either an IPv4 or IPv6 address. Internally,
+    the type is a pure IPv6 address. Support for IPv4 is handled using the
+    *IPv4-mapped IPv6 address* range (:rfc:`4291#section-2.5.5.2`).
     When creating an ``IPADDRESS``, IPv4 addresses will be mapped into that range.
-
     When formatting an ``IPADDRESS``, any address within the mapped range will
     be formatted as an IPv4 address. Other addresses will be formatted as IPv6
     using the canonical format defined in :rfc:`5952`.
 
     Examples: ``IPADDRESS '10.0.0.1'``, ``IPADDRESS '2001:db8::1'``
 
-.. _ipprefix_type:
+UUID
+----
 
-``IPPREFIX``
-^^^^^^^^^^^^
+.. _uuid_type:
 
-    An IP routing prefix that can represent either an IPv4 or IPv6 address.
+``UUID``
+^^^^^^^^
 
-    Internally, an address is a pure IPv6 address. Support for IPv4 is handled
-    using the *IPv4-mapped IPv6 address* range (:rfc:`4291#section-2.5.5.2`).
-    When creating an ``IPPREFIX``, IPv4 addresses will be mapped into that range.
-    Additionally, addresses will be reduced to the first address of a network.
+    This type represents a UUID (Universally Unique IDentifier), also known as a
+    GUID (Globally Unique IDentifier), using the format defined in :rfc:`4122`.
 
-    ``IPPREFIX`` values will be formatted in CIDR notation, written as an IP
-    address, a slash ('/') character, and the bit-length of the prefix. Any
-    address within the IPv4-mapped IPv6 address range will be formatted as an
-    IPv4 address. Other addresses will be formatted as IPv6 using the canonical
-    format defined in :rfc:`5952`.
-
-    Examples: ``IPPREFIX '10.0.1.0/24'``, ``IPPREFIX '2001:db8::/48'``
+    Example: ``UUID '12151fd2-7586-11e9-8f9e-2a86e4085a59'``
 
 HyperLogLog
 -----------

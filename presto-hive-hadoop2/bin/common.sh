@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -euo pipefail -x
-
 function retry() {
   END=$(($(date +%s) + 600))
 
@@ -21,7 +19,7 @@ function retry() {
 }
 
 function hadoop_master_container(){
-  docker-compose -f "${DOCKER_COMPOSE_LOCATION}" ps -q hadoop-master
+  docker-compose -f "${DOCKER_COMPOSE_LOCATION}" ps -q hadoop-master | grep .
 }
 
 function hadoop_master_ip() {
@@ -68,6 +66,7 @@ SCRIPT_DIR="${BASH_SOURCE%/*}"
 INTEGRATION_TESTS_ROOT="${SCRIPT_DIR}/.."
 PROJECT_ROOT="${INTEGRATION_TESTS_ROOT}/.."
 DOCKER_COMPOSE_LOCATION="${INTEGRATION_TESTS_ROOT}/conf/docker-compose.yml"
+source "${BASH_SOURCE%/*}/../../presto-product-tests/conf/product-tests-defaults.sh"
 
 # check docker and docker compose installation
 docker-compose version
@@ -90,7 +89,7 @@ function start_docker_containers() {
 
   # pull docker images
   if [[ "${CONTINUOUS_INTEGRATION:-false}" == 'true' ]]; then
-    docker-compose -f "${DOCKER_COMPOSE_LOCATION}" pull
+    docker-compose -f "${DOCKER_COMPOSE_LOCATION}" pull --quiet
   fi
 
   # start containers

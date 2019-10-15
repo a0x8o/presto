@@ -19,7 +19,7 @@ same table multiple times in a single query (e.g., performing a self join).
 
 .. note::
 
-    Apache Kafka 0.8+ is supported although it is highly recommend to use 0.8.1 or later.
+    The minimum supported Kafka broker version is 0.10.0.
 
 Configuration
 -------------
@@ -417,7 +417,7 @@ this decoder should be used.
 Date and Time Decoders
 ^^^^^^^^^^^^^^^^^^^^^^
 
-To convert values from JSON objects into Presto ``DATE``, ``TIME``, ``TIME WITH TIME ZONE`,
+To convert values from JSON objects into Presto ``DATE``, ``TIME``, ``TIME WITH TIME ZONE``,
 ``TIMESTAMP`` or ``TIMESTAMP WITH TIME ZONE`` columns, special decoders must be selected using the
 ``dataFormat`` attribute of a field definition.
 

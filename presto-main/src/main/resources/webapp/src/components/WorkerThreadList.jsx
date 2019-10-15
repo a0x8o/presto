@@ -14,7 +14,9 @@
 
 import React from "react";
 
-import {getFirstParameter} from "../utils";
+import {
+    getFirstParameter
+} from "../utils";
 
 const ALL_THREADS = "All Threads";
 const QUERY_THREADS = "Running Queries";

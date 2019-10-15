@@ -74,12 +74,16 @@ The following provides a good starting point for creating ``etc/jvm.config``:
 
     -server
     -Xmx16G
+    -XX:-UseBiasedLocking
     -XX:+UseG1GC
     -XX:G1HeapRegionSize=32M
-    -XX:+UseGCOverheadLimit
     -XX:+ExplicitGCInvokesConcurrent
-    -XX:+HeapDumpOnOutOfMemoryError
     -XX:+ExitOnOutOfMemoryError
+    -XX:+UseGCOverheadLimit
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:ReservedCodeCacheSize=512M
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
 
 Because an ``OutOfMemoryError`` will typically leave the JVM in an
 inconsistent state, we write a heap dump (for debugging) and forcibly
@@ -186,7 +190,9 @@ You may also wish to set the following properties:
   Specifies the port for the JMX RMI server. Presto exports many metrics
   that are useful for monitoring via JMX.
 
-See also :doc:`/admin/resource-groups`.
+The above configuration properties are a minimal set to help you get started.
+Please see :doc:`/admin` and :doc:`/security` for a more comprehensive list.
+In particular, see :doc:`/admin/resource-groups` for configuring queuing policies.
 
 Log Levels
 ^^^^^^^^^^
@@ -199,10 +205,10 @@ For example, consider the following log levels file:
 
 .. code-block:: none
 
-    com.facebook.presto=INFO
+    io.prestosql=INFO
 
 This would set the minimum level to ``INFO`` for both
-``com.facebook.presto.server`` and ``com.facebook.presto.hive``.
+``io.prestosql.server`` and ``io.prestosql.plugin.hive``.
 The default minimum level is ``INFO``
 (thus the above example does not actually change anything).
 There are four levels: ``DEBUG``, ``INFO``, ``WARN`` and ``ERROR``.

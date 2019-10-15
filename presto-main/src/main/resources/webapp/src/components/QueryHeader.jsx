@@ -14,7 +14,12 @@
 
 import React from "react";
 
-import {getProgressBarPercentage, getProgressBarTitle, getQueryStateColor, isQueryEnded} from "../utils";
+import {
+    getProgressBarPercentage,
+    getProgressBarTitle,
+    getQueryStateColor,
+    isQueryEnded
+} from "../utils";
 
 export class QueryHeader extends React.Component {
     constructor(props) {

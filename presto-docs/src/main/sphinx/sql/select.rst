@@ -8,14 +8,15 @@ Synopsis
 .. code-block:: none
 
     [ WITH with_query [, ...] ]
-    SELECT [ ALL | DISTINCT ] select_expr [, ...]
+    SELECT [ ALL | DISTINCT ] select_expression [, ...]
     [ FROM from_item [, ...] ]
     [ WHERE condition ]
     [ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]
     [ HAVING condition]
     [ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]
     [ ORDER BY expression [ ASC | DESC ] [, ...] ]
-    [ LIMIT [ count | ALL ] ]
+    [ OFFSET count [ ROW | ROWS ] ]
+    [ LIMIT { count | ALL } | FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]
 
 where ``from_item`` is one of
 
@@ -84,10 +85,57 @@ Additionally, the relations within a ``WITH`` clause can chain::
       z AS (SELECT b AS c FROM y)
     SELECT c FROM z;
 
-.. WARNING::
+.. warning::
     Currently, the SQL for the ``WITH`` clause will be inlined anywhere the named
     relation is used. This means that if the relation is used more than once and the query
     is non-deterministic, the results may be different each time.
+
+SELECT Clause
+-------------
+
+The ``SELECT`` clause specifies the output of the query. Each ``select_expression``
+defines a column or columns to be included in the result.
+
+.. code-block:: none
+
+    SELECT [ ALL | DISTINCT ] select_expression [, ...]
+
+The ``ALL`` and ``DISTINCT`` quantifiers determine whether duplicate rows
+are included in the result set. If the argument ``ALL`` is specified,
+all rows are included. If the argument ``DISTINCT`` is specified, only unique
+rows are included in the result set. In this case, each output column must
+be of a type that allows comparison. If neither argument is specified,
+the behavior defaults to ``ALL``.
+
+**Select expressions**
+
+Each ``select_expression`` must be in one of the following forms:
+
+.. code-block:: none
+
+    expression [ [ AS ] column_alias ]
+
+.. code-block:: none
+
+    relation.*
+
+.. code-block:: none
+
+    *
+
+In the case of ``expression [ [ AS ] column_alias ]``, a single output column
+is defined.
+
+In the case of ``relation.*``, all columns of ``relation`` are included
+in the result set.
+
+In the case of ``*``, all columns of the relation defined by the query
+are included in the result set.
+
+In the result set, the order of columns is the same as the order of their
+specification by the select expressions. If a select expression returns multiple
+columns, they are ordered the same way they were ordered in the source
+relation.
 
 GROUP BY Clause
 ---------------
@@ -577,30 +625,124 @@ output expressions:
 
 Each expression may be composed of output columns or it may be an ordinal
 number selecting an output column by position (starting at one). The
-``ORDER BY`` clause is evaluated as the last step of a query after any
-``GROUP BY`` or ``HAVING`` clause. The default null ordering is ``NULLS LAST``,
-regardless of the ordering direction.
+``ORDER BY`` clause is evaluated after any ``GROUP BY`` or ``HAVING`` clause
+and before any ``OFFSET``, ``LIMIT`` or ``FETCH FIRST`` clause.
+The default null ordering is ``NULLS LAST``, regardless of the ordering direction.
 
-LIMIT Clause
-------------
+.. _offset-clause:
 
-The ``LIMIT`` clause restricts the number of rows in the result set.
-``LIMIT ALL`` is the same as omitting the ``LIMIT`` clause.
-The following example queries a large table, but the limit clause restricts
-the output to only have five rows (because the query lacks an ``ORDER BY``,
+OFFSET Clause
+-------------
+
+The ``OFFSET`` clause is used to discard a number of leading rows
+from the result set:
+
+.. code-block:: none
+
+    OFFSET count [ ROW | ROWS ]
+
+If the ``ORDER BY`` clause is present, the ``OFFSET`` clause is evaluated
+over a sorted result set, and the set remains sorted after the
+leading rows are discarded::
+
+    SELECT name FROM nation ORDER BY name OFFSET 22;
+
+.. code-block:: none
+
+          name
+    ----------------
+     UNITED KINGDOM
+     UNITED STATES
+     VIETNAM
+    (3 rows)
+
+Otherwise, it is arbitrary which rows are discarded.
+If the count specified in the ``OFFSET`` clause equals or exceeds the size
+of the result set, the final result is empty.
+
+LIMIT or FETCH FIRST Clauses
+----------------------------
+
+The ``LIMIT`` or ``FETCH FIRST`` clause restricts the number of rows
+in the result set.
+
+.. code-block:: none
+
+    LIMIT { count | ALL }
+
+.. code-block:: none
+
+    FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES }
+
+The following example queries a large table, but the ``LIMIT`` clause
+restricts the output to only have five rows (because the query lacks an ``ORDER BY``,
 exactly which rows are returned is arbitrary)::
 
     SELECT orderdate FROM orders LIMIT 5;
 
 .. code-block:: none
 
-     o_orderdate
-    -------------
-     1996-04-14
-     1992-01-15
-     1995-02-01
-     1995-11-12
-     1992-04-26
+     orderdate
+    ------------
+     1994-07-25
+     1993-11-12
+     1992-10-06
+     1994-01-04
+     1997-12-28
+    (5 rows)
+
+``LIMIT ALL`` is the same as omitting the ``LIMIT`` clause.
+
+The ``FETCH FIRST`` clause supports either the ``FIRST`` or ``NEXT`` keywords
+and the ``ROW`` or ``ROWS`` keywords. These keywords are equivalent and
+the choice of keyword has no effect on query execution.
+
+If the count is not specified in the ``FETCH FIRST`` clause, it defaults to ``1``::
+
+    SELECT orderdate FROM orders FETCH FIRST ROW ONLY;
+
+.. code-block:: none
+
+     orderdate
+    ------------
+     1994-02-12
+    (1 row)
+
+If the ``OFFSET`` clause is present, the ``LIMIT`` or ``FETCH FIRST`` clause
+is evaluated after the ``OFFSET`` clause::
+
+    SELECT * FROM (VALUES 5, 2, 4, 1, 3) t(x) ORDER BY x OFFSET 2 LIMIT 2;
+
+.. code-block:: none
+
+     x
+    ---
+     3
+     4
+    (2 rows)
+
+For the ``FETCH FIRST`` clause, the argument ``ONLY`` or ``WITH TIES``
+controls which rows are included in the result set.
+
+If the argument ``ONLY`` is specified, the result set is limited to the exact
+number of leading rows determined by the count.
+
+If the argument ``WITH TIES`` is specified, it is required that the ``ORDER BY``
+clause be present. The result set consists of the same set of leading rows
+and all of the rows in the same peer group as the last of them ('ties')
+as established by the ordering in the ``ORDER BY`` clause. The result set is sorted::
+
+    SELECT name, regionkey FROM nation ORDER BY regionkey FETCH FIRST ROW WITH TIES;
+
+.. code-block:: none
+
+        name    | regionkey
+    ------------+-----------
+     ETHIOPIA   |         0
+     MOROCCO    |         0
+     KENYA      |         0
+     ALGERIA    |         0
+     MOZAMBIQUE |         0
     (5 rows)
 
 TABLESAMPLE
@@ -663,13 +805,13 @@ is added to the end.
 ``UNNEST`` is normally used with a ``JOIN`` and can reference columns
 from relations on the left side of the join.
 
-Using a single array column::
+Using a single column::
 
     SELECT student, score
     FROM tests
     CROSS JOIN UNNEST(scores) AS t (score);
 
-Using multiple array columns::
+Using multiple columns::
 
     SELECT numbers, animals, n, a
     FROM (
@@ -711,29 +853,6 @@ Using multiple array columns::
      [7, 8, 9] | 8 | 2
      [7, 8, 9] | 9 | 3
     (5 rows)
-
-Using a single map column::
-
-    SELECT
-        animals, a, n
-    FROM (
-        VALUES
-            (MAP(ARRAY['dog', 'cat', 'bird'], ARRAY[1, 2, 0])),
-            (MAP(ARRAY['dog', 'cat'], ARRAY[4, 5]))
-    ) AS x (animals)
-    CROSS JOIN UNNEST(animals) AS t (a, n);
-
-.. code-block:: none
-
-               animals          |  a   | n
-    ----------------------------+------+---
-     {"cat":2,"bird":0,"dog":1} | dog  | 1 
-     {"cat":2,"bird":0,"dog":1} | cat  | 2 
-     {"cat":2,"bird":0,"dog":1} | bird | 0 
-     {"cat":5,"dog":4}          | dog  | 4 
-     {"cat":5,"dog":4}          | cat  | 5 
-    (5 rows)
-
 
 Joins
 -----
@@ -779,6 +898,30 @@ so a cross join between the two tables produces 125 rows::
     ...
     (125 rows)
 
+LATERAL
+^^^^^^^
+
+Subqueries appearing in the ``FROM`` clause can be preceded by the keyword ``LATERAL``.
+This allows them to reference columns provided by preceding ``FROM`` items.
+
+A ``LATERAL`` join can appear at the top level in the ``FROM`` list, or anywhere
+within a parenthesized join tree. In the latter case, it can also refer to any items
+that are on the left-hand side of a ``JOIN`` for which it is on the right-hand side.
+
+When a ``FROM`` item contains ``LATERAL`` cross-references, evaluation proceeds as follows:
+for each row of the ``FROM`` item providing the cross-referenced columns,
+the ``LATERAL`` item is evaluated using that row set's values of the columns.
+The resulting rows are joined as usual with the rows they were computed from.
+This is repeated for set of rows from the column source tables.
+
+``LATERAL`` is primarily useful when the cross-referenced column is necessary for
+computing the rows to be joined::
+
+    SELECT name, x, y
+    FROM nation
+    CROSS JOIN LATERAL (SELECT name || ' :-' AS x)
+    CROSS JOIN LATERAL (SELECT x || ')' AS y)
+
 Qualifying Column Names
 ^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -803,76 +946,6 @@ The following query will fail with the error ``Column 'name' is ambiguous``::
     SELECT name
     FROM nation
     CROSS JOIN region;
-
-
-USING
-^^^^^
-The ``USING`` clause allows you to write shorter queries when both tables you 
-are joining have the same name for the join key.
-
-For example::
-
-    SELECT *
-    FROM table_1 
-    JOIN table_2
-    ON table_1.key_A = table_2.key_A AND table_1.key_B = table_2.key_B
-
-can be rewritten to::
-
-    SELECT *
-    FROM table_1
-    JOIN table_2
-    USING (key_A, key_B)
-
-
-The output of doing ``JOIN`` with ``USING`` will be one copy of the join key 
-columns (``key_A`` and ``key_B`` in the example above) followed by the remaining columns
-in ``table_1`` and then the remaining columns in ``table_2``. Note that the join keys are not
-included in the list of columns from the origin tables for the purpose of
-referencing them in the query. You cannot access them with a table prefix and 
-if you run ``SELECT table_1.*, table_2.*``, the join columns are not included in the output.
-
-The following two queries are equivalent::
-
-    SELECT *
-    FROM (
-        VALUES
-            (1, 3, 10),
-            (2, 4, 20)
-    ) AS table_1 (key_A, key_B, y1)
-    LEFT JOIN (
-        VALUES
-            (1, 3, 100),
-            (2, 4, 200)
-    ) AS table_2 (key_A, key_B, y2) 
-    USING (key_A, key_B)
-
-    -----------------------------
-
-    SELECT key_A, key_B, table_1.*, table_2.*
-    FROM (
-        VALUES
-            (1, 3, 10),
-            (2, 4, 20)
-    ) AS table_1 (key_A, key_B, y1)
-    LEFT JOIN (
-        VALUES
-            (1, 3, 100),
-            (2, 4, 200)
-    ) AS table_2 (key_A, key_B, y2) 
-    USING (key_A, key_B)
-
-And produce the output:
-
-.. code-block:: none
-
-     key_A | key_B | y1 | y2  
-    -------+-------+----+-----
-         1 |     3 | 10 | 100 
-         2 |     4 | 20 | 200 
-    (2 rows)
-
-
 
 Subqueries
 ----------

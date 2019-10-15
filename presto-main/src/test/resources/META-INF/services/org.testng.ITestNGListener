@@ -1,1 +1,2 @@
-com.facebook.presto.tests.LogTestDurationListener
+io.prestosql.tests.ReportUnannotatedMethods
+io.prestosql.tests.LogTestDurationListener

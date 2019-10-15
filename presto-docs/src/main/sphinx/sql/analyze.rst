@@ -14,8 +14,8 @@ Description
 
 Collects table and column statistics for a given table.
 
-The optional ``WITH`` clause can be used to provide
-connector-specific properties. To list all available properties, run the following query::
+The optional ``WITH`` clause can be used to provide connector-specific properties.
+To list all available properties, run the following query::
 
     SELECT * FROM system.metadata.analyze_properties
 

@@ -23,10 +23,10 @@ Functions and Operators
     functions/array
     functions/map
     functions/url
-    functions/ip
     functions/geospatial
     functions/hyperloglog
     functions/qdigest
+    functions/uuid
     functions/color
     functions/session
     functions/teradata

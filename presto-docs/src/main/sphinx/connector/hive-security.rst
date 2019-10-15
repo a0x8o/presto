@@ -125,6 +125,8 @@ Property Name                                      Description
 ================================================== ============================================================
 ``hive.metastore.authentication.type``             Hive metastore authentication type.
 
+``hive.metastore.thrift.impersonation.enabled``    Enable Hive metastore end user impersonation.
+
 ``hive.metastore.service.principal``               The Kerberos principal of the Hive metastore service.
 
 ``hive.metastore.client.principal``                The Kerberos principal that Presto will use when connecting
@@ -144,6 +146,13 @@ When set to ``KERBEROS`` the Hive connector will connect to the Hive metastore
 Thrift service using SASL and authenticate using Kerberos.
 
 This property is optional; the default is ``NONE``.
+
+``hive.metastore.thrift.impersonation.enabled``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Enable end-user Hive metastore impersonation.
+
+This property is optional; the default is ``false``.
 
 ``hive.metastore.service.principal``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -214,6 +223,7 @@ Example configuration with ``KERBEROS`` authentication
 .. code-block:: none
 
     hive.metastore.authentication.type=KERBEROS
+    hive.metastore.thrift.impersonation.enabled=true
     hive.metastore.service.principal=hive/hive-metastore-host.example.com@EXAMPLE.COM
     hive.metastore.client.principal=presto@EXAMPLE.COM
     hive.metastore.client.keytab=/etc/presto/hive.keytab
@@ -248,6 +258,8 @@ Property Name                                      Description
                                                    to HDFS.
 
 ``hive.hdfs.presto.keytab``                        HDFS client keytab location.
+
+``hive.hdfs.wire-encryption.enabled``              Enable HDFS wire encryption.
 ================================================== ============================================================
 
 ``hive.hdfs.authentication.type``
@@ -295,6 +307,13 @@ The path to the keytab file that contains a key for the principal specified by
 system user running Presto.
 
 This property is optional; no default value.
+
+``hive.hdfs.wire-encryption.enabled``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In a Kerberized Hadoop cluster that uses HDFS wire encryption, this should be
+set to ``true`` to enable Presto to access HDFS. Note that using wire encryption
+may impact query execution performance.
 
 .. _hive-security-simple:
 
@@ -384,12 +403,6 @@ impersonate this user, as discussed in the section
 Keytab files must be distributed to every node in the cluster that runs Presto.
 
 :ref:`Additional Information About Keytab Files.<hive-security-additional-keytab>`
-
-Impersonation Accessing the Hive Metastore
-------------------------------------------
-
-Presto does not currently support impersonating the end user when accessing the
-Hive metastore.
 
 .. _configuring-hadoop-impersonation:
 
@@ -520,21 +533,3 @@ See below for an example.
         }
       ]
     }
-
-HDFS wire encryption
---------------------
-
-In a Kerberized Hadoop cluster with enabled HDFS wire encryption you can enable
-Presto to access HDFS by using below property.
-
-===================================== ==========================================
-Property Name                         Description
-===================================== ==========================================
-``hive.hdfs.wire-encryption.enabled`` Enables HDFS wire encryption.
-                                      Possible values are ``true`` or ``false``.
-===================================== ==========================================
-
-.. note::
-
-    Depending on Presto installation configuration, using wire encryption may
-    impact query execution performance.

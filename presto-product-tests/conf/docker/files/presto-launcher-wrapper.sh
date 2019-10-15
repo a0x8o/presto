@@ -17,6 +17,6 @@ fi
 /docker/volumes/presto-server/bin/launcher \
   -Dnode.id="${HOSTNAME}" \
   --etc-dir="${PRESTO_CONFIG_DIRECTORY}" \
-  --config="${PRESTO_CONFIG_DIRECTORY}/${CONFIG}".properties \
+  --config="${CONFIG_PROPERTIES_LOCATION}" \
   --data-dir=/var/presto \
   "$@"

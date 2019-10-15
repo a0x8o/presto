@@ -3,9 +3,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.facebook.presto</groupId>
+        <groupId>io.prestosql</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.228-SNAPSHOT</version>
+        <version>321-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-server-rpm</artifactId>
@@ -25,7 +25,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.facebook.presto</groupId>
+            <groupId>io.prestosql</groupId>
             <artifactId>presto-server</artifactId>
             <version>${project.version}</version>
             <type>tar.gz</type>
@@ -49,12 +49,11 @@
                             <skip>false</skip>
                             <artifactItems>
                                 <artifactItem>
-                                    <groupId>com.facebook.presto</groupId>
+                                    <groupId>io.prestosql</groupId>
                                     <artifactId>presto-server</artifactId>
                                     <version>${project.version}</version>
                                     <type>tar.gz</type>
-                                    <outputDirectory>${project.build.outputDirectory}
-                                    </outputDirectory>
+                                    <outputDirectory>${project.build.outputDirectory}</outputDirectory>
                                 </artifactItem>
                             </artifactItems>
                         </configuration>
@@ -83,8 +82,8 @@
                             <architecture>x86_64</architecture>
                             <preInstallScriptFile>src/main/rpm/preinstall</preInstallScriptFile>
                             <postInstallScriptFile>src/main/rpm/postinstall</postInstallScriptFile>
-                            <postUninstallScriptFile>src/main/rpm/postremove
-                            </postUninstallScriptFile>
+                            <preUninstallScriptFile>src/main/rpm/preremove</preUninstallScriptFile>
+                            <postUninstallScriptFile>src/main/rpm/postremove</postUninstallScriptFile>
 
                             <dependencies>
                                 <dependency>
@@ -168,6 +167,10 @@
                                     <includes>
                                         <include>*</include>
                                     </includes>
+                                    <directives>
+                                        <directive>config</directive>
+                                        <directive>noreplace</directive>
+                                    </directives>
                                 </rule>
 
                                 <rule>

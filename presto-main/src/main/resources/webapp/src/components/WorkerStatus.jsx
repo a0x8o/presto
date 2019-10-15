@@ -14,7 +14,13 @@
 
 import React from "react";
 
-import {addToHistory, formatCount, formatDataSize, getFirstParameter, precisionRound} from "../utils";
+import {
+    addToHistory,
+    formatCount,
+    formatDataSize,
+    getFirstParameter,
+    precisionRound
+} from "../utils";
 
 const SMALL_SPARKLINE_PROPERTIES = {
     width: '100%',

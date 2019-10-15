@@ -2,9 +2,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.facebook.presto</groupId>
+        <groupId>io.prestosql</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.228-SNAPSHOT</version>
+        <version>321-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-geospatial-toolkit</artifactId>
@@ -74,30 +74,5 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency>
-            <groupId>com.facebook.presto</groupId>
-            <artifactId>presto-array</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>it.unimi.dsi</groupId>
-            <artifactId>fastutil</artifactId>
-        </dependency>
-
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.basepom.maven</groupId>
-                <artifactId>duplicate-finder-maven-plugin</artifactId>
-                <configuration>
-                    <ignoredResourcePatterns>
-                        <ignoredResourcePattern>parquet.thrift</ignoredResourcePattern>
-                        <ignoredResourcePattern>about.html</ignoredResourcePattern>
-                    </ignoredResourcePatterns>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

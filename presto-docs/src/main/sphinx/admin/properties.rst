@@ -116,19 +116,6 @@ Memory Management Properties
     This is the amount of memory set aside as headroom/buffer in the JVM heap
     for allocations that are not tracked by Presto.
 
-``query.low-memory-killer.policy``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-    * **Type:** ``string``
-    * **Default value:** ``none``
-
-    The policy used for selecting the query to kill when the cluster is out of memory (OOM).
-    This property can have one of the following values: ``none``, ``total-reservation``,
-    or ``total-reservation-on-blocked-nodes``. ``none`` disables the cluster OOM killer.
-    The value of ``total-reservation`` configures a policy that kills the query with the largest
-    memory reservation across the cluster. The value of ``total-reservation-on-blocked-nodes``
-    configures a policy that kills the query using the most memory on the workers that are out of memory (blocked).
-
 .. _tuning-spilling:
 
 Spilling Properties
@@ -143,13 +130,36 @@ Spilling Properties
     Try spilling memory to disk to avoid exceeding memory limits for the query.
 
     Spilling works by offloading memory to disk. This process can allow a query with a large memory
-    footprint to pass at the cost of slower execution times. Currently, spilling is supported only for
-    aggregations and joins (inner and outer), so this property will not reduce memory usage required for
-    window functions, sorting and other join types.
+    footprint to pass at the cost of slower execution times. Spilling is supported for
+    aggregations, joins (inner and outer), sorting, and window functions. This property will not
+    reduce memory usage required for other join types.
 
     Be aware that this is an experimental feature and should be used with care.
 
     This config property can be overridden by the ``spill_enabled`` session property.
+
+
+``experimental.spill-order-by``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``boolean``
+    * **Default value:** ``true``
+
+    Try spilling memory to disk to avoid exceeding memory limits for the query when running sorting operators.
+    This property must be used in conjunction with the ``experimental.spill-enabled`` property.
+
+    This config property can be overridden by the ``spill_order_by`` session property.
+
+``experimental.spill-window-operator``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``boolean``
+    * **Default value:** ``true``
+
+    Try spilling memory to disk to avoid exceeding memory limits for the query when running window operators;
+    This property must be used in conjunction with the ``experimental.spill-enabled`` property.
+
+    This config property can be overridden by the ``spill_window_operator`` session property.
 
 ``experimental.spiller-spill-path``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -344,7 +354,7 @@ Task Properties
 
     Number of threads used to handle timeouts when generating HTTP responses. This value
     should be increased if all the threads are frequently in use. This can be monitored
-    via the ``com.facebook.presto.server:name=AsyncHttpExecutionMBean:TimeoutExecutor``
+    via the ``io.prestosql.server:name=AsyncHttpExecutionMBean:TimeoutExecutor``
     JMX object. If ``ActiveCount`` is always the same as ``PoolSize``, increase the
     number of threads.
 
@@ -380,7 +390,7 @@ Task Properties
     but will cause increased heap space usage. Setting the value too high may cause a drop
     in performance due to a context switching. The number of active threads is available
     via the ``RunningSplits`` property of the
-    ``com.facebook.presto.execution.executor:name=TaskExecutor.RunningSplits`` JXM object.
+    ``io.prestosql.execution.executor:name=TaskExecutor.RunningSplits`` JXM object.
 
 ``task.min-drivers``
 ^^^^^^^^^^^^^^^^^^^^
@@ -408,6 +418,7 @@ Task Properties
     to become overloaded due to excessive resource utilization. This can also be specified on
     a per-query basis using the ``task_writer_count`` session property.
 
+.. _node-scheduler-properties:
 
 Node Scheduler Properties
 -------------------------
@@ -460,19 +471,64 @@ Node Scheduler Properties
     across all worker nodes. Setting it too high may increase query
     latency and increase CPU usage on the coordinator.
 
-``node-scheduler.network-topology``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+``node-scheduler.policy``
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
     * **Type:** ``string``
-    * **Allowed values:** ``legacy``, ``flat``
-    * **Default value:** ``legacy``
+    * **Allowed values:** ``uniform``, ``topology``
+    * **Default value:** ``uniform``
 
-    Sets the network topology to use when scheduling splits. ``legacy`` will ignore
-    the topology when scheduling splits. ``flat`` will try to schedule splits on the host
-    where the data is located by reserving 50% of the work queue for local splits.
-    It is recommended to use ``flat`` for clusters where distributed storage runs on
-    the same nodes as Presto workers.
+    Sets the node scheduler policy to use when scheduling splits. ``uniform`` will attempt
+    to schedule splits on the host where the data is located, while maintaining a uniform
+    distribution across all hosts. ``topology`` will try to schedule splits according to
+    the topology distance between nodes and splits. It is recommended to use ``uniform``
+    for clusters where distributed storage runs on the same nodes as Presto workers.
 
+``node-scheduler.network-topology.segments``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **Default value:** ``machine``
+
+    A comma-separated string describing the meaning of each segment of a network location.
+    For example, setting ``region,rack,machine`` means a network location will contain three segments.
+
+``node-scheduler.network-topology.type``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **Allowed values:** ``flat``, ``file``
+    * **Default value:** ``flat``
+
+    Sets the network topology type. To use this option, ``node-scheduler.policy`` must be set to
+    ``topology``. ``flat`` has only one segment, with one value for each machine.
+    ``file`` loads the topology from a file as described below.
+
+``node-scheduler.network-topology.file``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+
+    Load the network topology from a file. To use this option, ``node-scheduler.network-topology.type``
+    must be set to ``file``. Each line contains a mapping between a host name and a
+    network location, separated by whitespace. Network location must begin with a leading
+    ``/`` and segments are separated by a ``/``.
+
+.. code-block:: none
+
+    192.168.0.1 /region1/rack1/machine1
+    192.168.0.2 /region1/rack1/machine2
+    hdfs01.example.com /region2/rack2/machine3
+
+``node-scheduler.network-topology.refresh-period``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``duration``
+    * **Minimum value:** ``1ms``
+    * **Default value:** ``5m``
+
+    Controls how often the network topology file is reloaded.  To use this option,
+    ``node-scheduler.network-topology.type`` must be set to ``file``.
 
 Optimizer Properties
 --------------------
@@ -518,15 +574,6 @@ Optimizer Properties
     partition keys for partitions that have no rows. In particular, the Hive connector
     can return empty partitions if they were created by other systems (Presto cannot
     create them).
-
-``optimizer.optimize-single-distinct``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-    * **Type:** ``boolean``
-    * **Default value:** ``true``
-
-    The single distinct optimization will try to replace multiple ``DISTINCT`` clauses
-    with a single ``GROUP BY`` clause, which can be substantially faster to execute.
 
 ``optimizer.push-aggregation-through-join``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
