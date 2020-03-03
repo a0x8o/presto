@@ -1,118 +1,192 @@
-# Presto [![Build Status](https://travis-ci.com/prestosql/presto.svg?branch=master)](https://travis-ci.com/prestosql/presto)
+# Bistro: A fast, flexible toolkit for scheduling and running distributed tasks
 
-Presto is a distributed SQL query engine for big data.
+<<<<<<< HEAD
+[![Build Status](https://travis-ci.org/facebook/bistro.svg?branch=master)](https://travis-ci.org/facebook/bistro)
+=======
+[![Build Status](https://github.com/apache/drill/workflows/Github%20CI/badge.svg)](https://github.com/apache/drill/actions)
+[![Artifact](https://img.shields.io/maven-central/v/org.apache.drill/distribution.svg)](https://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22org.apache.drill%22%20AND%20a%3A%22distribution%22)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+>>>>>>> f553d9c60492c530e5ee4b885c55b7f283ecf09b
 
-See the [User Manual](https://prestosql.io/docs/current/) for deployment instructions and end user documentation.
+This README is a very abbreviated introduction to Bistro. Visit
+http://facebook.github.io/bistro for a more structured introduction, and for the docs.
 
-## Requirements
+Bistro is a toolkit for making distributed computation systems. It can
+schedule and run distributed tasks, including data-parallel jobs.  It
+enforces resource constraints for worker hosts and data-access bottlenecks.
+It supports remote worker pools, low-latency batch scheduling, dynamic
+shards, and a variety of other possibilities.  It has command-line and web
+UIs.
 
-* Mac OS X or Linux
-* Java 8 Update 161 or higher (8u161+), 64-bit. Both Oracle JDK and OpenJDK are supported.
-* Python 2.6+ (for running with the launcher script)
+Some of the diverse problems that Bistro solved at Facebook:
+ - Safely run map-only ETL tasks against live production databases (MySQL,
+   HBase, Postgres).
+ - Provide a resource-aware job queue for batch CPU/GPU compute jobs.
+ - Replace Hadoop for a periodic online data compression task on HBase,
+   improving time-to-completion and reliability by over 10x.
 
-## Building Presto
+You can run Bistro "out of the box" to suit a variety of different
+applications, but even so, it is a tool for engineers.  You should be able
+to get started just by reading the documentation, but when in doubt, look at
+the code --- it was written to be read.
 
-Presto is a standard Maven project. Simply run the following command from the project root directory:
+<<<<<<< HEAD
+Some applications of Bistro may involve writing small plugins to make it fit
+your needs.  The code is built to be extensible.  Ask for tips, and we'll do
+our best to [help](https://www.facebook.com/groups/bistro.scheduler).  In
+return, we hope that you will send a pull request to allow us to share your
+work with the community.
+=======
+ * Remote Execution Installation Instructions
+ * [Running Drill on Docker instructions](https://drill.apache.org/docs/running-drill-on-docker/)
+ * Information about how to submit logical and distributed physical plans
+ * More example queries and sample data
+ * Find out ways to be involved or discuss Drill
+>>>>>>> f553d9c60492c530e5ee4b885c55b7f283ecf09b
 
-    ./mvnw clean install
+## Early release
 
-On the first build, Maven will download all the dependencies from the internet and cache them in the local repository (`~/.m2/repository`), which can take a considerable amount of time. Subsequent builds will be faster.
+<<<<<<< HEAD
+Although Bistro has been in production at Facebook for over 3 years, the
+present public release is partial, including just the server components.
+The CLI tools and web UI will be shipping shortly.
+=======
+## Join the community!
+Apache Drill is an Apache Foundation project and is seeking all types of users and contributions.
+Please say hello on the [Apache Drill mailing list](http://drill.apache.org/mailinglists/).You can also join our [Google Hangouts](http://drill.apache.org/community-resources/)
+or [join](https://bit.ly/2VM0XS8) our [Slack Channel](https://join.slack.com/t/apache-drill/shared_invite/enQtNTQ4MjM1MDA3MzQ2LTJlYmUxMTRkMmUwYmQ2NTllYmFmMjU4MDk0NjYwZjBmYjg0MDZmOTE2ZDg0ZjBlYmI3Yjc4Y2I2NTQyNGVlZTc) if you need help with using or developing Apache Drill.
+(More information can be found on [Apache Drill website](http://drill.apache.org/)).
+>>>>>>> f553d9c60492c530e5ee4b885c55b7f283ecf09b
 
-Presto has a comprehensive set of unit tests that can take several minutes to run. You can disable the tests when building:
+## Install the dependencies and build
 
-    ./mvnw clean install -DskipTests
+Bistro needs a 64-bit Linux, Folly, FBThrift, Proxygen, boost, and
+libsqlite3.  You need 2-3GB of RAM to build, as well as GCC 4.9 or above.
 
-## Running Presto in your IDE
+`build/README.md` documents the usage of Docker-based scripts that build
+Bistro on Ubuntu 14.04, 16.04, and Debian 8.6.  You should be able to follow
+very similar steps on most modern Linux distributions.
 
-### Overview
+If you run into dependency problems, look at `bistro/cmake/setup.cmake` for
+a full list of Bistro's external dependencies (direct and indirect).  We
+gratefully accept patches that improve Bistro's builds, or add support for
+various flavors of Linux and Mac OS.
 
-After building Presto for the first time, you can load the project into your IDE and run the server. We recommend using [IntelliJ IDEA](http://www.jetbrains.com/idea/). Because Presto is a standard Maven project, you can import it into your IDE using the root `pom.xml` file. In IntelliJ, choose Open Project from the Quick Start box or choose Open from the File menu and select the root `pom.xml` file.
+The binaries will be in `bistro/cmake/{Debug,Release}`.  Available build
+targets are explained here:
+   http://cmake.org/Wiki/CMake_Useful_Variables#Compilers_and_Tools
+You can start Bistro's unit tests by running `ctest` in those directories.
 
-After opening the project in IntelliJ, double check that the Java SDK is properly configured for the project:
+## Your first Bistro run
 
-* Open the File menu and select Project Structure
-* In the SDKs section, ensure that a 1.8 JDK is selected (create one if none exist)
-* In the Project section, ensure the Project language level is set to 8.0 as Presto makes use of several Java 8 language features
+This is just one simple demo, but Bistro is a very flexible tool. Refer to
+http://facebook.github.io/bistro/ for more in-depth information.
 
-Presto comes with sample configuration that should work out-of-the-box for development. Use the following options to create a run configuration:
+We are going to start a single Bistro scheduler talking to one 'remote'
+worker.
 
-* Main Class: `io.prestosql.server.PrestoServer`
-* VM Options: `-ea -XX:+UseG1GC -XX:G1HeapRegionSize=32M -XX:+UseGCOverheadLimit -XX:+ExplicitGCInvokesConcurrent -Xmx2G -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties`
-* Working directory: `$MODULE_DIR$`
-* Use classpath of module: `presto-main`
+Aside: The scheduler tracks jobs, and data shards on which to execute them.
+It also makes sure only to start new tasks when the required resources are
+available.  The remote worker is a module for executing centrally scheduled
+work on many machines.  The UI can aggregate many schedulers at once, so
+using remote workers is optional --- a share-nothing, many-scheduler system
+is sometimes preferable.
 
-The working directory should be the `presto-main` subdirectory. In IntelliJ, using `$MODULE_DIR$` accomplishes this automatically.
+Let's make a task to execute:
 
-Additionally, the Hive plugin must be configured with the location of your Hive metastore Thrift service. Add the following to the list of VM options, replacing `localhost:9083` with the correct host and port (or use the below value if you do not have a Hive metastore):
+```
+cat <<EOF > ~/demo_bistro_task.sh
+#!/bin/bash
+echo "I got these arguments: \$@"
+echo "stderr is also logged" 1>&2
+echo "done" > "\$2"  # Report the task status to Bistro via a named pipe
+EOF
+chmod u+x ~/demo_bistro_task.sh
+```
 
-    -Dhive.metastore.uri=thrift://localhost:9083
+Open two terminals, one for the scheduler, and one for the worker.
 
-### Using SOCKS for Hive or HDFS
+```
+# In both terminals
+cd bistro/bistro
+# Start the scheduler in one terminal
+./cmake/Debug/server/bistro_scheduler \
+  --server_port=6789 --http_server_port=6790 \
+  --config_file=scripts/test_configs/simple --clean_statuses \
+  --CAUTION_startup_wait_for_workers=1 --instance_node_name=scheduler
+# Start the worker in another
+mkdir /tmp/bistro_worker
+./cmake/Debug/worker/bistro_worker --server_port=27182 --scheduler_host=:: \
+  --scheduler_port=6789 --worker_command="$HOME/demo_bistro_task.sh" \
+  --data_dir=/tmp/bistro_worker
+```
 
-If your Hive metastore or HDFS cluster is not directly accessible to your local machine, you can use SSH port forwarding to access it. Setup a dynamic SOCKS proxy with SSH listening on local port 1080:
+You should be seeing some lively log activity on both terminals. In several
+seconds, the worker-scheduler negotiation should complete, and you should
+see messages like "Task ...  quit with status" and "Got status".
 
-    ssh -v -N -D 1080 server
+Since we passed `--clean_statuses`, the scheduler will not persist any task
+completions that happened during this run.  The worker, on the other hand,
+will keep a record of the task logs in `/tmp/bistro_worker/task_logs.sql3`.
 
-Then add the following to the list of VM options:
+If you want task completions to persist across runs, tell Bistro where to
+put the SQLite database, via `--data_dir=/tmp/bistro_scheduler` and
+`--status_table=task_statuses`
 
-    -Dhive.metastore.thrift.client.socks-proxy=localhost:1080
-    -Dhive.hdfs.socks-proxy=localhost:1080
+<<<<<<< HEAD
+```
+mkdir /tmp/bistro_scheduler
+./cmake/Debug/server/bistro_scheduler \
+  --server_port=6789 --http_server_port=6790 \
+  --config_file=scripts/test_configs/simple \
+  --data_dir=/tmp/bistro_scheduler --status_table=task_statuses \
+  --CAUTION_startup_wait_for_workers=1 --instance_node_name=scheduler
+```
 
-### Running the CLI
+You can query the running scheduler via its REST API:
 
-Start the CLI to connect to the server and run SQL queries:
+```
+curl -d '{"a":{"handler":"jobs"},"b":{"handler":"running_tasks"}}' :::6790
+curl -d '{"my subquery":{"handler":"task_logs","log_type":"stdout"}}' :::6790
+```
 
-    presto-cli/target/presto-cli-*-executable.jar
+**Pro-tip:** If you have `perl` installed, try piping the JSON output
+through `json_pp` --- it's much easier to read!
 
-Run a query to see the nodes in the cluster:
+You should also take a look at the scheduler configuration to see how its
+jobs, nodes, and resources were specified.
+=======
+To learn how to write Beam pipelines, read the Quickstart for [[Java](https://beam.apache.org/get-started/quickstart-java), [Python](https://beam.apache.org/get-started/quickstart-py), or 
+[Go](https://beam.apache.org/get-started/quickstart-go)] available on our website.
+>>>>>>> 2fb7bb1c93a507f3e42707d704f9d0dd63d7ade7
 
-    SELECT * FROM system.runtime.nodes;
+```
+less scripts/test_configs/simple
+```
 
-In the sample configuration, the Hive connector is mounted in the `hive` catalog, so you can run the following queries to show the tables in the Hive database `default`:
+For debugging, we typically invoke the binaries like this:
 
-    SHOW TABLES FROM hive.default;
+```
+gdb cmake/Debug/worker/bistro_worker -ex "r ..." 2>&1 | tee WORKER.txt
+```
 
-## Development
+<<<<<<< HEAD
+When configuring a real deployment, be sure to carefully review the `--help`
+of the scheduler & worker binaries, as well as the documentation on
+http://facebook.github.io/bistro.  And don't hesitate to ask for help in the group:
+https://www.facebook.com/groups/bistro.scheduler
+=======
+Instructions for building and testing Beam itself
+are in the [contribution guide](https://beam.apache.org/contribute/).
+>>>>>>> 2fb7bb1c93a507f3e42707d704f9d0dd63d7ade7
 
-### Code Style
+## License
 
-We recommend you use IntelliJ as your IDE. The code style template for the project can be found in the [codestyle](https://github.com/airlift/codestyle) repository along with our general programming and Java guidelines. In addition to those you should also adhere to the following:
-
-* Alphabetize sections in the documentation source files (both in the table of contents files and other regular documentation files). In general, alphabetize methods/variables/sections if such ordering already exists in the surrounding code.
-* When appropriate, use the Java 8 stream API. However, note that the stream implementation does not perform well so avoid using it in inner loops or otherwise performance sensitive sections.
-* Categorize errors when throwing exceptions. For example, PrestoException takes an error code as an argument, `PrestoException(HIVE_TOO_MANY_OPEN_PARTITIONS)`. This categorization lets you generate reports so you can monitor the frequency of various failures.
-* Ensure that all files have the appropriate license header; you can generate the license by running `mvn license:format`.
-* Consider using String formatting (printf style formatting using the Java `Formatter` class): `format("Session property %s is invalid: %s", name, value)` (note that `format()` should always be statically imported). Sometimes, if you only need to append something, consider using the `+` operator.
-* Avoid using the ternary operator except for trivial expressions.
-* Use an assertion from Airlift's `Assertions` class if there is one that covers your case rather than writing the assertion by hand. Over time we may move over to more fluent assertions like AssertJ.
-* When writing a Git commit message, follow these [guidelines](https://chris.beams.io/posts/git-commit/).
-
-### Additional IDE configuration
-
-When using IntelliJ to develop Presto, we recommend starting with all of the default inspections,
-with some modifications.
-
-Enable the following inspections:
-
-- ``Java | Class structure | Utility class is not 'final'``,
-- ``Java | Class structure | Utility class without 'private' constructor``.
-
-Disable the following inspections:
-
-- ``Java | Abstraction issues | 'Optional' used as field or parameter type``.
-
-### Building the Web UI
-
-The Presto Web UI is composed of several React components and is written in JSX and ES6. This source code is compiled and packaged into browser-compatible Javascript, which is then checked in to the Presto source code (in the `dist` folder). You must have [Node.js](https://nodejs.org/en/download/) and [Yarn](https://yarnpkg.com/en/) installed to execute these commands. To update this folder after making changes, simply run:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src install
-
-If no Javascript dependencies have changed (i.e., no changes to `package.json`), it is faster to run:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src run package
-
-To simplify iteration, you can also run in `watch` mode, which automatically re-compiles when changes to source files are detected:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src run watch
-
-To iterate quickly, simply re-build the project in IntelliJ after packaging is complete. Project resources will be hot-reloaded and changes are reflected on browser refresh.
+<<<<<<< HEAD
+See [LICENSE](LICENSE).
+=======
+* [Apache Beam](https://beam.apache.org)
+* [Overview](https://beam.apache.org/use/beam-overview/)
+* Quickstart: [Java](https://beam.apache.org/get-started/quickstart-java), [Python](https://beam.apache.org/get-started/quickstart-py), [Go](https://beam.apache.org/get-started/quickstart-go)
+* [Community metrics](https://s.apache.org/beam-community-metrics)
+>>>>>>> 2fb7bb1c93a507f3e42707d704f9d0dd63d7ade7
