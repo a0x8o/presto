@@ -40,7 +40,8 @@ public class IdentityCast
                 ImmutableList.of(typeVariable("T")),
                 ImmutableList.of(),
                 new TypeSignature("T"),
-                ImmutableList.of(new TypeSignature("T")));
+                ImmutableList.of(new TypeSignature("T")),
+                false);
     }
 
     @Override
@@ -52,7 +53,6 @@ public class IdentityCast
         return new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                identity,
-                isDeterministic());
+                identity);
     }
 }

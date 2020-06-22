@@ -35,6 +35,7 @@ import io.prestosql.spi.security.PrincipalType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
@@ -42,7 +43,6 @@ import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.metastore.TableType.EXTERNAL_TABLE;
 
 public final class GlueToPrestoConverter
@@ -66,6 +66,7 @@ public final class GlueToPrestoConverter
     public static Table convertTable(com.amazonaws.services.glue.model.Table glueTable, String dbName)
     {
         requireNonNull(glueTable.getStorageDescriptor(), "Table StorageDescriptor is null");
+        Map<String, String> tableParameters = firstNonNull(glueTable.getParameters(), ImmutableMap.of());
         StorageDescriptor sd = glueTable.getStorageDescriptor();
 
         Table.Builder tableBuilder = Table.builder()
@@ -76,25 +77,25 @@ public final class GlueToPrestoConverter
                 .setTableType(firstNonNull(glueTable.getTableType(), EXTERNAL_TABLE.name()))
                 .setDataColumns(sd.getColumns().stream()
                         .map(GlueToPrestoConverter::convertColumn)
-                        .collect(toList()))
-                .setParameters(firstNonNull(glueTable.getParameters(), ImmutableMap.of()))
+                        .collect(toImmutableList()))
+                .setParameters(tableParameters)
                 .setViewOriginalText(Optional.ofNullable(glueTable.getViewOriginalText()))
                 .setViewExpandedText(Optional.ofNullable(glueTable.getViewExpandedText()));
 
         if (glueTable.getPartitionKeys() != null) {
             tableBuilder.setPartitionColumns(glueTable.getPartitionKeys().stream()
                     .map(GlueToPrestoConverter::convertColumn)
-                    .collect(toList()));
+                    .collect(toImmutableList()));
         }
         else {
             tableBuilder.setPartitionColumns(new ArrayList<>());
         }
 
-        setStorageBuilder(sd, tableBuilder.getStorageBuilder());
+        setStorageBuilder(sd, tableBuilder.getStorageBuilder(), tableParameters);
         return tableBuilder.build();
     }
 
-    private static void setStorageBuilder(StorageDescriptor sd, Storage.Builder storageBuilder)
+    private static void setStorageBuilder(StorageDescriptor sd, Storage.Builder storageBuilder, Map<String, String> tableParameters)
     {
         requireNonNull(sd.getSerdeInfo(), "StorageDescriptor SerDeInfo is null");
         SerDeInfo serdeInfo = sd.getSerdeInfo();
@@ -112,7 +113,7 @@ public final class GlueToPrestoConverter
                                 Order.fromMetastoreApiOrder(column.getSortOrder(), "unknown")))
                         .collect(toImmutableList());
             }
-            BucketingVersion bucketingVersion = HiveBucketing.getBucketingVersion(sd.getParameters()); // TODO is it correct?
+            BucketingVersion bucketingVersion = HiveBucketing.getBucketingVersion(tableParameters);
             bucketProperty = Optional.of(new HiveBucketProperty(sd.getBucketColumns(), bucketingVersion, sd.getNumberOfBuckets(), sortedBy));
         }
 
@@ -129,7 +130,7 @@ public final class GlueToPrestoConverter
         return new Column(glueColumn.getName(), HiveType.valueOf(glueColumn.getType().toLowerCase(Locale.ENGLISH)), Optional.ofNullable(glueColumn.getComment()));
     }
 
-    public static Partition convertPartition(com.amazonaws.services.glue.model.Partition gluePartition)
+    public static Partition convertPartition(com.amazonaws.services.glue.model.Partition gluePartition, Map<String, String> tableParameters)
     {
         requireNonNull(gluePartition.getStorageDescriptor(), "Partition StorageDescriptor is null");
         StorageDescriptor sd = gluePartition.getStorageDescriptor();
@@ -140,10 +141,10 @@ public final class GlueToPrestoConverter
                 .setValues(gluePartition.getValues())
                 .setColumns(sd.getColumns().stream()
                         .map(GlueToPrestoConverter::convertColumn)
-                        .collect(toList()))
+                        .collect(toImmutableList()))
                 .setParameters(firstNonNull(gluePartition.getParameters(), ImmutableMap.of()));
 
-        setStorageBuilder(sd, partitionBuilder.getStorageBuilder());
+        setStorageBuilder(sd, partitionBuilder.getStorageBuilder(), tableParameters);
         return partitionBuilder.build();
     }
 

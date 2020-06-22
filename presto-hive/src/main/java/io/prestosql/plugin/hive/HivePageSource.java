@@ -149,7 +149,7 @@ public class HivePageSource
             HiveColumnHandle column = columnMapping.getHiveColumnHandle();
 
             String name = column.getName();
-            Type type = typeManager.getType(column.getTypeSignature());
+            Type type = column.getType();
             types[columnIndex] = type;
 
             if (columnMapping.getCoercionFrom().isPresent()) {
@@ -248,17 +248,7 @@ public class HivePageSource
 
             if (bucketAdapter.isPresent()) {
                 IntArrayList rowsToKeep = bucketAdapter.get().computeEligibleRowIds(dataPage);
-                Block[] adaptedBlocks = new Block[dataPage.getChannelCount()];
-                for (int i = 0; i < adaptedBlocks.length; i++) {
-                    Block block = dataPage.getBlock(i);
-                    if (!block.isLoaded()) {
-                        adaptedBlocks[i] = new LazyBlock(rowsToKeep.size(), new RowFilterLazyBlockLoader(dataPage.getBlock(i), rowsToKeep));
-                    }
-                    else {
-                        adaptedBlocks[i] = block.getPositions(rowsToKeep.elements(), 0, rowsToKeep.size());
-                    }
-                }
-                dataPage = new Page(rowsToKeep.size(), adaptedBlocks);
+                dataPage = dataPage.getPositions(rowsToKeep.elements(), 0, rowsToKeep.size());
             }
 
             int batchSize = dataPage.getPositionCount();
@@ -340,8 +330,8 @@ public class HivePageSource
 
     private static Function<Block, Block> createCoercer(TypeManager typeManager, HiveType fromHiveType, HiveType toHiveType)
     {
-        Type fromType = typeManager.getType(fromHiveType.getTypeSignature());
-        Type toType = typeManager.getType(toHiveType.getTypeSignature());
+        Type fromType = fromHiveType.getType(typeManager);
+        Type toType = toHiveType.getType(typeManager);
         if (toType instanceof VarcharType && (fromHiveType.equals(HIVE_BYTE) || fromHiveType.equals(HIVE_SHORT) || fromHiveType.equals(HIVE_INT) || fromHiveType.equals(HIVE_LONG))) {
             return new IntegerNumberToVarcharCoercer<>(fromType, (VarcharType) toType);
         }
@@ -517,7 +507,7 @@ public class HivePageSource
     }
 
     private static final class CoercionLazyBlockLoader
-            implements LazyBlockLoader<LazyBlock>
+            implements LazyBlockLoader
     {
         private final Function<Block, Block> coercer;
         private Block block;
@@ -529,38 +519,15 @@ public class HivePageSource
         }
 
         @Override
-        public void load(LazyBlock lazyBlock)
+        public Block load()
         {
             checkState(block != null, "Already loaded");
 
-            lazyBlock.setBlock(coercer.apply(block.getLoadedBlock()));
-
+            Block loaded = coercer.apply(block.getLoadedBlock());
             // clear reference to loader to free resources, since load was successful
             block = null;
-        }
-    }
 
-    private static final class RowFilterLazyBlockLoader
-            implements LazyBlockLoader<LazyBlock>
-    {
-        private Block block;
-        private final IntArrayList rowsToKeep;
-
-        public RowFilterLazyBlockLoader(Block block, IntArrayList rowsToKeep)
-        {
-            this.block = requireNonNull(block, "block is null");
-            this.rowsToKeep = requireNonNull(rowsToKeep, "rowsToKeep is null");
-        }
-
-        @Override
-        public void load(LazyBlock lazyBlock)
-        {
-            checkState(block != null, "Already loaded");
-
-            lazyBlock.setBlock(block.getPositions(rowsToKeep.elements(), 0, rowsToKeep.size()));
-
-            // clear reference to loader to free resources, since load was successful
-            block = null;
+            return loaded;
         }
     }
 

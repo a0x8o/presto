@@ -42,7 +42,8 @@ public final class CastFromUnknownOperator
                 ImmutableList.of(typeVariable("E")),
                 ImmutableList.of(),
                 new TypeSignature("E"),
-                ImmutableList.of(UNKNOWN.getTypeSignature()));
+                ImmutableList.of(UNKNOWN.getTypeSignature()),
+                false);
     }
 
     @Override
@@ -53,8 +54,7 @@ public final class CastFromUnknownOperator
         return new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                methodHandle,
-                isDeterministic());
+                methodHandle);
     }
 
     @UsedByGeneratedCode

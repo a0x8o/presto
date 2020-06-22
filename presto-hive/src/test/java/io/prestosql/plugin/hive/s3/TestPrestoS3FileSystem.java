@@ -19,7 +19,6 @@ import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
-import com.amazonaws.auth.InstanceProfileCredentialsProvider;
 import com.amazonaws.auth.STSAssumeRoleSessionCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.AmazonS3EncryptionClient;
@@ -45,6 +44,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -72,13 +72,13 @@ import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_SKIP_GLACIER_OBJ
 import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_STAGING_DIRECTORY;
 import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_USER_AGENT_PREFIX;
 import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_USER_AGENT_SUFFIX;
-import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_USE_INSTANCE_CREDENTIALS;
 import static java.net.HttpURLConnection.HTTP_FORBIDDEN;
 import static java.net.HttpURLConnection.HTTP_INTERNAL_ERROR;
 import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 import static java.nio.file.Files.createTempDirectory;
 import static java.nio.file.Files.createTempFile;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 public class TestPrestoS3FileSystem
@@ -89,14 +89,13 @@ public class TestPrestoS3FileSystem
     public void testStaticCredentials()
             throws Exception
     {
-        Configuration config = new Configuration();
-        config.set(S3_ACCESS_KEY, "test_secret_access_key");
-        config.set(S3_SECRET_KEY, "test_access_key_id");
+        Configuration config = new Configuration(false);
+        config.set(S3_ACCESS_KEY, "test_access_key");
+        config.set(S3_SECRET_KEY, "test_secret_key");
         // the static credentials should be preferred
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
-            fs.initialize(new URI("s3n://test-bucket/"), config);
-            assertInstanceOf(getAwsCredentialsProvider(fs), AWSStaticCredentialsProvider.class);
+            verifyStaticCredentials(config, fs, "s3n://test-bucket/", "test_access_key", "test_secret_key");
         }
     }
 
@@ -104,24 +103,33 @@ public class TestPrestoS3FileSystem
     public void testCompatibleStaticCredentials()
             throws Exception
     {
-        Configuration config = new Configuration();
-        config.set(S3_ACCESS_KEY, "test_secret_access_key");
-        config.set(S3_SECRET_KEY, "test_access_key_id");
+        Configuration config = new Configuration(false);
+        config.set(S3_ACCESS_KEY, "test_access_key");
+        config.set(S3_SECRET_KEY, "test_secret_key");
         config.set(S3_ENDPOINT, "test.example.endpoint.com");
         config.set(S3_SIGNER_TYPE, "S3SignerType");
         // the static credentials should be preferred
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
-            fs.initialize(new URI("s3a://test-bucket/"), config);
-            assertInstanceOf(getAwsCredentialsProvider(fs), AWSStaticCredentialsProvider.class);
+            verifyStaticCredentials(config, fs, "s3a://test-bucket/", "test_access_key", "test_secret_key");
         }
+    }
+
+    private static void verifyStaticCredentials(Configuration config, PrestoS3FileSystem fileSystem, String uri, String expectedAccessKey, String expectedSecretKey)
+            throws IOException, URISyntaxException
+    {
+        fileSystem.initialize(new URI(uri), config);
+        AWSCredentialsProvider awsCredentialsProvider = getAwsCredentialsProvider(fileSystem);
+        assertInstanceOf(awsCredentialsProvider, AWSStaticCredentialsProvider.class);
+        assertEquals(awsCredentialsProvider.getCredentials().getAWSAccessKeyId(), expectedAccessKey);
+        assertEquals(awsCredentialsProvider.getCredentials().getAWSSecretKey(), expectedSecretKey);
     }
 
     @Test(expectedExceptions = VerifyException.class, expectedExceptionsMessageRegExp = "Invalid configuration: either endpoint can be set or S3 client can be pinned to the current region")
     public void testEndpointWithPinToCurrentRegionConfiguration()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_ENDPOINT, "test.example.endpoint.com");
         config.set(S3_PIN_CLIENT_TO_CURRENT_REGION, "true");
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -130,25 +138,11 @@ public class TestPrestoS3FileSystem
     }
 
     @Test
-    public void testInstanceCredentialsEnabled()
-            throws Exception
-    {
-        Configuration config = new Configuration();
-        // instance credentials are enabled by default
-
-        try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
-            fs.initialize(new URI("s3n://test-bucket/"), config);
-            assertInstanceOf(getAwsCredentialsProvider(fs), InstanceProfileCredentialsProvider.class);
-        }
-    }
-
-    @Test
     public void testAssumeRoleCredentials()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_IAM_ROLE, "role");
-        config.setBoolean(S3_USE_INSTANCE_CREDENTIALS, false);
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             fs.initialize(new URI("s3n://test-bucket/"), config);
@@ -160,8 +154,7 @@ public class TestPrestoS3FileSystem
     public void testDefaultCredentials()
             throws Exception
     {
-        Configuration config = new Configuration();
-        config.setBoolean(S3_USE_INSTANCE_CREDENTIALS, false);
+        Configuration config = new Configuration(false);
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             fs.initialize(new URI("s3n://test-bucket/"), config);
@@ -173,7 +166,7 @@ public class TestPrestoS3FileSystem
     public void testPathStyleAccess()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.setBoolean(S3_PATH_STYLE_ACCESS, true);
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -187,13 +180,15 @@ public class TestPrestoS3FileSystem
     public void testUnderscoreBucket()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.setBoolean(S3_PATH_STYLE_ACCESS, true);
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             String expectedBucketName = "test-bucket_underscore";
-            fs.initialize(new URI("s3n://" + expectedBucketName + "/"), config);
+            URI uri = new URI("s3n://" + expectedBucketName + "/");
+            assertEquals(fs.getBucketName(uri), expectedBucketName);
+            fs.initialize(uri, config);
             fs.setS3Client(s3);
             fs.getS3ObjectMetadata(new Path("/test/path"));
             assertEquals(expectedBucketName, s3.getGetObjectMetadataRequest().getBucketName());
@@ -209,7 +204,7 @@ public class TestPrestoS3FileSystem
             int maxRetries = 2;
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectHttpErrorCode(HTTP_INTERNAL_ERROR);
-            Configuration configuration = new Configuration();
+            Configuration configuration = new Configuration(false);
             configuration.set(S3_MAX_BACKOFF_TIME, "1ms");
             configuration.set(S3_MAX_RETRY_TIME, "5s");
             configuration.setInt(S3_MAX_CLIENT_RETRIES, maxRetries);
@@ -235,7 +230,7 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectMetadataHttpCode(HTTP_INTERNAL_ERROR);
-            Configuration configuration = new Configuration();
+            Configuration configuration = new Configuration(false);
             configuration.set(S3_MAX_BACKOFF_TIME, "1ms");
             configuration.set(S3_MAX_RETRY_TIME, "5s");
             configuration.setInt(S3_MAX_CLIENT_RETRIES, maxRetries);
@@ -258,7 +253,7 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectHttpErrorCode(HTTP_NOT_FOUND);
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
             try (FSDataInputStream inputStream = fs.open(new Path("s3n://test-bucket/test"))) {
                 inputStream.read();
@@ -274,7 +269,7 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectHttpErrorCode(HTTP_FORBIDDEN);
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
             try (FSDataInputStream inputStream = fs.open(new Path("s3n://test-bucket/test"))) {
                 inputStream.read();
@@ -293,7 +288,7 @@ public class TestPrestoS3FileSystem
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
-            Configuration conf = new Configuration();
+            Configuration conf = new Configuration(false);
             conf.set(S3_STAGING_DIRECTORY, staging.toString());
             fs.initialize(new URI("s3n://test-bucket/"), conf);
             fs.setS3Client(s3);
@@ -315,7 +310,7 @@ public class TestPrestoS3FileSystem
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
-            Configuration conf = new Configuration();
+            Configuration conf = new Configuration(false);
             conf.set(S3_STAGING_DIRECTORY, staging.toString());
             fs.initialize(new URI("s3n://test-bucket/"), conf);
             fs.setS3Client(s3);
@@ -345,7 +340,7 @@ public class TestPrestoS3FileSystem
 
             try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
                 MockAmazonS3 s3 = new MockAmazonS3();
-                Configuration conf = new Configuration();
+                Configuration conf = new Configuration(false);
                 conf.set(S3_STAGING_DIRECTORY, link.toString());
                 fs.initialize(new URI("s3n://test-bucket/"), conf);
                 fs.setS3Client(s3);
@@ -367,7 +362,7 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectHttpErrorCode(HTTP_RANGE_NOT_SATISFIABLE);
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
             try (FSDataInputStream inputStream = fs.open(new Path("s3n://test-bucket/test"))) {
                 assertEquals(inputStream.read(), -1);
@@ -382,7 +377,7 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectMetadataHttpCode(HTTP_FORBIDDEN);
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
             fs.getS3ObjectMetadata(new Path("s3n://test-bucket/test"));
         }
@@ -395,9 +390,9 @@ public class TestPrestoS3FileSystem
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             s3.setGetObjectMetadataHttpCode(HTTP_NOT_FOUND);
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
-            assertEquals(fs.getS3ObjectMetadata(new Path("s3n://test-bucket/test")), null);
+            assertNull(fs.getS3ObjectMetadata(new Path("s3n://test-bucket/test")));
         }
     }
 
@@ -405,7 +400,7 @@ public class TestPrestoS3FileSystem
     public void testEncryptionMaterialsProvider()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_ENCRYPTION_MATERIALS_PROVIDER, TestEncryptionMaterialsProvider.class.getName());
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -418,7 +413,7 @@ public class TestPrestoS3FileSystem
     public void testKMSEncryptionMaterialsProvider()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_KMS_KEY_ID, "test-key-id");
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -438,8 +433,7 @@ public class TestPrestoS3FileSystem
     public void testCustomCredentialsProvider()
             throws Exception
     {
-        Configuration config = new Configuration();
-        config.set(S3_USE_INSTANCE_CREDENTIALS, "false");
+        Configuration config = new Configuration(false);
         config.set(S3_CREDENTIALS_PROVIDER, TestCredentialsProvider.class.getName());
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             fs.initialize(new URI("s3n://test-bucket/"), config);
@@ -451,8 +445,7 @@ public class TestPrestoS3FileSystem
     public void testCustomCredentialsClassCannotBeFound()
             throws Exception
     {
-        Configuration config = new Configuration();
-        config.set(S3_USE_INSTANCE_CREDENTIALS, "false");
+        Configuration config = new Configuration(false);
         config.set(S3_CREDENTIALS_PROVIDER, "com.example.DoesNotExist");
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             fs.initialize(new URI("s3n://test-bucket/"), config);
@@ -464,7 +457,7 @@ public class TestPrestoS3FileSystem
             throws Exception
     {
         String userAgentPrefix = "agent_prefix";
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_USER_AGENT_PREFIX, userAgentPrefix);
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             fs.initialize(new URI("s3n://test-bucket/"), config);
@@ -480,7 +473,7 @@ public class TestPrestoS3FileSystem
     {
         HiveS3Config defaults = new HiveS3Config();
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             ClientConfiguration config = getFieldValue(fs.getS3Client(), AmazonWebServiceClient.class, "clientConfiguration", ClientConfiguration.class);
             assertEquals(config.getMaxErrorRetry(), defaults.getS3MaxErrorRetries());
             assertEquals(config.getConnectionTimeout(), defaults.getS3ConnectTimeout().toMillis());
@@ -502,7 +495,7 @@ public class TestPrestoS3FileSystem
     private static void assertSkipGlacierObjects(boolean skipGlacierObjects)
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_SKIP_GLACIER_OBJECTS, String.valueOf(skipGlacierObjects));
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -511,11 +504,11 @@ public class TestPrestoS3FileSystem
             fs.initialize(new URI("s3n://test-bucket/"), config);
             fs.setS3Client(s3);
             FileStatus[] statuses = fs.listStatus(new Path("s3n://test-bucket/test"));
-            assertEquals(statuses.length, skipGlacierObjects ? 1 : 2);
+            assertEquals(statuses.length, skipGlacierObjects ? 2 : 3);
         }
     }
 
-    private static AWSCredentialsProvider getAwsCredentialsProvider(PrestoS3FileSystem fs)
+    public static AWSCredentialsProvider getAwsCredentialsProvider(PrestoS3FileSystem fs)
     {
         return getFieldValue(fs.getS3Client(), "awsCredentialsProvider", AWSCredentialsProvider.class);
     }
@@ -587,7 +580,7 @@ public class TestPrestoS3FileSystem
     public void testDefaultAcl()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
@@ -605,7 +598,7 @@ public class TestPrestoS3FileSystem
     public void testFullBucketOwnerControlAcl()
             throws Exception
     {
-        Configuration config = new Configuration();
+        Configuration config = new Configuration(false);
         config.set(S3_ACL_TYPE, "BUCKET_OWNER_FULL_CONTROL");
 
         try (PrestoS3FileSystem fs = new PrestoS3FileSystem()) {
@@ -638,7 +631,7 @@ public class TestPrestoS3FileSystem
                     return super.getObjectMetadata(getObjectMetadataRequest);
                 }
             };
-            fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
+            fs.initialize(new URI("s3n://test-bucket/"), new Configuration(false));
             fs.setS3Client(s3);
 
             FileStatus fileStatus = fs.getFileStatus(new Path("s3n://test-bucket/empty-dir/"));

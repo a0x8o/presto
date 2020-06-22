@@ -1,33 +1,127 @@
-# Apache Drill
+# Presto
+[![Maven Central](https://img.shields.io/maven-central/v/io.prestosql/presto-server.svg?label=Download)](https://prestosql.io/download.html)
+[![Presto Slack](https://img.shields.io/static/v1?logo=slack&logoColor=959DA5&label=Slack&labelColor=333a41&message=join%20conversation&color=3AC358)](https://prestosql.io/slack.html)
 
-[![Build Status](https://github.com/apache/drill/workflows/Github%20CI/badge.svg)](https://github.com/apache/drill/actions)
-[![Artifact](https://img.shields.io/maven-central/v/org.apache.drill/distribution.svg)](https://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22org.apache.drill%22%20AND%20a%3A%22distribution%22)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+Presto is a distributed SQL query engine for big data.
 
-Apache Drill is a distributed MPP query layer that supports SQL and alternative query languages against NoSQL and Hadoop data storage systems.  It was inspired in part by [Google's Dremel](http://research.google.com/pubs/pub36632.html).  
+See the [User Manual](https://prestosql.io/docs/current/) for deployment instructions and end user documentation.
 
-## Developers
+## Requirements
 
-Please read [Environment.md](docs/dev/Environment.md) for setting up and running Apache Drill. For complete developer documentation see [DevDocs.md](docs/dev/DevDocs.md)
+* Mac OS X or Linux
+* Java 8 Update 161 or higher (8u161+), 64-bit. Both Oracle JDK and OpenJDK are supported.
+* Python 2.6+ (for running with the launcher script)
 
-## More Information
-Please see the [Apache Drill Website](http://drill.apache.org/) or the [Apache Drill Documentation](http://drill.apache.org/docs/) for more information including:
+## Building Presto
 
- * Remote Execution Installation Instructions
- * [Running Drill on Docker instructions](https://drill.apache.org/docs/running-drill-on-docker/)
- * Information about how to submit logical and distributed physical plans
- * More example queries and sample data
- * Find out ways to be involved or discuss Drill
+Presto is a standard Maven project. Simply run the following command from the project root directory:
 
+    ./mvnw clean install
 
-## Join the community!
-Apache Drill is an Apache Foundation project and is seeking all types of users and contributions.
-Please say hello on the [Apache Drill mailing list](http://drill.apache.org/mailinglists/).You can also join our [Google Hangouts](http://drill.apache.org/community-resources/)
-or [join](https://bit.ly/2VM0XS8) our [Slack Channel](https://join.slack.com/t/apache-drill/shared_invite/enQtNTQ4MjM1MDA3MzQ2LTJlYmUxMTRkMmUwYmQ2NTllYmFmMjU4MDk0NjYwZjBmYjg0MDZmOTE2ZDg0ZjBlYmI3Yjc4Y2I2NTQyNGVlZTc) if you need help with using or developing Apache Drill.
-(More information can be found on [Apache Drill website](http://drill.apache.org/)).
+On the first build, Maven will download all the dependencies from the internet and cache them in the local repository (`~/.m2/repository`), which can take a considerable amount of time. Subsequent builds will be faster.
 
-## Export Control
-This distribution includes cryptographic software. The country in which you currently reside may have restrictions on the import, possession, use, and/or re-export to another country, of encryption software. BEFORE using any encryption software, please check your country's laws, regulations and policies concerning the import, possession, or use, and re-export of encryption software, to see if this is permitted. See <http://www.wassenaar.org/> for more information.  
-The U.S. Government Department of Commerce, Bureau of Industry and Security (BIS), has classified this software as Export Commodity Control Number (ECCN) 5D002.C.1, which includes information security software using or performing cryptographic functions with asymmetric algorithms. The form and manner of this Apache Software Foundation distribution makes it eligible for export under the License Exception ENC Technology Software Unrestricted (TSU) exception (see the BIS Export Administration Regulations, Section 740.13) for both object code and source code.
-The following provides more details on the included cryptographic software: 
- Java SE Security packages are used to provide support for authentication, authorization and secure sockets communication. The Jetty Web Server is used to provide communication via HTTPS. The Cyrus SASL libraries, Kerberos Libraries and OpenSSL Libraries are used to provide SASL based authentication and SSL communication.
+Presto has a comprehensive set of unit tests that can take several minutes to run. You can disable the tests when building:
+
+    ./mvnw clean install -DskipTests
+
+## Running Presto in your IDE
+
+### Overview
+
+After building Presto for the first time, you can load the project into your IDE and run the server. We recommend using [IntelliJ IDEA](http://www.jetbrains.com/idea/). Because Presto is a standard Maven project, you can import it into your IDE using the root `pom.xml` file. In IntelliJ, choose Open Project from the Quick Start box or choose Open from the File menu and select the root `pom.xml` file.
+
+After opening the project in IntelliJ, double check that the Java SDK is properly configured for the project:
+
+* Open the File menu and select Project Structure
+* In the SDKs section, ensure that a 1.8 JDK is selected (create one if none exist)
+* In the Project section, ensure the Project language level is set to 8.0 as Presto makes use of several Java 8 language features
+
+Presto comes with sample configuration that should work out-of-the-box for development. Use the following options to create a run configuration:
+
+* Main Class: `io.prestosql.server.PrestoServer`
+* VM Options: `-ea -XX:+UseG1GC -XX:G1HeapRegionSize=32M -XX:+UseGCOverheadLimit -XX:+ExplicitGCInvokesConcurrent -Xmx2G -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties -Djdk.attach.allowAttachSelf=true`
+* Working directory: `$MODULE_DIR$`
+* Use classpath of module: `presto-main`
+
+The working directory should be the `presto-main` subdirectory. In IntelliJ, using `$MODULE_DIR$` accomplishes this automatically.
+
+Additionally, the Hive plugin must be configured with the location of your Hive metastore Thrift service. Add the following to the list of VM options, replacing `localhost:9083` with the correct host and port (or use the below value if you do not have a Hive metastore):
+
+    -Dhive.metastore.uri=thrift://localhost:9083
+
+### Using SOCKS for Hive or HDFS
+
+If your Hive metastore or HDFS cluster is not directly accessible to your local machine, you can use SSH port forwarding to access it. Setup a dynamic SOCKS proxy with SSH listening on local port 1080:
+
+    ssh -v -N -D 1080 server
+
+Then add the following to the list of VM options:
+
+    -Dhive.metastore.thrift.client.socks-proxy=localhost:1080
+    -Dhive.hdfs.socks-proxy=localhost:1080
+
+### Running the CLI
+
+Start the CLI to connect to the server and run SQL queries:
+
+    presto-cli/target/presto-cli-*-executable.jar
+
+Run a query to see the nodes in the cluster:
+
+    SELECT * FROM system.runtime.nodes;
+
+In the sample configuration, the Hive connector is mounted in the `hive` catalog, so you can run the following queries to show the tables in the Hive database `default`:
+
+    SHOW TABLES FROM hive.default;
+
+## Development
+
+### Code Style
+
+We recommend you use IntelliJ as your IDE. The code style template for the project can be found in the [codestyle](https://github.com/airlift/codestyle) repository along with our general programming and Java guidelines. In addition to those you should also adhere to the following:
+
+* Alphabetize sections in the documentation source files (both in the table of contents files and other regular documentation files). In general, alphabetize methods/variables/sections if such ordering already exists in the surrounding code.
+* When appropriate, use the Java 8 stream API. However, note that the stream implementation does not perform well so avoid using it in inner loops or otherwise performance sensitive sections.
+* Categorize errors when throwing exceptions. For example, PrestoException takes an error code as an argument, `PrestoException(HIVE_TOO_MANY_OPEN_PARTITIONS)`. This categorization lets you generate reports so you can monitor the frequency of various failures.
+* Ensure that all files have the appropriate license header; you can generate the license by running `mvn license:format`.
+* Consider using String formatting (printf style formatting using the Java `Formatter` class): `format("Session property %s is invalid: %s", name, value)` (note that `format()` should always be statically imported). Sometimes, if you only need to append something, consider using the `+` operator.
+* Avoid using the ternary operator except for trivial expressions.
+* Use an assertion from Airlift's `Assertions` class if there is one that covers your case rather than writing the assertion by hand. Over time we may move over to more fluent assertions like AssertJ.
+* When writing a Git commit message, follow these [guidelines](https://chris.beams.io/posts/git-commit/).
+
+### Additional IDE configuration
+
+When using IntelliJ to develop Presto, we recommend starting with all of the default inspections,
+with some modifications.
+
+Enable the following inspections:
+
+- ``Java | Internationalization | Implicit usage of platform's default charset``,
+- ``Java | Class structure | Utility class is not 'final'``,
+- ``Java | Class structure | Utility class with 'public' constructor``,
+- ``Java | Class structure | Utility class without 'private' constructor``.
+
+Disable the following inspections:
+
+- ``Java | Abstraction issues | 'Optional' used as field or parameter type``.
+
+### Building the Web UI
+
+The Presto Web UI is composed of several React components and is written in JSX and ES6. This source code is compiled and packaged into browser-compatible Javascript, which is then checked in to the Presto source code (in the `dist` folder). You must have [Node.js](https://nodejs.org/en/download/) and [Yarn](https://yarnpkg.com/en/) installed to execute these commands. To update this folder after making changes, simply run:
+
+    yarn --cwd presto-main/src/main/resources/webapp/src install
+
+If no Javascript dependencies have changed (i.e., no changes to `package.json`), it is faster to run:
+
+    yarn --cwd presto-main/src/main/resources/webapp/src run package
+
+To simplify iteration, you can also run in `watch` mode, which automatically re-compiles when changes to source files are detected:
+
+    yarn --cwd presto-main/src/main/resources/webapp/src run watch
+
+To iterate quickly, simply re-build the project in IntelliJ after packaging is complete. Project resources will be hot-reloaded and changes are reflected on browser refresh.
+
+## Writing and Building Documentation
+
+More information about the documentation process can be found in the
+[README file in presto-docs](./presto-docs/README.md).

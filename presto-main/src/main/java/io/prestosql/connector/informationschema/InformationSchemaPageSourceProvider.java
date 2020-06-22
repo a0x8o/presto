@@ -13,6 +13,7 @@
  */
 package io.prestosql.connector.informationschema;
 
+import io.airlift.log.Logger;
 import io.prestosql.FullConnectorSession;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.security.AccessControl;
@@ -23,6 +24,7 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
+import io.prestosql.spi.predicate.TupleDomain;
 
 import java.util.List;
 
@@ -31,6 +33,8 @@ import static java.util.Objects.requireNonNull;
 public class InformationSchemaPageSourceProvider
         implements ConnectorPageSourceProvider
 {
+    private static final Logger log = Logger.get(InformationSchemaPageSourceProvider.class);
+
     private final Metadata metadata;
     private final AccessControl accessControl;
 
@@ -46,8 +50,15 @@ public class InformationSchemaPageSourceProvider
             ConnectorSession session,
             ConnectorSplit split,
             ConnectorTableHandle tableHandle,
-            List<ColumnHandle> columns)
+            List<ColumnHandle> columns,
+            TupleDomain<ColumnHandle> dynamicFilter)
     {
+        InformationSchemaTableHandle informationSchemaTableHandle = (InformationSchemaTableHandle) tableHandle;
+        log.debug(
+                "Building information schema table (queryId=%s; tableHandle=%s)",
+                session.getQueryId(),
+                informationSchemaTableHandle);
+
         return new InformationSchemaPageSource(
                 ((FullConnectorSession) session).getSession(),
                 metadata,

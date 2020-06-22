@@ -25,7 +25,8 @@ import io.airlift.bytecode.Variable;
 import io.airlift.bytecode.control.ForLoop;
 import io.airlift.bytecode.control.IfStatement;
 import io.prestosql.metadata.BoundVariables;
-import io.prestosql.metadata.FunctionKind;
+import io.prestosql.metadata.FunctionArgumentDefinition;
+import io.prestosql.metadata.FunctionMetadata;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.Signature;
 import io.prestosql.metadata.SqlScalarFunction;
@@ -55,6 +56,7 @@ import static io.airlift.bytecode.expression.BytecodeExpressions.lessThan;
 import static io.airlift.bytecode.expression.BytecodeExpressions.newInstance;
 import static io.airlift.bytecode.expression.BytecodeExpressions.subtract;
 import static io.airlift.bytecode.instruction.VariableInstruction.incrementVariable;
+import static io.prestosql.metadata.FunctionKind.SCALAR;
 import static io.prestosql.metadata.Signature.typeVariable;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
@@ -74,34 +76,24 @@ public final class ArrayTransformFunction
 
     private ArrayTransformFunction()
     {
-        super(new Signature(
-                "transform",
-                FunctionKind.SCALAR,
-                ImmutableList.of(typeVariable("T"), typeVariable("U")),
-                ImmutableList.of(),
-                arrayType(new TypeSignature("U")),
+        super(new FunctionMetadata(
+                new Signature(
+                        "transform",
+                        ImmutableList.of(typeVariable("T"), typeVariable("U")),
+                        ImmutableList.of(),
+                        arrayType(new TypeSignature("U")),
+                        ImmutableList.of(
+                                arrayType(new TypeSignature("T")),
+                                functionType(new TypeSignature("T"), new TypeSignature("U"))),
+                        false),
+                false,
                 ImmutableList.of(
-                        arrayType(new TypeSignature("T")),
-                        functionType(new TypeSignature("T"), new TypeSignature("U"))),
-                false));
-    }
-
-    @Override
-    public boolean isHidden()
-    {
-        return false;
-    }
-
-    @Override
-    public boolean isDeterministic()
-    {
-        return false;
-    }
-
-    @Override
-    public String getDescription()
-    {
-        return "apply lambda to each element of the array";
+                        new FunctionArgumentDefinition(false),
+                        new FunctionArgumentDefinition(false)),
+                false,
+                false,
+                "Apply lambda to each element of the array",
+                SCALAR));
     }
 
     @Override
@@ -116,8 +108,7 @@ public final class ArrayTransformFunction
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                         functionTypeArgumentProperty(UnaryFunctionInterface.class)),
                 methodHandle(generatedClass, "transform", PageBuilder.class, Block.class, UnaryFunctionInterface.class),
-                Optional.of(methodHandle(generatedClass, "createPageBuilder")),
-                isDeterministic());
+                Optional.of(methodHandle(generatedClass, "createPageBuilder")));
     }
 
     private static Class<?> generateTransform(Type inputType, Type outputType)
