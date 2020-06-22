@@ -25,7 +25,7 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
-import io.prestosql.spi.connector.FixedPageSource;
+import io.prestosql.spi.connector.EmptyPageSource;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.connector.RecordPageSource;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -60,33 +60,29 @@ import static java.util.stream.Collectors.toList;
 public class HivePageSourceProvider
         implements ConnectorPageSourceProvider
 {
+    private final TypeManager typeManager;
     private final DateTimeZone hiveStorageTimeZone;
     private final HdfsEnvironment hdfsEnvironment;
-    private final Set<HiveRecordCursorProvider> cursorProviders;
-    private final TypeManager typeManager;
-
     private final Set<HivePageSourceFactory> pageSourceFactories;
+    private final Set<HiveRecordCursorProvider> cursorProviders;
 
     @Inject
     public HivePageSourceProvider(
+            TypeManager typeManager,
             HiveConfig hiveConfig,
             HdfsEnvironment hdfsEnvironment,
-            Set<HiveRecordCursorProvider> cursorProviders,
             Set<HivePageSourceFactory> pageSourceFactories,
-            TypeManager typeManager)
+            Set<HiveRecordCursorProvider> cursorProviders,
+            GenericHiveRecordCursorProvider genericCursorProvider)
     {
-        requireNonNull(hiveConfig, "hiveConfig is null");
-        this.hiveStorageTimeZone = hiveConfig.getDateTimeZone();
-        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
-        this.cursorProviders = ImmutableSet.copyOf(requireNonNull(cursorProviders, "cursorProviders is null"));
-        this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
-    }
-
-    @Override
-    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, ConnectorTableHandle table, List<ColumnHandle> columns)
-    {
-        return createPageSource(transaction, session, split, table, columns, TupleDomain.all());
+        this.hiveStorageTimeZone = requireNonNull(hiveConfig, "hiveConfig is null").getDateTimeZone();
+        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
+        this.cursorProviders = ImmutableSet.<HiveRecordCursorProvider>builder()
+                .addAll(requireNonNull(cursorProviders, "cursorProviders is null"))
+                .add(genericCursorProvider) // generic should be last, as a fallback option
+                .build();
     }
 
     @Override
@@ -104,8 +100,8 @@ public class HivePageSourceProvider
         Configuration configuration = hdfsEnvironment.getConfiguration(new HdfsContext(session, hiveSplit.getDatabase(), hiveSplit.getTable()), path);
 
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
-                cursorProviders,
                 pageSourceFactories,
+                cursorProviders,
                 configuration,
                 session,
                 path,
@@ -115,14 +111,15 @@ public class HivePageSourceProvider
                 hiveSplit.getFileSize(),
                 hiveSplit.getFileModifiedTime(),
                 hiveSplit.getSchema(),
-                hiveTable.getCompactEffectivePredicate().intersect(dynamicFilter.transform(HiveColumnHandle.class::cast)),
+                hiveTable.getCompactEffectivePredicate().intersect(dynamicFilter.transform(HiveColumnHandle.class::cast).simplify()),
                 hiveColumns,
                 hiveSplit.getPartitionKeys(),
                 hiveStorageTimeZone,
                 typeManager,
-                hiveSplit.getColumnCoercions(),
+                hiveSplit.getTableToPartitionMapping(),
                 hiveSplit.getBucketConversion(),
-                hiveSplit.isS3SelectPushdownEnabled());
+                hiveSplit.isS3SelectPushdownEnabled(),
+                hiveSplit.getDeleteDeltaLocations());
         if (pageSource.isPresent()) {
             return pageSource.get();
         }
@@ -130,8 +127,8 @@ public class HivePageSourceProvider
     }
 
     public static Optional<ConnectorPageSource> createHivePageSource(
-            Set<HiveRecordCursorProvider> cursorProviders,
             Set<HivePageSourceFactory> pageSourceFactories,
+            Set<HiveRecordCursorProvider> cursorProviders,
             Configuration configuration,
             ConnectorSession session,
             Path path,
@@ -146,19 +143,20 @@ public class HivePageSourceProvider
             List<HivePartitionKey> partitionKeys,
             DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
-            Map<Integer, HiveType> columnCoercions,
+            TableToPartitionMapping tableToPartitionMapping,
             Optional<BucketConversion> bucketConversion,
-            boolean s3SelectPushdownEnabled)
+            boolean s3SelectPushdownEnabled,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         if (effectivePredicate.isNone()) {
-            return Optional.of(new FixedPageSource(ImmutableList.of()));
+            return Optional.of(new EmptyPageSource());
         }
 
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 partitionKeys,
                 hiveColumns,
                 bucketConversion.map(BucketConversion::getBucketColumnHandles).orElse(ImmutableList.of()),
-                columnCoercions,
+                tableToPartitionMapping,
                 path,
                 bucketNumber,
                 fileSize,
@@ -191,9 +189,10 @@ public class HivePageSourceProvider
                     length,
                     fileSize,
                     schema,
-                    toColumnHandles(regularAndInterimColumnMappings, true),
+                    toColumnHandles(regularAndInterimColumnMappings, true, typeManager),
                     effectivePredicate,
-                    hiveStorageTimeZone);
+                    hiveStorageTimeZone,
+                    deleteDeltaLocations);
             if (pageSource.isPresent()) {
                 return Optional.of(
                         new HivePageSource(
@@ -217,7 +216,7 @@ public class HivePageSourceProvider
                     length,
                     fileSize,
                     schema,
-                    toColumnHandles(regularAndInterimColumnMappings, doCoercion),
+                    toColumnHandles(regularAndInterimColumnMappings, doCoercion, typeManager),
                     effectivePredicate,
                     hiveStorageTimeZone,
                     typeManager,
@@ -225,6 +224,8 @@ public class HivePageSourceProvider
 
             if (cursor.isPresent()) {
                 RecordCursor delegate = cursor.get();
+
+                checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
                 if (bucketAdaptation.isPresent()) {
                     delegate = new HiveBucketAdapterRecordCursor(
@@ -246,10 +247,9 @@ public class HivePageSourceProvider
                 HiveRecordCursor hiveRecordCursor = new HiveRecordCursor(
                         columnMappings,
                         hiveStorageTimeZone,
-                        typeManager,
                         delegate);
                 List<Type> columnTypes = hiveColumns.stream()
-                        .map(input -> typeManager.getType(input.getTypeSignature()))
+                        .map(HiveColumnHandle::getType)
                         .collect(toList());
 
                 return Optional.of(new RecordPageSource(columnTypes, hiveRecordCursor));
@@ -324,17 +324,11 @@ public class HivePageSourceProvider
             return coercionFrom;
         }
 
-        /**
-         * @param columns columns that need to be returned to engine
-         * @param requiredInterimColumns columns that are needed for processing, but shouldn't be returned to engine (may overlaps with columns)
-         * @param columnCoercions map from hive column index to hive type
-         * @param bucketNumber empty if table is not bucketed, a number within [0, # bucket in table) otherwise
-         */
         public static List<ColumnMapping> buildColumnMappings(
                 List<HivePartitionKey> partitionKeys,
                 List<HiveColumnHandle> columns,
                 List<HiveColumnHandle> requiredInterimColumns,
-                Map<Integer, HiveType> columnCoercions,
+                TableToPartitionMapping tableToPartitionMapping,
                 Path path,
                 OptionalInt bucketNumber,
                 long fileSize,
@@ -345,7 +339,7 @@ public class HivePageSourceProvider
             Set<Integer> regularColumnIndices = new HashSet<>();
             ImmutableList.Builder<ColumnMapping> columnMappings = ImmutableList.builder();
             for (HiveColumnHandle column : columns) {
-                Optional<HiveType> coercionFrom = Optional.ofNullable(columnCoercions.get(column.getHiveColumnIndex()));
+                Optional<HiveType> coercionFrom = tableToPartitionMapping.getCoercion(column.getHiveColumnIndex());
                 if (column.getColumnType() == REGULAR) {
                     checkArgument(regularColumnIndices.add(column.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
                     columnMappings.add(regular(column, regularIndex, coercionFrom));
@@ -379,7 +373,7 @@ public class HivePageSourceProvider
                     .collect(toImmutableList());
         }
 
-        public static List<HiveColumnHandle> toColumnHandles(List<ColumnMapping> regularColumnMappings, boolean doCoercion)
+        public static List<HiveColumnHandle> toColumnHandles(List<ColumnMapping> regularColumnMappings, boolean doCoercion, TypeManager typeManager)
         {
             return regularColumnMappings.stream()
                     .map(columnMapping -> {
@@ -390,7 +384,7 @@ public class HivePageSourceProvider
                         return new HiveColumnHandle(
                                 columnHandle.getName(),
                                 columnMapping.getCoercionFrom().get(),
-                                columnMapping.getCoercionFrom().get().getTypeSignature(),
+                                columnMapping.getCoercionFrom().get().getType(typeManager),
                                 columnHandle.getHiveColumnIndex(),
                                 columnHandle.getColumnType(),
                                 Optional.empty());

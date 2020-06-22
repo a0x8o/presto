@@ -44,7 +44,8 @@ public class RowHashCodeOperator
                 ImmutableList.of(comparableWithVariadicBound("T", "row")),
                 ImmutableList.of(),
                 BIGINT.getTypeSignature(),
-                ImmutableList.of(new TypeSignature("T")));
+                ImmutableList.of(new TypeSignature("T")),
+                false);
     }
 
     @Override
@@ -54,8 +55,7 @@ public class RowHashCodeOperator
         return new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                METHOD_HANDLE.bindTo(type),
-                isDeterministic());
+                METHOD_HANDLE.bindTo(type));
     }
 
     @UsedByGeneratedCode

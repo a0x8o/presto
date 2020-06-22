@@ -17,6 +17,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
 import io.prestosql.elasticsearch.client.ElasticsearchClient;
+import io.prestosql.elasticsearch.decoders.ArrayDecoder;
 import io.prestosql.elasticsearch.decoders.BigintDecoder;
 import io.prestosql.elasticsearch.decoders.BooleanDecoder;
 import io.prestosql.elasticsearch.decoders.Decoder;
@@ -38,6 +39,7 @@ import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.PageBuilderStatus;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 import org.elasticsearch.action.search.SearchResponse;
@@ -49,6 +51,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.function.Supplier;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -121,15 +124,26 @@ public class ElasticsearchPageSource
                 .filter(name -> !BuiltinColumns.NAMES.contains(name))
                 .collect(toList());
 
+        // sorting by _doc (index order) get special treatment in Elasticsearch and is more efficient
+        Optional<String> sort = Optional.of("_doc");
+
+        if (table.getQuery().isPresent()) {
+            // However, if we're using a custom Elasticsearch query, use default sorting.
+            // Documents will be scored and returned based on relevance
+            sort = Optional.empty();
+        }
+
         long start = System.nanoTime();
         SearchResponse searchResponse = client.beginSearch(
-                table.getIndex(),
+                split.getIndex(),
                 split.getShard(),
-                buildSearchQuery(table.getConstraint(), columns, table.getQuery()),
+                buildSearchQuery(session, table.getConstraint().transform(ElasticsearchColumnHandle.class::cast), table.getQuery()),
                 needAllFields ? Optional.empty() : Optional.of(requiredFields),
-                documentFields);
+                documentFields,
+                sort,
+                table.getLimit());
         readTimeNanos += System.nanoTime() - start;
-        this.iterator = new SearchHitIterator(client, () -> searchResponse);
+        this.iterator = new SearchHitIterator(client, () -> searchResponse, table.getLimit());
     }
 
     @Override
@@ -275,34 +289,34 @@ public class ElasticsearchPageSource
         if (type.equals(VARCHAR)) {
             return new VarcharDecoder();
         }
-        else if (type.equals(VARBINARY)) {
+        if (type.equals(VARBINARY)) {
             return new VarbinaryDecoder();
         }
-        else if (type.equals(TIMESTAMP)) {
+        if (type.equals(TIMESTAMP)) {
             return new TimestampDecoder(session, path);
         }
-        else if (type.equals(BOOLEAN)) {
+        if (type.equals(BOOLEAN)) {
             return new BooleanDecoder();
         }
-        else if (type.equals(DOUBLE)) {
+        if (type.equals(DOUBLE)) {
             return new DoubleDecoder();
         }
-        else if (type.equals(REAL)) {
+        if (type.equals(REAL)) {
             return new RealDecoder();
         }
-        else if (type.equals(TINYINT)) {
+        if (type.equals(TINYINT)) {
             return new TinyintDecoder();
         }
-        else if (type.equals(SMALLINT)) {
+        if (type.equals(SMALLINT)) {
             return new SmallintDecoder();
         }
-        else if (type.equals(INTEGER)) {
+        if (type.equals(INTEGER)) {
             return new IntegerDecoder();
         }
-        else if (type.equals(BIGINT)) {
+        if (type.equals(BIGINT)) {
             return new BigintDecoder();
         }
-        else if (type instanceof RowType) {
+        if (type instanceof RowType) {
             RowType rowType = (RowType) type;
 
             List<Decoder> decoders = rowType.getFields().stream()
@@ -315,6 +329,11 @@ public class ElasticsearchPageSource
                     .collect(toImmutableList());
 
             return new RowDecoder(fieldNames, decoders);
+        }
+        if (type instanceof ArrayType) {
+            Type elementType = ((ArrayType) type).getElementType();
+
+            return new ArrayDecoder(createDecoder(session, path, elementType));
         }
 
         throw new UnsupportedOperationException("Type not supported: " + type);
@@ -334,17 +353,21 @@ public class ElasticsearchPageSource
     {
         private final ElasticsearchClient client;
         private final Supplier<SearchResponse> first;
+        private final OptionalLong limit;
 
         private SearchHits searchHits;
         private String scrollId;
         private int currentPosition;
 
         private long readTimeNanos;
+        private long totalRecordCount;
 
-        public SearchHitIterator(ElasticsearchClient client, Supplier<SearchResponse> first)
+        public SearchHitIterator(ElasticsearchClient client, Supplier<SearchResponse> first, OptionalLong limit)
         {
             this.client = client;
             this.first = first;
+            this.limit = limit;
+            this.totalRecordCount = 0;
         }
 
         public long getReadTimeNanos()
@@ -355,6 +378,11 @@ public class ElasticsearchPageSource
         @Override
         protected SearchHit computeNext()
         {
+            if (limit.isPresent() && totalRecordCount == limit.getAsLong()) {
+                // No more record is necessary.
+                return endOfData();
+            }
+
             if (scrollId == null) {
                 long start = System.nanoTime();
                 SearchResponse response = first.get();
@@ -374,6 +402,7 @@ public class ElasticsearchPageSource
 
             SearchHit hit = searchHits.getAt(currentPosition);
             currentPosition++;
+            totalRecordCount++;
 
             return hit;
         }

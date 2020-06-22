@@ -56,7 +56,8 @@ public class ArraySubscriptOperator
                 ImmutableList.of(typeVariable("E")),
                 ImmutableList.of(),
                 new TypeSignature("E"),
-                ImmutableList.of(arrayType(new TypeSignature("E")), BIGINT.getTypeSignature()));
+                ImmutableList.of(arrayType(new TypeSignature("E")), BIGINT.getTypeSignature()),
+                true);
     }
 
     @Override
@@ -88,8 +89,7 @@ public class ArraySubscriptOperator
                 ImmutableList.of(
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                methodHandle,
-                isDeterministic());
+                methodHandle);
     }
 
     @UsedByGeneratedCode

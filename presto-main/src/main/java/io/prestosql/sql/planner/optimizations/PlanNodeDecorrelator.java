@@ -21,6 +21,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.planner.OrderingScheme;
@@ -63,22 +64,24 @@ import static java.util.Objects.requireNonNull;
 
 public class PlanNodeDecorrelator
 {
+    private final Metadata metadata;
     private final SymbolAllocator symbolAllocator;
     private final Lookup lookup;
 
-    public PlanNodeDecorrelator(SymbolAllocator symbolAllocator, Lookup lookup)
+    public PlanNodeDecorrelator(Metadata metadata, SymbolAllocator symbolAllocator, Lookup lookup)
     {
+        this.metadata = requireNonNull(metadata, "metadata is null");
         this.symbolAllocator = requireNonNull(symbolAllocator, "symbolAllocator is null");
         this.lookup = requireNonNull(lookup, "lookup is null");
     }
 
     public Optional<DecorrelatedNode> decorrelateFilters(PlanNode node, List<Symbol> correlation)
     {
-        // TODO: when correlations list empty this should return immediately. However this isn't correct
-        // right now, because for nested subqueries correlation list is empty while there might exists usages
-        // of the outer most correlated symbols
+        if (correlation.isEmpty()) {
+            return Optional.of(new DecorrelatedNode(ImmutableList.of(), node));
+        }
 
-        Optional<DecorrelationResult> decorrelationResultOptional = node.accept(new DecorrelatingVisitor(correlation), null);
+        Optional<DecorrelationResult> decorrelationResultOptional = node.accept(new DecorrelatingVisitor(metadata, correlation), null);
         return decorrelationResultOptional.flatMap(decorrelationResult -> decorrelatedNode(
                 decorrelationResult.correlatedPredicates,
                 decorrelationResult.node,
@@ -88,16 +91,21 @@ public class PlanNodeDecorrelator
     private class DecorrelatingVisitor
             extends PlanVisitor<Optional<DecorrelationResult>, Void>
     {
+        private final Metadata metadata;
         private final List<Symbol> correlation;
 
-        DecorrelatingVisitor(List<Symbol> correlation)
+        DecorrelatingVisitor(Metadata metadata, List<Symbol> correlation)
         {
+            this.metadata = metadata;
             this.correlation = requireNonNull(correlation, "correlation is null");
         }
 
         @Override
         protected Optional<DecorrelationResult> visitPlan(PlanNode node, Void context)
         {
+            if (containsCorrelation(node, correlation)) {
+                return Optional.empty();
+            }
             return Optional.of(new DecorrelationResult(
                     node,
                     ImmutableSet.of(),
@@ -141,7 +149,7 @@ public class PlanNodeDecorrelator
             FilterNode newFilterNode = new FilterNode(
                     node.getId(),
                     childDecorrelationResult.node,
-                    ExpressionUtils.combineConjuncts(uncorrelatedPredicates));
+                    ExpressionUtils.combineConjuncts(metadata, uncorrelatedPredicates));
 
             Set<Symbol> symbolsToPropagate = Sets.difference(SymbolsExtractor.extractUnique(correlatedPredicates), ImmutableSet.copyOf(correlation));
             return Optional.of(new DecorrelationResult(
@@ -458,7 +466,7 @@ public class PlanNodeDecorrelator
                 ComparisonExpression comparison = (ComparisonExpression) conjunct;
                 if (!(comparison.getLeft() instanceof SymbolReference
                         && comparison.getRight() instanceof SymbolReference
-                        && comparison.getOperator().equals(EQUAL))) {
+                        && comparison.getOperator() == EQUAL)) {
                     continue;
                 }
 
