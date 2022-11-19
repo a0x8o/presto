@@ -17,15 +17,16 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
-import io.airlift.units.DataSize;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.parquet.Field;
 import io.prestosql.parquet.ParquetCorruptionException;
 import io.prestosql.parquet.ParquetDataSource;
+import io.prestosql.parquet.ParquetReaderOptions;
 import io.prestosql.parquet.RichColumnDescriptor;
 import io.prestosql.parquet.predicate.Predicate;
 import io.prestosql.parquet.reader.MetadataReader;
 import io.prestosql.parquet.reader.ParquetReader;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -36,7 +37,6 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -93,16 +93,18 @@ public class ParquetPageSourceFactory
             .add("parquet.hive.serde.ParquetHiveSerDe")
             .build();
 
-    private final TypeManager typeManager;
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
+    private final ParquetReaderOptions options;
 
     @Inject
-    public ParquetPageSourceFactory(TypeManager typeManager, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats)
+    public ParquetPageSourceFactory(HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats, ParquetReaderConfig config)
     {
-        this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.stats = requireNonNull(stats, "stats is null");
+        requireNonNull(config, "config is null");
+
+        options = config.toParquetReaderOptions();
     }
 
     @Override
@@ -116,11 +118,14 @@ public class ParquetPageSourceFactory
             Properties schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
-            DateTimeZone hiveStorageTimeZone)
+            DateTimeZone hiveStorageTimeZone,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema))) {
             return Optional.empty();
         }
+
+        checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
         return Optional.of(createParquetPageSource(
                 hdfsEnvironment,
@@ -132,9 +137,9 @@ public class ParquetPageSourceFactory
                 fileSize,
                 columns,
                 isUseParquetColumnNames(session),
-                isFailOnCorruptedParquetStatistics(session),
-                getParquetMaxReadBlockSize(session),
-                typeManager,
+                options
+                        .withFailOnCorruptedStatistics(isFailOnCorruptedParquetStatistics(session))
+                        .withMaxReadBlockSize(getParquetMaxReadBlockSize(session)),
                 effectivePredicate,
                 stats));
     }
@@ -149,9 +154,7 @@ public class ParquetPageSourceFactory
             long fileSize,
             List<HiveColumnHandle> columns,
             boolean useParquetColumnNames,
-            boolean failOnCorruptedParquetStatistics,
-            DataSize maxReadBlockSize,
-            TypeManager typeManager,
+            ParquetReaderOptions options,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             FileFormatDataSourceStats stats)
     {
@@ -168,7 +171,7 @@ public class ParquetPageSourceFactory
             ParquetMetadata parquetMetadata = MetadataReader.readFooter(inputStream, path, fileSize);
             FileMetaData fileMetaData = parquetMetadata.getFileMetaData();
             MessageType fileSchema = fileMetaData.getSchema();
-            dataSource = buildHdfsParquetDataSource(inputStream, path, fileSize, stats);
+            dataSource = buildHdfsParquetDataSource(inputStream, path, fileSize, stats, options);
 
             List<Optional<org.apache.parquet.schema.Type>> parquetFields = columns.stream()
                     .map(column -> getParquetType(column, fileSchema, useParquetColumnNames))
@@ -195,17 +198,18 @@ public class ParquetPageSourceFactory
             ParquetDataSource finalDataSource = dataSource;
             ImmutableList.Builder<BlockMetaData> blocks = ImmutableList.builder();
             for (BlockMetaData block : footerBlocks.build()) {
-                if (predicateMatches(parquetPredicate, block, finalDataSource, descriptorsByPath, parquetTupleDomain, failOnCorruptedParquetStatistics)) {
+                if (predicateMatches(parquetPredicate, block, finalDataSource, descriptorsByPath, parquetTupleDomain, options.isFailOnCorruptedStatistics())) {
                     blocks.add(block);
                 }
             }
             MessageColumnIO messageColumnIO = getColumnIO(fileSchema, requestedSchema);
             ParquetReader parquetReader = new ParquetReader(
+                    Optional.ofNullable(fileMetaData.getCreatedBy()),
                     messageColumnIO,
                     blocks.build(),
                     dataSource,
                     systemMemoryContext,
-                    maxReadBlockSize);
+                    options);
 
             ImmutableList.Builder<Type> prestoTypes = ImmutableList.builder();
             ImmutableList.Builder<Optional<Field>> internalFields = ImmutableList.builder();
@@ -213,13 +217,11 @@ public class ParquetPageSourceFactory
                 HiveColumnHandle column = columns.get(columnIndex);
                 Optional<org.apache.parquet.schema.Type> parquetField = parquetFields.get(columnIndex);
 
-                Type prestoType = typeManager.getType(column.getTypeSignature());
+                prestoTypes.add(column.getType());
 
-                prestoTypes.add(prestoType);
-
-                internalFields.add(parquetField.map(field -> {
+                internalFields.add(parquetField.flatMap(field -> {
                     String columnName = useParquetColumnNames ? column.getName() : fileSchema.getFields().get(column.getHiveColumnIndex()).getName();
-                    return constructField(prestoType, lookupColumnByName(messageColumnIO, columnName)).orElse(null);
+                    return constructField(column.getType(), lookupColumnByName(messageColumnIO, columnName));
                 }));
             }
 
@@ -261,7 +263,7 @@ public class ParquetPageSourceFactory
         for (Entry<HiveColumnHandle, Domain> entry : effectivePredicate.getDomains().get().entrySet()) {
             HiveColumnHandle columnHandle = entry.getKey();
             // skip looking up predicates for complex types as Parquet only stores stats for primitives
-            if (!columnHandle.getHiveType().getCategory().equals(PRIMITIVE)) {
+            if (columnHandle.getHiveType().getCategory() != PRIMITIVE) {
                 continue;
             }
 

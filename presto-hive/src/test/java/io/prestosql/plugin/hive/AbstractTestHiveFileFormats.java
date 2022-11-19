@@ -109,11 +109,11 @@ import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static io.prestosql.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static io.prestosql.testing.MaterializedResult.materializeSourceDataStream;
-import static io.prestosql.tests.StructuralTestUtil.arrayBlockOf;
-import static io.prestosql.tests.StructuralTestUtil.decimalArrayBlockOf;
-import static io.prestosql.tests.StructuralTestUtil.decimalMapBlockOf;
-import static io.prestosql.tests.StructuralTestUtil.mapBlockOf;
-import static io.prestosql.tests.StructuralTestUtil.rowBlockOf;
+import static io.prestosql.testing.StructuralTestUtil.arrayBlockOf;
+import static io.prestosql.testing.StructuralTestUtil.decimalArrayBlockOf;
+import static io.prestosql.testing.StructuralTestUtil.decimalMapBlockOf;
+import static io.prestosql.testing.StructuralTestUtil.mapBlockOf;
+import static io.prestosql.testing.StructuralTestUtil.rowBlockOf;
 import static java.lang.Float.intBitsToFloat;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.fill;
@@ -479,7 +479,7 @@ public abstract class AbstractTestHiveFileFormats
             int columnIndex = testColumn.isPartitionKey() ? -1 : nextHiveColumnIndex++;
 
             HiveType hiveType = HiveType.valueOf(testColumn.getObjectInspector().getTypeName());
-            columns.add(new HiveColumnHandle(testColumn.getName(), hiveType, hiveType.getTypeSignature(), columnIndex, testColumn.isPartitionKey() ? PARTITION_KEY : REGULAR, Optional.empty()));
+            columns.add(new HiveColumnHandle(testColumn.getName(), hiveType, hiveType.getType(TYPE_MANAGER), columnIndex, testColumn.isPartitionKey() ? PARTITION_KEY : REGULAR, Optional.empty()));
         }
         return columns;
     }
@@ -535,7 +535,7 @@ public abstract class AbstractTestHiveFileFormats
                         .map(TestColumn::getType)
                         .collect(Collectors.joining(",")));
 
-        Optional<HiveFileWriter> fileWriter = fileWriterFactory.createFileWriter(
+        Optional<FileWriter> fileWriter = fileWriterFactory.createFileWriter(
                 new Path(filePath),
                 testColumns.stream()
                         .map(TestColumn::getName)
@@ -545,7 +545,7 @@ public abstract class AbstractTestHiveFileFormats
                 jobConf,
                 session);
 
-        HiveFileWriter hiveFileWriter = fileWriter.orElseThrow(() -> new IllegalArgumentException("fileWriterFactory"));
+        FileWriter hiveFileWriter = fileWriter.orElseThrow(() -> new IllegalArgumentException("fileWriterFactory"));
         hiveFileWriter.appendRows(page);
         hiveFileWriter.commit();
 
@@ -579,7 +579,7 @@ public abstract class AbstractTestHiveFileFormats
                 testColumns.stream()
                         .map(TestColumn::getType)
                         .collect(Collectors.joining(",")));
-        serializer.initialize(new Configuration(), tableProperties);
+        serializer.initialize(new Configuration(false), tableProperties);
 
         JobConf jobConf = new JobConf();
         configureCompression(jobConf, compressionCodec);
@@ -593,7 +593,7 @@ public abstract class AbstractTestHiveFileFormats
                 () -> {});
 
         try {
-            serializer.initialize(new Configuration(), tableProperties);
+            serializer.initialize(new Configuration(false), tableProperties);
 
             SettableStructObjectInspector objectInspector = getStandardStructObjectInspector(
                     testColumns.stream()
@@ -626,7 +626,7 @@ public abstract class AbstractTestHiveFileFormats
 
         // todo to test with compression, the file must be renamed with the compression extension
         Path path = new Path(filePath);
-        path.getFileSystem(new Configuration()).setVerifyChecksum(true);
+        path.getFileSystem(new Configuration(false)).setVerifyChecksum(true);
         File file = new File(filePath);
         return new FileSplit(path, 0, file.length(), new String[0]);
     }

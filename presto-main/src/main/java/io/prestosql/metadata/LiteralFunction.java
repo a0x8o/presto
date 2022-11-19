@@ -29,7 +29,9 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.prestosql.block.BlockSerdeUtil.READ_BLOCK;
+import static io.prestosql.block.BlockSerdeUtil.READ_BLOCK_VALUE;
 import static io.prestosql.metadata.FunctionKind.SCALAR;
+import static io.prestosql.metadata.Signature.typeVariable;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -40,37 +42,32 @@ import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 public class LiteralFunction
         extends SqlScalarFunction
 {
-    static final String LITERAL_FUNCTION_NAME = "$literal$";
+    public static final String LITERAL_FUNCTION_NAME = "$literal$";
     private static final Set<Class<?>> SUPPORTED_LITERAL_TYPES = ImmutableSet.of(long.class, double.class, Slice.class, boolean.class);
 
     public LiteralFunction()
     {
-        super(new Signature(LITERAL_FUNCTION_NAME, SCALAR, new TypeSignature("R"), new TypeSignature("T")));
-    }
-
-    @Override
-    public boolean isHidden()
-    {
-        return true;
-    }
-
-    @Override
-    public boolean isDeterministic()
-    {
-        return true;
-    }
-
-    @Override
-    public String getDescription()
-    {
-        return "literal";
+        super(new FunctionMetadata(
+                new Signature(
+                        LITERAL_FUNCTION_NAME,
+                        ImmutableList.of(typeVariable("F"), typeVariable("T")),
+                        ImmutableList.of(),
+                        new TypeSignature("T"),
+                        ImmutableList.of(new TypeSignature("F")),
+                        false),
+                false,
+                ImmutableList.of(new FunctionArgumentDefinition(false)),
+                true,
+                true,
+                "literal",
+                SCALAR));
     }
 
     @Override
     public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
     {
-        Type parameterType = boundVariables.getTypeVariable("T");
-        Type type = boundVariables.getTypeVariable("R");
+        Type parameterType = boundVariables.getTypeVariable("F");
+        Type type = boundVariables.getTypeVariable("T");
 
         MethodHandle methodHandle = null;
         if (parameterType.getJavaType() == type.getJavaType()) {
@@ -80,6 +77,9 @@ public class LiteralFunction
         if (parameterType.getJavaType() == Slice.class) {
             if (type.getJavaType() == Block.class) {
                 methodHandle = READ_BLOCK.bindTo(metadata.getBlockEncodingSerde());
+            }
+            else if (type.getJavaType() != Slice.class) {
+                methodHandle = READ_BLOCK_VALUE.bindTo(metadata.getBlockEncodingSerde()).bindTo(type);
             }
         }
 
@@ -92,8 +92,7 @@ public class LiteralFunction
         return new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                methodHandle,
-                isDeterministic());
+                methodHandle);
     }
 
     public static boolean isSupportedLiteralType(Type type)
@@ -101,18 +100,7 @@ public class LiteralFunction
         return SUPPORTED_LITERAL_TYPES.contains(type.getJavaType());
     }
 
-    public static Signature getLiteralFunctionSignature(Type type)
-    {
-        TypeSignature argumentType = typeForLiteralFunctionArgument(type).getTypeSignature();
-
-        return new Signature(
-                LITERAL_FUNCTION_NAME + type.getTypeId().getId(),
-                SCALAR,
-                type.getTypeSignature(),
-                argumentType);
-    }
-
-    public static Type typeForLiteralFunctionArgument(Type type)
+    public static Type typeForMagicLiteral(Type type)
     {
         Class<?> clazz = type.getJavaType();
         clazz = Primitives.unwrap(clazz);

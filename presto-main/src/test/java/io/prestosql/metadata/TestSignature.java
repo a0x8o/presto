@@ -19,10 +19,11 @@ import io.airlift.json.JsonCodec;
 import io.airlift.json.JsonCodecFactory;
 import io.airlift.json.ObjectMapperProvider;
 import io.prestosql.spi.type.Type;
+import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.type.TypeDeserializer;
+import io.prestosql.type.TypeSignatureDeserializer;
 import org.testng.annotations.Test;
 
-import static io.prestosql.metadata.FunctionKind.SCALAR;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -36,12 +37,13 @@ public class TestSignature
     public void testSerializationRoundTrip()
     {
         ObjectMapperProvider objectMapperProvider = new ObjectMapperProvider();
-        objectMapperProvider.setJsonDeserializers(ImmutableMap.of(Type.class, new TypeDeserializer(createTestMetadataManager())));
+        objectMapperProvider.setJsonDeserializers(ImmutableMap.of(
+                Type.class, new TypeDeserializer(createTestMetadataManager()),
+                TypeSignature.class, new TypeSignatureDeserializer()));
         JsonCodec<Signature> codec = new JsonCodecFactory(objectMapperProvider, true).jsonCodec(Signature.class);
 
         Signature expected = new Signature(
                 "function",
-                SCALAR,
                 BIGINT.getTypeSignature(),
                 ImmutableList.of(BOOLEAN.getTypeSignature(), DOUBLE.getTypeSignature(), VARCHAR.getTypeSignature()));
 
@@ -49,7 +51,6 @@ public class TestSignature
         Signature actual = codec.fromJson(json);
 
         assertEquals(actual.getName(), expected.getName());
-        assertEquals(actual.getKind(), expected.getKind());
         assertEquals(actual.getReturnType(), expected.getReturnType());
         assertEquals(actual.getArgumentTypes(), expected.getArgumentTypes());
     }

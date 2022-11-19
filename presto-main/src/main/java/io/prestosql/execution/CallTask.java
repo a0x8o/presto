@@ -13,6 +13,7 @@
  */
 package io.prestosql.execution;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.Session;
 import io.prestosql.connector.CatalogName;
@@ -22,6 +23,7 @@ import io.prestosql.security.AccessControl;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.eventlistener.RoutineInfo;
 import io.prestosql.spi.procedure.Procedure;
 import io.prestosql.spi.procedure.Procedure.Argument;
 import io.prestosql.spi.type.Type;
@@ -45,6 +47,7 @@ import java.util.Map.Entry;
 import java.util.function.Predicate;
 
 import static com.google.common.base.Throwables.throwIfInstanceOf;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.prestosql.metadata.MetadataUtil.createQualifiedObjectName;
 import static io.prestosql.spi.StandardErrorCode.CATALOG_NOT_FOUND;
@@ -77,7 +80,7 @@ public class CallTask
         Session session = stateMachine.getSession();
         QualifiedObjectName procedureName = createQualifiedObjectName(session, call, call.getName());
         CatalogName catalogName = metadata.getCatalogHandle(stateMachine.getSession(), procedureName.getCatalogName())
-                .orElseThrow(() -> semanticException(CATALOG_NOT_FOUND, call, "Catalog %s does not exist", procedureName.getCatalogName()));
+                .orElseThrow(() -> semanticException(CATALOG_NOT_FOUND, call, "Catalog '%s' does not exist", procedureName.getCatalogName()));
         Procedure procedure = metadata.getProcedureRegistry().resolve(catalogName, procedureName.asSchemaTableName());
 
         // map declared argument names to positions
@@ -115,10 +118,14 @@ public class CallTask
             }
         }
 
-        // verify argument count
-        if (names.size() < positions.size()) {
-            throw semanticException(INVALID_ARGUMENTS, call, "Too few arguments for procedure");
-        }
+        procedure.getArguments().stream()
+                .filter(Argument::isRequired)
+                .filter(argument -> !names.containsKey(argument.getName()))
+                .map(Argument::getName)
+                .findFirst()
+                .ifPresent(argument -> {
+                    throw semanticException(INVALID_ARGUMENTS, call, "Required procedure argument '%s' is missing", argument);
+                });
 
         // get argument values
         Object[] values = new Object[procedure.getArguments().size()];
@@ -131,9 +138,19 @@ public class CallTask
             Expression expression = ExpressionTreeRewriter.rewriteWith(new ParameterRewriter(parameterLookup), callArgument.getValue());
 
             Type type = argument.getType();
-            Object value = evaluateConstantExpression(expression, type, metadata, session, parameterLookup);
+            Object value = evaluateConstantExpression(expression, type, metadata, session, accessControl, parameterLookup);
 
             values[index] = toTypeObjectValue(session, type, value);
+        }
+
+        // fill values with optional arguments defaults
+        for (int i = 0; i < procedure.getArguments().size(); i++) {
+            Argument argument = procedure.getArguments().get(i);
+
+            if (!names.containsKey(argument.getName())) {
+                verify(argument.isOptional());
+                values[i] = toTypeObjectValue(session, argument.getType(), argument.getDefaultValue());
+            }
         }
 
         // validate arguments
@@ -156,6 +173,9 @@ public class CallTask
                 arguments.add(valuesIterator.next());
             }
         }
+
+        accessControl.checkCanExecuteProcedure(session.toSecurityContext(), procedureName);
+        stateMachine.setRoutines(ImmutableList.of(new RoutineInfo(procedureName.getObjectName(), session.getUser())));
 
         try {
             procedure.getMethodHandle().invokeWithArguments(arguments);

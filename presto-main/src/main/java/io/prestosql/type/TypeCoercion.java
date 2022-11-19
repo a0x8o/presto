@@ -49,8 +49,7 @@ import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static io.prestosql.type.CodePointsType.CODE_POINTS;
 import static io.prestosql.type.JoniRegexpType.JONI_REGEXP;
 import static io.prestosql.type.JsonPathType.JSON_PATH;
-import static io.prestosql.type.LikePatternType.LIKE_PATTERN;
-import static io.prestosql.type.Re2JRegexpType.RE2J_REGEXP;
+import static io.prestosql.type.Re2JRegexpType.RE2J_REGEXP_SIGNATURE;
 import static java.util.Objects.requireNonNull;
 
 public final class TypeCoercion
@@ -110,6 +109,12 @@ public final class TypeCoercion
             return Optional.empty();
         }
         return Optional.of(compatibility.getCommonSuperType());
+    }
+
+    public boolean isCompatible(Type fromType, Type toType)
+    {
+        TypeCompatibility typeCompatibility = compatibility(fromType, toType);
+        return typeCompatibility.isCompatible();
     }
 
     public boolean canCoerce(Type fromType, Type toType)
@@ -285,7 +290,6 @@ public final class TypeCoercion
                     case StandardTypes.INTERVAL_YEAR_TO_MONTH:
                     case StandardTypes.INTERVAL_DAY_TO_SECOND:
                     case JoniRegexpType.NAME:
-                    case LikePatternType.NAME:
                     case JsonPathType.NAME:
                     case ColorType.NAME:
                     case CodePointsType.NAME:
@@ -416,9 +420,7 @@ public final class TypeCoercion
                     case JoniRegexpType.NAME:
                         return Optional.of(JONI_REGEXP);
                     case Re2JRegexpType.NAME:
-                        return Optional.of(RE2J_REGEXP);
-                    case LikePatternType.NAME:
-                        return Optional.of(LIKE_PATTERN);
+                        return Optional.of(lookupType.apply(RE2J_REGEXP_SIGNATURE));
                     case JsonPathType.NAME:
                         return Optional.of(JSON_PATH);
                     case CodePointsType.NAME:
@@ -434,9 +436,7 @@ public final class TypeCoercion
                     case JoniRegexpType.NAME:
                         return Optional.of(JONI_REGEXP);
                     case Re2JRegexpType.NAME:
-                        return Optional.of(RE2J_REGEXP);
-                    case LikePatternType.NAME:
-                        return Optional.of(LIKE_PATTERN);
+                        return Optional.of(lookupType.apply(RE2J_REGEXP_SIGNATURE));
                     case JsonPathType.NAME:
                         return Optional.of(JSON_PATH);
                     case CodePointsType.NAME:

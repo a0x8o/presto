@@ -35,7 +35,7 @@ import java.lang.invoke.MethodHandle;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.prestosql.metadata.Signature.typeVariable;
+import static io.prestosql.metadata.Signature.castableToTypeParameter;
 import static io.prestosql.operator.scalar.JsonOperators.JSON_FACTORY;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
@@ -56,10 +56,11 @@ public class ArrayToJsonCast
     private ArrayToJsonCast()
     {
         super(OperatorType.CAST,
-                ImmutableList.of(typeVariable("T")),
+                ImmutableList.of(castableToTypeParameter("T", JSON.getTypeSignature())),
                 ImmutableList.of(),
                 JSON.getTypeSignature(),
-                ImmutableList.of(arrayType(new TypeSignature("T"))));
+                ImmutableList.of(arrayType(new TypeSignature("T"))),
+                false);
     }
 
     @Override
@@ -74,11 +75,8 @@ public class ArrayToJsonCast
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(writer);
         return new ScalarFunctionImplementation(
                 false,
-                ImmutableList.of(
-                        valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
-                        valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                methodHandle,
-                isDeterministic());
+                ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
+                methodHandle);
     }
 
     public static Slice toJson(JsonGeneratorWriter writer, ConnectorSession session, Block block)
