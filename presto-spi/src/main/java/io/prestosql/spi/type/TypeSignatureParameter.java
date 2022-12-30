@@ -41,7 +41,7 @@ public class TypeSignatureParameter
 
     public static TypeSignatureParameter namedField(String name, TypeSignature type)
     {
-        return new TypeSignatureParameter(ParameterKind.NAMED_TYPE, new NamedTypeSignature(Optional.of(new RowFieldName(name, false)), type));
+        return new TypeSignatureParameter(ParameterKind.NAMED_TYPE, new NamedTypeSignature(Optional.of(new RowFieldName(name)), type));
     }
 
     public static TypeSignatureParameter anonymousField(TypeSignature type)
@@ -64,6 +64,24 @@ public class TypeSignatureParameter
     public String toString()
     {
         return value.toString();
+    }
+
+    public String jsonValue()
+    {
+        String prefix = "";
+        if (kind == ParameterKind.VARIABLE) {
+            prefix = "@";
+        }
+
+        String valueJson;
+        if (value instanceof TypeSignature) {
+            TypeSignature typeSignature = (TypeSignature) value;
+            valueJson = typeSignature.jsonValue();
+        }
+        else {
+            valueJson = value.toString();
+        }
+        return prefix + valueJson;
     }
 
     public ParameterKind getKind()
@@ -159,7 +177,7 @@ public class TypeSignatureParameter
 
         TypeSignatureParameter other = (TypeSignatureParameter) o;
 
-        return Objects.equals(this.kind, other.kind) &&
+        return this.kind == other.kind &&
                 Objects.equals(this.value, other.value);
     }
 

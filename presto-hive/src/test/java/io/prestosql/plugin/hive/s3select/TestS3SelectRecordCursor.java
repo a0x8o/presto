@@ -18,7 +18,6 @@ import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HiveType;
 import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
-import org.apache.hadoop.mapred.RecordReader;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
@@ -44,10 +43,10 @@ public class TestS3SelectRecordCursor
 {
     private static final String LAZY_SERDE_CLASS_NAME = LazySimpleSerDe.class.getName();
 
-    private static final HiveColumnHandle ARTICLE_COLUMN = new HiveColumnHandle("article", HIVE_STRING, VARCHAR.getTypeSignature(), 1, REGULAR, Optional.empty());
-    private static final HiveColumnHandle AUTHOR_COLUMN = new HiveColumnHandle("author", HIVE_STRING, VARCHAR.getTypeSignature(), 1, REGULAR, Optional.empty());
-    private static final HiveColumnHandle DATE_ARTICLE_COLUMN = new HiveColumnHandle("date_pub", HIVE_INT, DATE.getTypeSignature(), 1, REGULAR, Optional.empty());
-    private static final HiveColumnHandle QUANTITY_COLUMN = new HiveColumnHandle("quantity", HIVE_INT, INTEGER.getTypeSignature(), 1, REGULAR, Optional.empty());
+    private static final HiveColumnHandle ARTICLE_COLUMN = new HiveColumnHandle("article", HIVE_STRING, VARCHAR, 1, REGULAR, Optional.empty());
+    private static final HiveColumnHandle AUTHOR_COLUMN = new HiveColumnHandle("author", HIVE_STRING, VARCHAR, 1, REGULAR, Optional.empty());
+    private static final HiveColumnHandle DATE_ARTICLE_COLUMN = new HiveColumnHandle("date_pub", HIVE_INT, DATE, 1, REGULAR, Optional.empty());
+    private static final HiveColumnHandle QUANTITY_COLUMN = new HiveColumnHandle("quantity", HIVE_INT, INTEGER, 1, REGULAR, Optional.empty());
     private static final HiveColumnHandle[] DEFAULT_TEST_COLUMNS = {ARTICLE_COLUMN, AUTHOR_COLUMN, DATE_ARTICLE_COLUMN, QUANTITY_COLUMN};
 
     @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "Invalid Thrift DDL struct article \\{ \\}")
@@ -202,43 +201,4 @@ public class TestS3SelectRecordCursor
                 .map(TypeInfo::getTypeName)
                 .collect(joining(","));
     }
-
-    private static final RecordReader<?, ?> MOCK_RECORD_READER = new RecordReader<Object, Object>()
-    {
-        @Override
-        public boolean next(Object key, Object value)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Object createKey()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Object createValue()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public long getPos()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void close()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public float getProgress()
-        {
-            throw new UnsupportedOperationException();
-        }
-    };
 }

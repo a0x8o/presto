@@ -46,8 +46,7 @@ import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static io.prestosql.type.JoniRegexpType.JONI_REGEXP;
 import static io.prestosql.type.JsonPathType.JSON_PATH;
-import static io.prestosql.type.LikePatternType.LIKE_PATTERN;
-import static io.prestosql.type.Re2JRegexpType.RE2J_REGEXP;
+import static io.prestosql.type.Re2JRegexpType.RE2J_REGEXP_SIGNATURE;
 import static io.prestosql.type.UnknownType.UNKNOWN;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -59,6 +58,7 @@ import static org.testng.Assert.fail;
 public class TestTypeCoercion
 {
     private final Metadata metadata = createTestMetadataManager();
+    private final Type re2jType = metadata.getType(RE2J_REGEXP_SIGNATURE);
     private final TypeCoercion typeCoercion = new TypeCoercion(metadata::getType);
 
     @Test
@@ -123,8 +123,7 @@ public class TestTypeCoercion
         assertThat(TIME, TIME_WITH_TIME_ZONE).hasCommonSuperType(TIME_WITH_TIME_ZONE).canCoerceFirstToSecondOnly();
         assertThat(TIMESTAMP, TIMESTAMP_WITH_TIME_ZONE).hasCommonSuperType(TIMESTAMP_WITH_TIME_ZONE).canCoerceFirstToSecondOnly();
         assertThat(VARCHAR, JONI_REGEXP).hasCommonSuperType(JONI_REGEXP).canCoerceFirstToSecondOnly();
-        assertThat(VARCHAR, RE2J_REGEXP).hasCommonSuperType(RE2J_REGEXP).canCoerceFirstToSecondOnly();
-        assertThat(VARCHAR, LIKE_PATTERN).hasCommonSuperType(LIKE_PATTERN).canCoerceFirstToSecondOnly();
+        assertThat(VARCHAR, re2jType).hasCommonSuperType(re2jType).canCoerceFirstToSecondOnly();
         assertThat(VARCHAR, JSON_PATH).hasCommonSuperType(JSON_PATH).canCoerceFirstToSecondOnly();
 
         assertThat(REAL, DOUBLE).hasCommonSuperType(DOUBLE).canCoerceFirstToSecondOnly();
@@ -195,8 +194,7 @@ public class TestTypeCoercion
 
         assertThat(createCharType(42), JONI_REGEXP).hasCommonSuperType(JONI_REGEXP).canCoerceFirstToSecondOnly();
         assertThat(createCharType(42), JSON_PATH).hasCommonSuperType(JSON_PATH).canCoerceFirstToSecondOnly();
-        assertThat(createCharType(42), LIKE_PATTERN).hasCommonSuperType(LIKE_PATTERN).canCoerceFirstToSecondOnly();
-        assertThat(createCharType(42), RE2J_REGEXP).hasCommonSuperType(RE2J_REGEXP).canCoerceFirstToSecondOnly();
+        assertThat(createCharType(42), re2jType).hasCommonSuperType(re2jType).canCoerceFirstToSecondOnly();
 
         assertThat(anonymousRow(createVarcharType(2)), anonymousRow(createVarcharType(5)))
                 .hasCommonSuperType(anonymousRow(createVarcharType(5)))
@@ -337,7 +335,7 @@ public class TestTypeCoercion
         return new CompatibilityAssertion(commonSuperType1, canCoerceFirstToSecond, canCoerceSecondToFirst);
     }
 
-    private class CompatibilityAssertion
+    private static class CompatibilityAssertion
     {
         private final Optional<Type> commonSuperType;
         private final boolean canCoerceFirstToSecond;

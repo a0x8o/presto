@@ -174,7 +174,7 @@ public class RaptorMetadata
             return null;
         }
         List<TableColumn> tableColumns = dao.listTableColumns(table.getTableId());
-        checkArgument(!tableColumns.isEmpty(), "Table %s does not have any columns", tableName);
+        checkArgument(!tableColumns.isEmpty(), "Table '%s' does not have any columns", tableName);
 
         return new RaptorTableHandle(
                 tableName.getSchemaName(),
@@ -314,7 +314,7 @@ public class RaptorMetadata
             return Optional.empty();
         }
 
-        return Optional.of(new ConstraintApplicationResult(
+        return Optional.of(new ConstraintApplicationResult<>(
                 new RaptorTableHandle(table.getSchemaName(),
                         table.getTableName(),
                         table.getTableId(),
@@ -549,6 +549,7 @@ public class RaptorMetadata
 
         Optional<RaptorPartitioningHandle> partitioning = layout
                 .map(ConnectorNewTableLayout::getPartitioning)
+                .map(Optional::get)
                 .map(RaptorPartitioningHandle.class::cast);
 
         ImmutableList.Builder<RaptorColumnHandle> columnHandles = ImmutableList.builder();
@@ -923,7 +924,11 @@ public class RaptorMetadata
 
     private static ColumnMetadata hiddenColumn(String name, Type type)
     {
-        return new ColumnMetadata(name, type, null, true);
+        return ColumnMetadata.builder()
+                .setName(name)
+                .setType(type)
+                .setHidden(true)
+                .build();
     }
 
     private void setTransactionId(long transactionId)

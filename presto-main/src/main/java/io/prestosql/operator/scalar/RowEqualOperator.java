@@ -16,7 +16,7 @@ package io.prestosql.operator.scalar;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.metadata.BoundVariables;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.Signature;
+import io.prestosql.metadata.ResolvedFunction;
 import io.prestosql.metadata.SqlOperator;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.type.RowType;
@@ -48,7 +48,8 @@ public class RowEqualOperator
                 ImmutableList.of(comparableWithVariadicBound("T", "row")),
                 ImmutableList.of(),
                 BOOLEAN.getTypeSignature(),
-                ImmutableList.of(new TypeSignature("T"), new TypeSignature("T")));
+                ImmutableList.of(new TypeSignature("T"), new TypeSignature("T")),
+                true);
     }
 
     @Override
@@ -62,8 +63,7 @@ public class RowEqualOperator
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 METHOD_HANDLE
                         .bindTo(type)
-                        .bindTo(resolveFieldEqualOperators(type, metadata)),
-                isDeterministic());
+                        .bindTo(resolveFieldEqualOperators(type, metadata)));
     }
 
     public static List<MethodHandle> resolveFieldEqualOperators(RowType rowType, Metadata metadata)
@@ -75,7 +75,7 @@ public class RowEqualOperator
 
     private static MethodHandle resolveEqualOperator(Type type, Metadata metadata)
     {
-        Signature operator = metadata.resolveOperator(EQUAL, ImmutableList.of(type, type));
+        ResolvedFunction operator = metadata.resolveOperator(EQUAL, ImmutableList.of(type, type));
         ScalarFunctionImplementation implementation = metadata.getScalarFunctionImplementation(operator);
         return implementation.getMethodHandle();
     }

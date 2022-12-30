@@ -30,12 +30,12 @@ public class TestHiveMetadata
     private static final HiveColumnHandle TEST_COLUMN_HANDLE = new HiveColumnHandle(
             "test",
             HiveType.HIVE_STRING,
-            VARCHAR.getTypeSignature(),
+            VARCHAR,
             0,
             HiveColumnHandle.ColumnType.PARTITION_KEY,
             Optional.empty());
 
-    @Test(timeOut = 5000)
+    @Test(timeOut = 10_000)
     public void testCreatePredicate()
     {
         ImmutableList.Builder<HivePartition> partitions = ImmutableList.builder();

@@ -77,7 +77,7 @@ public class TestAvroDecoder
     private static final AvroRowDecoderFactory DECODER_FACTORY = new AvroRowDecoderFactory();
 
     private static final Metadata METADATA = createTestMetadataManager();
-    private static final Type VACHAR_MAP_TYPE = METADATA.getType(mapType(VARCHAR.getTypeSignature(), VARCHAR.getTypeSignature()));
+    private static final Type VARCHAR_MAP_TYPE = METADATA.getType(mapType(VARCHAR.getTypeSignature(), VARCHAR.getTypeSignature()));
     private static final Type DOUBLE_MAP_TYPE = METADATA.getType(mapType(VARCHAR.getTypeSignature(), DOUBLE.getTypeSignature()));
     private static final Type REAL_MAP_TYPE = METADATA.getType(mapType(VARCHAR.getTypeSignature(), REAL.getTypeSignature()));
 
@@ -86,10 +86,30 @@ public class TestAvroDecoder
         return getAvroSchema(ImmutableMap.of(name, dataType));
     }
 
+    private static String determineDefaultValue(String dataType)
+    {
+        // Apache Avro 1.9 is more strict on the nullability of data types.
+        // If the data type is not nullable, then we don't want to set null as the default.
+        if (dataType.contains("\"array\"")) {
+            // In the case of an Array we just will return an empty array
+            return ", \"default\": []";
+        }
+        if (dataType.contains("\"map\"")) {
+            // In the case of a Map we just will return an empty map
+            return ", \"default\": {}";
+        }
+        if (dataType.contains("null")) {
+            // Will match ["null", "string"] and any other variation.
+            return ", \"default\": null";
+        }
+        // In case of non-nullable types like "string"
+        return "";
+    }
+
     private static String getAvroSchema(Map<String, String> fields)
     {
         String fieldSchema = fields.entrySet().stream()
-                .map(entry -> "{\"name\": \"" + entry.getKey() + "\",\"type\": " + entry.getValue() + ",\"default\": null}")
+                .map(entry -> "{\"name\": \"" + entry.getKey() + "\",\"type\": " + entry.getValue() + determineDefaultValue(entry.getValue()) + "}")
                 .collect(Collectors.joining(","));
 
         return "{\"type\" : \"record\"," +
@@ -146,12 +166,9 @@ public class TestAvroDecoder
     {
         GenericData.Record record = new GenericData.Record(schema);
         values.forEach(record::put);
-        try {
-            DataFileWriter<GenericRecord> dataFileWriter = new DataFileWriter<>(new GenericDatumWriter<>(schema));
-
+        try (DataFileWriter<GenericRecord> dataFileWriter = new DataFileWriter<>(new GenericDatumWriter<>(schema))) {
             dataFileWriter.create(schema, outputStream);
             dataFileWriter.append(record);
-            dataFileWriter.close();
         }
         catch (IOException e) {
             throw new RuntimeException("Failed to convert to Avro.", e);
@@ -427,7 +444,7 @@ public class TestAvroDecoder
     {
         DecoderTestColumnHandle row = new DecoderTestColumnHandle(0, "row", new ArrayType(BIGINT), "array_field", null, null, false, false, false);
 
-        Map<DecoderColumnHandle, FieldValueProvider> decodedRow = buildAndDecodeColumn(row, "array_field", "{\"type\": \"array\", \"items\": \"long\"}", ImmutableList.of(114L, 136L));
+        Map<DecoderColumnHandle, FieldValueProvider> decodedRow = buildAndDecodeColumn(row, "array_field", "{\"type\": \"array\", \"items\": [\"long\"]}", ImmutableList.of(114L, 136L));
         checkArrayValue(decodedRow, row, new long[] {114, 136});
     }
 
@@ -439,7 +456,7 @@ public class TestAvroDecoder
 
         List<Long> values = new ArrayList<>();
         values.add(null);
-        Map<DecoderColumnHandle, FieldValueProvider> decodedRow = buildAndDecodeColumn(row, "array_field", "{\"type\": \"array\", \"items\": \"null\"}", values);
+        Map<DecoderColumnHandle, FieldValueProvider> decodedRow = buildAndDecodeColumn(row, "array_field", "{\"type\": \"array\", \"items\": [\"null\"]}", values);
         checkArrayItemIsNull(decodedRow, row, new long[] {0});
     }
 
@@ -447,7 +464,7 @@ public class TestAvroDecoder
     public void testMapDecodedAsMap()
             throws Exception
     {
-        DecoderTestColumnHandle row = new DecoderTestColumnHandle(0, "row", VACHAR_MAP_TYPE, "map_field", null, null, false, false, false);
+        DecoderTestColumnHandle row = new DecoderTestColumnHandle(0, "row", VARCHAR_MAP_TYPE, "map_field", null, null, false, false, false);
 
         Map<DecoderColumnHandle, FieldValueProvider> decodedRow = buildAndDecodeColumn(row, "map_field", "{\"type\": \"map\", \"values\": \"string\"}", ImmutableMap.of(
                 "key1", "abc",
@@ -463,7 +480,7 @@ public class TestAvroDecoder
     public void testMapWithNull()
             throws Exception
     {
-        DecoderTestColumnHandle row = new DecoderTestColumnHandle(0, "row", VACHAR_MAP_TYPE, "map_field", null, null, false, false, false);
+        DecoderTestColumnHandle row = new DecoderTestColumnHandle(0, "row", VARCHAR_MAP_TYPE, "map_field", null, null, false, false, false);
 
         Map<String, String> expectedValues = new HashMap<>();
         expectedValues.put("key1", null);
@@ -543,7 +560,7 @@ public class TestAvroDecoder
         singleColumnDecoder(createUnboundedVarcharType());
         singleColumnDecoder(createVarcharType(100));
         singleColumnDecoder(new ArrayType(BigintType.BIGINT));
-        singleColumnDecoder(VACHAR_MAP_TYPE);
+        singleColumnDecoder(VARCHAR_MAP_TYPE);
         singleColumnDecoder(DOUBLE_MAP_TYPE);
 
         // some unsupported types
