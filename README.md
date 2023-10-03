@@ -1,127 +1,110 @@
-# Presto
-[![Maven Central](https://img.shields.io/maven-central/v/io.prestosql/presto-server.svg?label=Download)](https://prestosql.io/download.html)
-[![Presto Slack](https://img.shields.io/static/v1?logo=slack&logoColor=959DA5&label=Slack&labelColor=333a41&message=join%20conversation&color=3AC358)](https://prestosql.io/slack.html)
+<p align="center">
+    <a href="https://trino.io/"><img alt="Trino Logo" src=".github/homepage.png" /></a>
+</p>
+<p align="center">
+    <b>Trino is a fast distributed SQL query engine for big data analytics.</b>
+</p>
+<p align="center">
+    See the <a href="https://trino.io/docs/current/">User Manual</a> for deployment instructions and end user documentation.
+</p>
+<p align="center">
+   <a href="https://trino.io/download.html">
+       <img src="https://img.shields.io/maven-central/v/io.trino/trino-server.svg?label=Trino" alt="Trino download" />
+   </a>
+   <a href="https://trino.io/slack.html">
+       <img src="https://img.shields.io/static/v1?logo=slack&logoColor=959DA5&label=Slack&labelColor=333a41&message=join%20conversation&color=3AC358" alt="Trino Slack" />
+   </a>
+   <a href="https://trino.io/trino-the-definitive-guide.html">
+       <img src="https://img.shields.io/badge/Trino%3A%20The%20Definitive%20Guide-download-brightgreen" alt="Trino: The Definitive Guide book download" />
+   </a>
+</p>
 
-Presto is a distributed SQL query engine for big data.
+## Development
 
-See the [User Manual](https://prestosql.io/docs/current/) for deployment instructions and end user documentation.
+See [DEVELOPMENT](.github/DEVELOPMENT.md) for information about code style,
+development process, and guidelines.
 
-## Requirements
+See [CONTRIBUTING](.github/CONTRIBUTING.md) for contribution requirements.
+
+## Security
+
+See the project [security policy](.github/SECURITY.md) for
+information about reporting vulnerabilities.
+
+## Build requirements
 
 * Mac OS X or Linux
-* Java 8 Update 161 or higher (8u161+), 64-bit. Both Oracle JDK and OpenJDK are supported.
-* Python 2.6+ (for running with the launcher script)
+* Java 17.0.4+, 64-bit
+* Docker
 
-## Building Presto
+## Building Trino
 
-Presto is a standard Maven project. Simply run the following command from the project root directory:
-
-    ./mvnw clean install
-
-On the first build, Maven will download all the dependencies from the internet and cache them in the local repository (`~/.m2/repository`), which can take a considerable amount of time. Subsequent builds will be faster.
-
-Presto has a comprehensive set of unit tests that can take several minutes to run. You can disable the tests when building:
+Trino is a standard Maven project. Simply run the following command from the
+project root directory:
 
     ./mvnw clean install -DskipTests
 
-## Running Presto in your IDE
+On the first build, Maven downloads all the dependencies from the internet
+and caches them in the local repository (`~/.m2/repository`), which can take a
+while, depending on your connection speed. Subsequent builds are faster.
+
+Trino has a comprehensive set of tests that take a considerable amount of time
+to run, and are thus disabled by the above command. These tests are run by the
+CI system when you submit a pull request. We recommend only running tests
+locally for the areas of code that you change.
+
+## Running Trino in your IDE
 
 ### Overview
 
-After building Presto for the first time, you can load the project into your IDE and run the server. We recommend using [IntelliJ IDEA](http://www.jetbrains.com/idea/). Because Presto is a standard Maven project, you can import it into your IDE using the root `pom.xml` file. In IntelliJ, choose Open Project from the Quick Start box or choose Open from the File menu and select the root `pom.xml` file.
+After building Trino for the first time, you can load the project into your IDE
+and run the server.  We recommend using
+[IntelliJ IDEA](http://www.jetbrains.com/idea/). Because Trino is a standard
+Maven project, you easily can import it into your IDE.  In IntelliJ, choose
+*Open Project* from the *Quick Start* box or choose *Open*
+from the *File* menu and select the root `pom.xml` file.
 
-After opening the project in IntelliJ, double check that the Java SDK is properly configured for the project:
+After opening the project in IntelliJ, double check that the Java SDK is
+properly configured for the project:
 
 * Open the File menu and select Project Structure
-* In the SDKs section, ensure that a 1.8 JDK is selected (create one if none exist)
-* In the Project section, ensure the Project language level is set to 8.0 as Presto makes use of several Java 8 language features
+* In the SDKs section, ensure that JDK 17 is selected (create one if none exist)
+* In the Project section, ensure the Project language level is set to 17
 
-Presto comes with sample configuration that should work out-of-the-box for development. Use the following options to create a run configuration:
+### Running a testing server
 
-* Main Class: `io.prestosql.server.PrestoServer`
-* VM Options: `-ea -XX:+UseG1GC -XX:G1HeapRegionSize=32M -XX:+UseGCOverheadLimit -XX:+ExplicitGCInvokesConcurrent -Xmx2G -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties -Djdk.attach.allowAttachSelf=true`
+The simplest way to run Trino for development is to run the `TpchQueryRunner`
+class. It will start a development version of the server that is configured with
+the TPCH connector. You can then use the CLI to execute queries against this
+server. Many other connectors have their own `*QueryRunner` class that you can
+use when working on a specific connector.
+
+### Running the full server
+
+Trino comes with sample configuration that should work out-of-the-box for
+development. Use the following options to create a run configuration:
+
+* Main Class: `io.trino.server.DevelopmentServer`
+* VM Options: `-ea -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties -Djdk.attach.allowAttachSelf=true`
 * Working directory: `$MODULE_DIR$`
-* Use classpath of module: `presto-main`
+* Use classpath of module: `trino-server-dev`
 
-The working directory should be the `presto-main` subdirectory. In IntelliJ, using `$MODULE_DIR$` accomplishes this automatically.
+The working directory should be the `trino-server-dev` subdirectory. In
+IntelliJ, using `$MODULE_DIR$` accomplishes this automatically.
 
-Additionally, the Hive plugin must be configured with the location of your Hive metastore Thrift service. Add the following to the list of VM options, replacing `localhost:9083` with the correct host and port (or use the below value if you do not have a Hive metastore):
-
-    -Dhive.metastore.uri=thrift://localhost:9083
-
-### Using SOCKS for Hive or HDFS
-
-If your Hive metastore or HDFS cluster is not directly accessible to your local machine, you can use SSH port forwarding to access it. Setup a dynamic SOCKS proxy with SSH listening on local port 1080:
-
-    ssh -v -N -D 1080 server
-
-Then add the following to the list of VM options:
-
-    -Dhive.metastore.thrift.client.socks-proxy=localhost:1080
-    -Dhive.hdfs.socks-proxy=localhost:1080
+If `VM options` doesn't exist in the dialog, you need to select `Modify options`
+and enable `Add VM options`.
 
 ### Running the CLI
 
 Start the CLI to connect to the server and run SQL queries:
 
-    presto-cli/target/presto-cli-*-executable.jar
+    client/trino-cli/target/trino-cli-*-executable.jar
 
 Run a query to see the nodes in the cluster:
 
     SELECT * FROM system.runtime.nodes;
 
-In the sample configuration, the Hive connector is mounted in the `hive` catalog, so you can run the following queries to show the tables in the Hive database `default`:
+Run a query against the TPCH connector:
 
-    SHOW TABLES FROM hive.default;
-
-## Development
-
-### Code Style
-
-We recommend you use IntelliJ as your IDE. The code style template for the project can be found in the [codestyle](https://github.com/airlift/codestyle) repository along with our general programming and Java guidelines. In addition to those you should also adhere to the following:
-
-* Alphabetize sections in the documentation source files (both in the table of contents files and other regular documentation files). In general, alphabetize methods/variables/sections if such ordering already exists in the surrounding code.
-* When appropriate, use the Java 8 stream API. However, note that the stream implementation does not perform well so avoid using it in inner loops or otherwise performance sensitive sections.
-* Categorize errors when throwing exceptions. For example, PrestoException takes an error code as an argument, `PrestoException(HIVE_TOO_MANY_OPEN_PARTITIONS)`. This categorization lets you generate reports so you can monitor the frequency of various failures.
-* Ensure that all files have the appropriate license header; you can generate the license by running `mvn license:format`.
-* Consider using String formatting (printf style formatting using the Java `Formatter` class): `format("Session property %s is invalid: %s", name, value)` (note that `format()` should always be statically imported). Sometimes, if you only need to append something, consider using the `+` operator.
-* Avoid using the ternary operator except for trivial expressions.
-* Use an assertion from Airlift's `Assertions` class if there is one that covers your case rather than writing the assertion by hand. Over time we may move over to more fluent assertions like AssertJ.
-* When writing a Git commit message, follow these [guidelines](https://chris.beams.io/posts/git-commit/).
-
-### Additional IDE configuration
-
-When using IntelliJ to develop Presto, we recommend starting with all of the default inspections,
-with some modifications.
-
-Enable the following inspections:
-
-- ``Java | Internationalization | Implicit usage of platform's default charset``,
-- ``Java | Class structure | Utility class is not 'final'``,
-- ``Java | Class structure | Utility class with 'public' constructor``,
-- ``Java | Class structure | Utility class without 'private' constructor``.
-
-Disable the following inspections:
-
-- ``Java | Abstraction issues | 'Optional' used as field or parameter type``.
-
-### Building the Web UI
-
-The Presto Web UI is composed of several React components and is written in JSX and ES6. This source code is compiled and packaged into browser-compatible Javascript, which is then checked in to the Presto source code (in the `dist` folder). You must have [Node.js](https://nodejs.org/en/download/) and [Yarn](https://yarnpkg.com/en/) installed to execute these commands. To update this folder after making changes, simply run:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src install
-
-If no Javascript dependencies have changed (i.e., no changes to `package.json`), it is faster to run:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src run package
-
-To simplify iteration, you can also run in `watch` mode, which automatically re-compiles when changes to source files are detected:
-
-    yarn --cwd presto-main/src/main/resources/webapp/src run watch
-
-To iterate quickly, simply re-build the project in IntelliJ after packaging is complete. Project resources will be hot-reloaded and changes are reflected on browser refresh.
-
-## Writing and Building Documentation
-
-More information about the documentation process can be found in the
-[README file in presto-docs](./presto-docs/README.md).
+    SELECT * FROM tpch.tiny.region;

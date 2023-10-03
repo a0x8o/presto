@@ -1,0 +1,186 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package io.trino.plugin.base.security;
+
+import io.trino.spi.connector.CatalogSchemaName;
+import io.trino.spi.connector.CatalogSchemaRoutineName;
+import io.trino.spi.connector.CatalogSchemaTableName;
+import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.function.FunctionKind;
+import io.trino.spi.security.Identity;
+import io.trino.spi.security.SystemAccessControl;
+import io.trino.spi.security.SystemAccessControlFactory;
+import io.trino.spi.security.SystemSecurityContext;
+import io.trino.spi.security.TrinoPrincipal;
+
+import java.security.Principal;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static io.trino.spi.security.AccessDeniedException.denyGrantExecuteFunctionPrivilege;
+import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
+
+public class ReadOnlySystemAccessControl
+        implements SystemAccessControl
+{
+    public static final String NAME = "read-only";
+
+    private static final ReadOnlySystemAccessControl INSTANCE = new ReadOnlySystemAccessControl();
+
+    public static class Factory
+            implements SystemAccessControlFactory
+    {
+        @Override
+        public String getName()
+        {
+            return NAME;
+        }
+
+        @Override
+        public SystemAccessControl create(Map<String, String> config)
+        {
+            checkArgument(config.isEmpty(), "This access controller does not support any configuration properties");
+            return INSTANCE;
+        }
+    }
+
+    @Override
+    public void checkCanSetUser(Optional<Principal> principal, String userName)
+    {
+    }
+
+    @Override
+    public void checkCanExecuteQuery(Identity identity)
+    {
+    }
+
+    @Override
+    public void checkCanViewQueryOwnedBy(Identity identity, Identity queryOwner)
+    {
+    }
+
+    @Override
+    public Collection<Identity> filterViewQueryOwnedBy(Identity identity, Collection<Identity> queryOwners)
+    {
+        return queryOwners;
+    }
+
+    @Override
+    public void checkCanSetSystemSessionProperty(Identity identity, String propertyName)
+    {
+    }
+
+    @Override
+    public void checkCanAccessCatalog(SystemSecurityContext context, String catalogName)
+    {
+    }
+
+    @Override
+    public void checkCanSelectFromColumns(SystemSecurityContext context, CatalogSchemaTableName table, Set<String> columns)
+    {
+    }
+
+    @Override
+    public void checkCanSetCatalogSessionProperty(SystemSecurityContext context, String catalogName, String propertyName)
+    {
+    }
+
+    @Override
+    public void checkCanCreateViewWithSelectFromColumns(SystemSecurityContext context, CatalogSchemaTableName table, Set<String> columns)
+    {
+    }
+
+    @Override
+    public void checkCanGrantExecuteFunctionPrivilege(SystemSecurityContext context, String functionName, TrinoPrincipal grantee, boolean grantOption)
+    {
+    }
+
+    @Override
+    public void checkCanGrantExecuteFunctionPrivilege(SystemSecurityContext context, FunctionKind functionKind, CatalogSchemaRoutineName functionName, TrinoPrincipal grantee, boolean grantOption)
+    {
+        switch (functionKind) {
+            case SCALAR, AGGREGATE, WINDOW:
+                return;
+            case TABLE:
+                // May not be read-only, so deny
+                String granteeAsString = format("%s '%s'", grantee.getType().name().toLowerCase(ENGLISH), grantee.getName());
+                denyGrantExecuteFunctionPrivilege(functionName.toString(), context.getIdentity(), granteeAsString);
+        }
+        throw new UnsupportedOperationException("Unsupported function kind: " + functionKind);
+    }
+
+    @Override
+    public Set<String> filterCatalogs(SystemSecurityContext context, Set<String> catalogs)
+    {
+        return catalogs;
+    }
+
+    @Override
+    public Set<String> filterSchemas(SystemSecurityContext context, String catalogName, Set<String> schemaNames)
+    {
+        return schemaNames;
+    }
+
+    @Override
+    public Set<SchemaTableName> filterTables(SystemSecurityContext context, String catalogName, Set<SchemaTableName> tableNames)
+    {
+        return tableNames;
+    }
+
+    @Override
+    public void checkCanShowColumns(SystemSecurityContext context, CatalogSchemaTableName table)
+    {
+    }
+
+    @Override
+    public Set<String> filterColumns(SystemSecurityContext context, CatalogSchemaTableName tableName, Set<String> columns)
+    {
+        return columns;
+    }
+
+    @Override
+    public Map<SchemaTableName, Set<String>> filterColumns(SystemSecurityContext context, String catalogName, Map<SchemaTableName, Set<String>> tableColumns)
+    {
+        return tableColumns;
+    }
+
+    @Override
+    public void checkCanShowSchemas(SystemSecurityContext context, String catalogName)
+    {
+    }
+
+    @Override
+    public void checkCanShowTables(SystemSecurityContext context, CatalogSchemaName schema)
+    {
+    }
+
+    @Override
+    public void checkCanShowRoles(SystemSecurityContext context)
+    {
+    }
+
+    @Override
+    public void checkCanShowCurrentRoles(SystemSecurityContext context)
+    {
+    }
+
+    @Override
+    public void checkCanExecuteFunction(SystemSecurityContext systemSecurityContext, String functionName)
+    {
+    }
+}
